@@ -69,7 +69,7 @@ All three commands are wired through the main parser and `COMMANDS` mapping. The
 and dispatch operations, not additional crew sessions: cleaner and warden are safe to run repeatedly,
 and `--dry-run` is the inspection mode for all three.
 
-## Standalone read-only Go view (NGH-021)
+## Standalone Go view and in-shift writes (NGH-021, Increment 2)
 
 The repository also builds a standalone `build\nightshift.exe` containing the four read-only views
 `status`, `claims`, `inbox`, and `log`. It reads the same shift-folder contract as the Python
@@ -84,6 +84,32 @@ not create `-shm` or other sidecars beside a live shift mailbox. The build requi
 1.25.12 toolchain and the pinned module versions in `go.mod`; the build entrypoint is the external script
 `C:\scripts\build-nightshift-go.cmd <worktree>`, which uses the cached Go toolchain with
 `GOPROXY=off`, `GOSUMDB=off`, and `GOTOOLCHAIN=local` and writes `<worktree>\build\nightshift.exe`.
+
+Increment 2 adds native in-shift write commands to that executable. `claim SHIFT ROLE PATH...`
+and `release SHIFT ROLE [PATH...]` use the same state roots and shift resolution as the read-only
+views and return the same JSON receipts as the Python oracle:
+`claim` returns `{"shift": ..., "role": ..., "claimed": [...]}` and `release` returns
+`{"released": [...]}`. Claim paths are normalized to absolute, case-folded keys and duplicate
+arguments are removed in first-seen order. The role is stored exactly as supplied; role comparison
+for ownership is case-insensitive. A claim refreshes the timestamp when the same role reclaims it.
+
+Both writes take `claims.lock` with the Python-compatible five-second wait and thirty-second stale
+lock recovery, then save claims through a temporary file and atomic replacement. A claim checks all
+requested paths before changing any of them. In direct-checkout/non-git mode it also checks claims in
+other live shifts; a git worktree shift is isolated and does not conflict across shifts. Any conflict
+prints the Python-compatible owner lines to stderr, leaves `claims.json` unchanged, and exits `4`.
+`release` removes only claims owned by the requested role, all of them when no paths are supplied;
+claims held by another role remain untouched. These commands mutate only the shift claim records.
+
+The same increment carries the mailbox and evidence writes: `msg send` inserts a stored row and
+prints its header, `msg sent` advances that row to sent, and `ack` accepts only the addressed,
+current-incarnation message and prints its stored body. Unknown, wrong-recipient, or stale-incarnation
+acks create the protocol-violation note and exit `5` without handing a body to the caller. `build`
+uses the per-folder build lock, reserves and updates `<state_dir>/builds/<N>.json`, records command
+exit/head/dirty/log evidence, and preserves the Python wait-timeout (`6`) and command exit codes.
+All of these writes use the same mailbox/build file contracts and bus records as the Python oracle.
+They do not launch sessions, manage Windows Terminal, replace `start`/`spawn`/`down`, or make the
+standalone executable a general launcher.
 
 ## Container, not loop (owner decision, 16 Oct 2026; NGH-025)
 
@@ -942,7 +968,7 @@ with **Foreman-driven landing (`nightshift land`)**:
 | `down` with handover; `resume` re-dispatches acked-but-unfinished work | `down`/handover, loop retries with handover carry-over, `resume` after reboot | matches |
 | Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | Tester (NGH-024) and a dormant Fable Advisor that only Foreman may consult (NGH-027) built into the default crew; out-of-shift floor CLI roles `cleaner`, `warden`, `gaffer` built (NGH-035) | matches / extended |
 | Second coder, heterogeneous CLIs later | Apprentice in slot 5 (NGH-029), Codex crew (NGH-033), Copilot crew (NGH-037/NGH-039) | built |
-| "Portable package", CLI language open | Python launcher plus the standalone Go read-only view; start/spawn/down/land remain Python | NGH-021 increment 1 built |
+| "Portable package", CLI language open | Python launcher plus the standalone Go views and native in-shift claim/release/msg/ack/build writes; start/spawn/down/land remain Python | NGH-021 Increment 2 built |
 | — (not in the design) | loop, result ladder, crew manifest, opt-in Mailkeep notification, denial capture | additions |
 | — (owner, 16 Oct) | container with slot grid (2x4/1x4), `slots/`, `spawn`, Foreman-owned `down --close/--hold` (close default), launcher exits; loop optional | NGH-025, built |
 | — (owner, 16 Oct) | `C:\nightshift\` state root, `floor.json`, and `nightshift cleaner / warden / gaffer` CLI subcommands | NGH-035, built |

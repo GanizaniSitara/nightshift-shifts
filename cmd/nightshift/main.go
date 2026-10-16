@@ -1,4 +1,4 @@
-// Command nightshift is the standalone, read-only Go view of a Nightshift shift.
+// Command nightshift is the standalone Go CLI for a Nightshift shift.
 package main
 
 import (
@@ -1818,6 +1818,16 @@ func main() {
 		code = statusCommand(os.Args[2:])
 	case "claims":
 		code = claimsCommand(os.Args[2:])
+	case "claim":
+		code = claimCommand(os.Args[2:])
+	case "release":
+		code = releaseCommand(os.Args[2:])
+	case "msg":
+		code = msgCommand(os.Args[2:])
+	case "ack":
+		code = ackCommand(os.Args[2:])
+	case "build":
+		code = buildCommand(os.Args[2:])
 	case "inbox":
 		code = inboxCommand(os.Args[2:])
 	case "log":

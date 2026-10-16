@@ -9,8 +9,10 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec
 	github.com/google/uuid v1.6.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/text v0.40.0
 	modernc.org/libc v1.74.1
 	modernc.org/mathutil v1.7.1
 	modernc.org/memory v1.11.0
 	modernc.org/sqlite v1.54.0
+	gopkg.in/yaml.v2 v2.4.0
 )
