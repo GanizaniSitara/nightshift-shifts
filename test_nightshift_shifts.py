@@ -3225,3 +3225,275 @@ def test_spawn_codex_and_copilot_use_their_default_models(tmp_path, injected, ca
     assert (members['Apprentice']['tool'], members['Apprentice']['model']) == ('codex', 'gpt-6.1-sol')
     assert (members['Helper']['tool'], members['Helper']['model']) == ('copilot', 'gemini-3.8-flash-high')
 
+
+
+# ── shift bus: bus.jsonl and nightshift log (NGH-026) ─────────────────────────
+
+def _bus(d):
+    path = Path(d) / 'bus.jsonl'
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+
+
+def _strip(event):
+    return {k: v for k, v in event.items() if k != 'ts'}
+
+
+def test_bus_records_msg_send_sent_and_ack_in_order(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A1', '--body', 'do X\nand Y')
+    launcher.msg(['sent', 'mail0001', '1'])
+    launcher.ack(['mail0001', 'Coder', '1'])
+    launcher.ack(['mail0001', 'Coder', '1'])
+    capsys.readouterr()
+    events = _bus(d)
+    assert [_strip(e) for e in events] == [
+        {'seq': 1, 'event': 'msg', 'id': 1, 'kind': 'assignment', 'sender': 'Foreman', 'recipient': 'Coder',
+         'asg': 'A1', 'body': 'do X\nand Y'},
+        {'seq': 2, 'event': 'sent', 'id': 1},
+        {'seq': 3, 'event': 'ack', 'id': 1, 'by': 'Coder', 'outcome': 'acknowledged'},
+        {'seq': 4, 'event': 'ack', 'id': 1, 'by': 'Coder', 'outcome': 'already acknowledged'}]
+    assert all(re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d', e['ts']) for e in events)
+
+
+def test_bus_msg_sent_of_unknown_id_writes_nothing(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    with pytest.raises(SystemExit):
+        launcher.msg(['sent', 'mail0001', '9'])
+    assert _bus(d) == []
+
+
+def test_bus_protocol_violation_note_is_a_msg_event_and_the_ack_says_so(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    with pytest.raises(SystemExit):
+        launcher.ack(['mail0001', 'Coder', '42'])
+    note, ack_event = _bus(d)
+    assert (note['event'], note['kind'], note['sender'], note['recipient']) == ('msg', 'note', 'Coder', 'Foreman')
+    assert note['body'].startswith('protocol violation: no message msg:42') and note['id'] == _rows(d)[-1]['id']
+    assert _strip(ack_event) == {'seq': 2, 'event': 'ack', 'id': 42, 'by': 'Coder', 'outcome': 'protocol violation',
+                                 'reason': 'no message msg:42'}
+
+
+def test_bus_concurrent_appends_get_unique_increasing_seqs(tmp_path):
+    import threading
+    def writer(n):
+        for i in range(25):
+            launcher.bus_append(tmp_path, 'note', writer=n, i=i)
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    events = _bus(tmp_path)
+    assert [e['seq'] for e in events] == list(range(1, 201))
+    assert sorted((e['writer'], e['i']) for e in events) == [(n, i) for n in range(8) for i in range(25)]
+    assert not (tmp_path / 'bus.lock').exists()
+
+
+def test_bus_failure_warns_but_msg_send_still_stores(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    (d / 'bus.jsonl').mkdir()   # unwritable as a file
+    assert _send(capsys, 'Foreman', 'Coder', '--kind', 'note', '--body', 'still stored') == 'msg:1 kind:note asg:-\n'
+    assert _rows(d)[0]['body'] == 'still stored'
+    launcher.msg(['sent', 'mail0001', '1'])
+    assert json.loads(capsys.readouterr().out)['state'] == 'sent'
+    launcher.ack(['mail0001', 'Coder', '1'])
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)['ack'] == 'acknowledged'
+    assert 'warning: shift bus not written (ack)' in captured.err
+
+
+def test_bus_held_lock_times_out_with_a_warning(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(launcher, 'BUS_LOCK_WAIT', 0.2)
+    (tmp_path / 'bus.lock').write_text('', encoding='utf-8')   # fresh: another writer holds it
+    launcher.bus_append(tmp_path, 'note')
+    assert 'warning: shift bus not written (note)' in capsys.readouterr().err
+    assert _bus(tmp_path) == [] and (tmp_path / 'bus.lock').exists()   # someone else's lock is left alone
+
+
+def test_bus_stale_lock_is_taken_over(tmp_path):
+    lock = tmp_path / 'bus.lock'
+    lock.write_text('', encoding='utf-8')
+    old = launcher.time.time() - 60
+    os.utime(lock, (old, old))
+    launcher.bus_append(tmp_path, 'note')
+    assert [e['seq'] for e in _bus(tmp_path)] == [1] and not lock.exists()
+
+
+def test_bus_torn_last_line_is_closed_off_and_counted(tmp_path, capsys):
+    (tmp_path / 'bus.jsonl').write_bytes(b'{"seq": 1, "ts": "2026-10-16T08:00:00", "event": "note"}\n{"seq": 2, "tor')
+    launcher.bus_append(tmp_path, 'note', n=3)
+    lines = (tmp_path / 'bus.jsonl').read_text(encoding='utf-8').splitlines()
+    assert lines[1] == '{"seq": 2, "tor' and json.loads(lines[2])['seq'] == 3
+
+
+def test_start_puts_a_start_event_on_the_bus(monkeypatch, tmp_path, capsys):
+    cwd = _no_launch(monkeypatch, tmp_path)
+    state_dir = launcher.start(['--cwd', cwd, 'do it'])
+    (event,) = _bus(state_dir)
+    assert _strip(event) == {'seq': 1, 'event': 'start', 'shift': state_dir.name, 'ticket': None, 'cwd': cwd,
+                             'crew': 'default', 'members': ['Foreman', 'Advisor', 'Coder', 'Tester']}
+
+
+def test_start_dry_run_writes_no_bus(monkeypatch, tmp_path, capsys):
+    cwd = _no_launch(monkeypatch, tmp_path)
+    launcher.start(['--dry-run', '--cwd', cwd, 'do it'])
+    assert not (tmp_path / 'shifts').exists() or not list((tmp_path / 'shifts').rglob('bus.jsonl'))
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_puts_a_spawn_event_on_the_bus(tmp_path, injected, capsys):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Tester', '--slot', '3'])
+    (event,) = _bus(d)
+    assert _strip(event) == {'seq': 1, 'event': 'spawn', 'role': 'Tester', 'slot': 3, 'tool': 'claude',
+                             'identity': f'{CONT_SHIFT}-tester'}
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_failed_spawn_writes_no_bus_event(tmp_path, injected):
+    d = _container(tmp_path)
+    injected.rc, injected.err = 1, b'no console'
+    with pytest.raises(SystemExit):
+        launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
+    assert _bus(d) == []
+
+
+def _record_bus(monkeypatch, events):
+    real = launcher.bus_append
+    monkeypatch.setattr(launcher, 'bus_append',
+                        lambda state_dir, event, **f: events.append(('bus', event)) or real(state_dir, event, **f))
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_down_puts_result_then_down_on_the_bus_before_its_own_kill(down_world, monkeypatch):
+    d, events = down_world
+    _record_bus(monkeypatch, events)
+    result = {'status': 'done', 'stage': 'tested', 'summary': 'ok'}
+    (d / 'result.json').write_text(json.dumps(result), encoding='utf-8')
+    launcher.down([CONT_SHIFT])
+    result_event, down_event = _bus(d)
+    assert _strip(result_event) == {'seq': 1, 'event': 'result', 'result': result}
+    assert sorted(down_event['stopped']) == ['Coder', 'Foreman', 'Tester'] and down_event['lock_released'] == []
+    assert (down_event['seq'], down_event['event']) == (2, 'down')
+    assert events.index(('bus', 'result')) < events.index(('bus', 'down')) < \
+        [e[0] for e in events].index('print') < events.index(('kill', 501))
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_down_without_result_json_writes_only_down_and_unreadable_result_says_so(down_world):
+    d, _ = down_world
+    launcher.down([CONT_SHIFT])
+    assert [e['event'] for e in _bus(d)] == ['down']
+    (d / 'result.json').write_text('{not json', encoding='utf-8')
+    launcher.down([CONT_SHIFT])
+    result_event = _bus(d)[1]
+    assert result_event['event'] == 'result' and result_event['result'] is None
+    assert result_event['error'].startswith('result.json unreadable')
+
+
+# ── nightshift log ──
+
+def _log_shift(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'a1', '--body', 'build\nthe bus')
+    launcher.msg(['sent', 'mail0001', '1'])
+    launcher.ack(['mail0001', 'Coder', '1'])
+    capsys.readouterr()
+    return d
+
+
+def _human(line):
+    return re.sub(r'^(#\d+) \d\d:\d\d:\d\d ', r'\1 T ', line)
+
+
+def test_log_prints_one_human_line_per_event(monkeypatch, tmp_path, capsys):
+    d = _log_shift(monkeypatch, tmp_path, capsys)
+    launcher.bus_append(d, 'start', shift='s', ticket='NGH-026', cwd='C:/w', crew='default', members=['Foreman', 'Coder'])
+    launcher.bus_append(d, 'spawn', role='Tester', slot=3, tool='claude', identity='s-tester')
+    launcher.bus_append(d, 'result', result={'status': 'done'})
+    launcher.bus_append(d, 'down', stopped=['Coder'], lock_released=['C:/w'])
+    launcher.log_command(['mail0001'])
+    out = capsys.readouterr().out.splitlines()
+    assert [_human(line) for line in out] == [
+        '#1 T msg Foreman->Coder assignment asg:a1 msg:1  build the bus',
+        '#2 T sent msg:1',
+        '#3 T ack msg:1 by Coder: acknowledged',
+        '#4 T start ticket:NGH-026 crew:default members:Foreman,Coder cwd:C:/w',
+        '#5 T spawn Tester slot:3 tool:claude s-tester',
+        '#6 T result {"result": {"status": "done"}}',
+        '#7 T down stopped:Coder lock_released:C:/w']
+    assert re.match(r'#1 \d\d:\d\d:\d\d msg ', out[0])
+
+
+def test_log_since_and_json(monkeypatch, tmp_path, capsys):
+    d = _log_shift(monkeypatch, tmp_path, capsys)
+    launcher.log_command(['mail0001', '--since', '1'])
+    assert [line.split()[0] for line in capsys.readouterr().out.splitlines()] == ['#2', '#3']
+    launcher.log_command(['mail0001', '--json', '--since', '2'])
+    raw = (d / 'bus.jsonl').read_text(encoding='utf-8').splitlines()
+    assert capsys.readouterr().out.splitlines() == raw[2:]
+
+
+def test_log_without_a_bus_says_so_and_exits(monkeypatch, tmp_path, capsys):
+    _mail_shift(monkeypatch, tmp_path)
+    launcher.log_command(['mail0001'])
+    captured = capsys.readouterr()
+    assert captured.out == '' and 'no bus yet' in captured.err
+
+
+def test_log_shows_a_torn_line_as_question_mark(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    (d / 'bus.jsonl').write_bytes(b'garbage\n')
+    launcher.log_command(['mail0001'])
+    assert capsys.readouterr().out == '? garbage\n'
+
+
+def test_log_follow_picks_up_later_lines_holds_partial_ones_and_stops_on_down(monkeypatch, tmp_path, capsys):
+    d = _log_shift(monkeypatch, tmp_path, capsys)
+    bus = d / 'bus.jsonl'
+    down = json.dumps({'seq': 5, 'ts': '2026-10-16T09:00:00', 'event': 'down', 'stopped': [], 'lock_released': []})
+    half = len(down) // 2
+    steps = [
+        lambda: launcher.bus_append(d, 'note', text='later'),            # a whole new line
+        lambda: bus.open('ab').write(down[:half].encode('utf-8')),       # half a line: not printed yet
+        lambda: bus.open('ab').write((down[half:] + '\n').encode('utf-8')),
+        lambda: pytest.fail('follow did not stop on down'),
+    ]
+    printed = []
+
+    def sleep(seconds):
+        printed.append(len(capsys.readouterr().out.splitlines()))
+        steps.pop(0)()
+    launcher.log_command(['mail0001', '--follow'], sleep=sleep)
+    out = capsys.readouterr().out.splitlines()
+    assert printed == [3, 1, 0]   # 3 at first, the later note, nothing for the partial line
+    assert [_human(line) for line in out] == ['#5 T down stopped:- lock_released:-']
+
+
+def test_log_follow_on_a_finished_shift_prints_and_exits(monkeypatch, tmp_path, capsys):
+    d = _log_shift(monkeypatch, tmp_path, capsys)
+    launcher.bus_append(d, 'down', stopped=[], lock_released=[])
+    launcher.log_command(['mail0001', '--follow', '--since', '9'], sleep=lambda s: pytest.fail('should not poll'))
+    assert capsys.readouterr().out == ''
+
+
+def test_log_follow_waits_for_a_missing_bus_and_stops_on_ctrl_c(monkeypatch, tmp_path, capsys):
+    _mail_shift(monkeypatch, tmp_path)
+    calls = []
+
+    def sleep(seconds):
+        calls.append(seconds)
+        if len(calls) == 3:
+            raise KeyboardInterrupt
+    launcher.log_command(['mail0001', '-f'], sleep=sleep)
+    captured = capsys.readouterr()
+    assert calls == [launcher.LOG_POLL_SECONDS] * 3 and captured.err.count('no bus yet') == 1
+
+
+def test_log_is_a_main_command():
+    import inspect
+    source = inspect.getsource(launcher.main)
+    assert "'log': log_command" in source and 'log SHIFT [--follow] [--since N] [--json]' in source
+    assert 'bus.jsonl' in launcher.__doc__ and '`log SHIFT' in launcher.__doc__

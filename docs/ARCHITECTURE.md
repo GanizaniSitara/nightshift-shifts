@@ -156,7 +156,7 @@ As built (NGH-027):
 
 | Piece | Role | Where |
 |---|---|---|
-| `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--hold`/`--close`), `spawn` (NGH-025), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020) | this repo |
+| `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--hold`/`--close`), `spawn` (NGH-025), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), `log` (the shift bus, NGH-026) | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`) and `account` (`1`\|`2`), pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
@@ -259,6 +259,8 @@ C:\Data\nightshift\shifts\<shift>\
   result.json      the shift contract (above)           handover.md  written by down
   claims.json      file claims per role                 denials.json auto-mode classifier refusals seen
   mailbox.sqlite3  messages: stored → sent → acknowledged, with sender/recipient incarnation (NGH-019)
+  bus.jsonl        the shift bus: every message, sent, ack and start/spawn/result/down event, in order (NGH-026)
+  bus.lock         held for a moment by each bus append (O_EXCL, stale after 10s)
 ```
 Anything that needs to survive a dead pane, a restart or a different CLI lives here, not in a
 process. `status` and `resume` are computed from it.
@@ -283,6 +285,34 @@ decision not yet taken (NGH-014).
 - The **mailbox** (NGH-019) sits above both: every message is stored first, carries a
   `msg:<id>` header, is acked by id by the right recipient incarnation, and `inbox` re-delivers
   what was stored but never sent. Transports are notifications; the mailbox is what is true.
+
+## The shift bus (NGH-026)
+
+`<state_dir>/bus.jsonl` is the whole shift in one file, one JSON object per line, appended in order.
+There is no bus process: each command appends its own line and `nightshift log` reads the file.
+
+| Event | Written by | Fields (besides `seq`, `ts`, `event`) |
+|---|---|---|
+| `start` | `start`, once the shift folder exists (never on `--dry-run`) | `shift`, `ticket`, `cwd`, `crew`, `members` (labels) |
+| `msg` | `insert_message`, the one place every mailbox row is stored: `msg send` and the protocol-violation note `ack` files | `id`, `kind`, `sender`, `recipient`, `asg`, `body` |
+| `sent` | `msg sent` | `id` |
+| `ack` | `ack` | `id`, `by`, `outcome` (`acknowledged`, `already acknowledged`, `protocol violation` + `reason`) |
+| `spawn` | `spawn`, only after the wrapper line was typed into the slot | `role`, `slot`, `tool`, `identity` |
+| `result` | `down`, when `result.json` exists | `result` (its parsed contents; `null` + `error` when unreadable) |
+| `down` | `down`, after the lock is released and before its own process tree is killed | `stopped` (roles), `lock_released` (folders) |
+
+- `seq` is the event's 1-based line number, `ts` local ISO time to the second. `bus_append` holds
+  `bus.lock` (O_EXCL, waits up to 5s, a lock older than 10s is stale) while it counts lines and writes the
+  new one in a single `os.write` in append mode, so concurrent members get unique, increasing `seq`.
+- A bus failure never breaks the command that appended: it prints `warning: shift bus not written` on
+  stderr and the mailbox row, spawn or down goes ahead.
+- `nightshift log SHIFT [--follow] [--since N] [--json]` prints it, one line per event
+  (`#12 08:53:49 msg Foreman->Coder assignment asg:a1 msg:3  <body>`), `--json` the raw lines,
+  `--since N` only `seq > N`. `--follow` polls the file every second by byte offset, holds back a
+  trailing line until its newline arrives, and exits once it has read a `down` event (or on Ctrl+C).
+  Without `bus.jsonl` it says `no bus yet` on stderr and exits 0, or keeps polling under `--follow`.
+- Every member may read `bus.jsonl` at any time; Tester reads it before acting on an assignment, the
+  Advisor reads it for context, and Foreman's `result.json` notes that the bus is complete.
 
 ## Concurrency
 

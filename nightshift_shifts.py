@@ -23,6 +23,8 @@ and `down` releases it.
 Coders claim files before editing them (`claim`/`release`/`claims`, kept in <state_dir>/claims.json); a file
 held by another role makes `claim` exit 4 and change nothing.
 Crew messages go through a durable mailbox (<state_dir>/mailbox.sqlite3): `msg send`/`msg sent`, `inbox`, `ack` (exit 5 = protocol violation).
+Every mailbox row and the start/spawn/result/down events are appended to <state_dir>/bus.jsonl (the shift bus, a
+plain file with no process); `log SHIFT [--follow] [--since N] [--json]` prints it in order.
 `build` runs heavy builds one at a time per folder (exit 6 = waited past --timeout) and records <state_dir>/builds/<n>.json.
 `resume` reruns, through `loop`, every ticket whose latest shift never reached done, continuing from that shift.
 Result ladder: result.json carries a stage (implemented < tested < deployed < validated; none = implemented).
@@ -927,6 +929,7 @@ def start(argv):
                                                      'cwd': cwd}, indent=2), encoding='utf-8')
     if ticket:
         (state_dir / 'ticket.txt').write_text(ticket, encoding='utf-8')
+    bus_append(state_dir, 'start', shift=name, ticket=ticket, cwd=cwd, crew=crew['name'], members=labels)
     install_profile(state_dir)
     launch(command, name, state_dir, {'mode': 'start', 'prompt_file': str(state_dir / 'prompt.txt')}, labels,
            crew['slots'])
@@ -1244,9 +1247,18 @@ def down(argv):
     for pid in kills:
         subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, timeout=30)
     released = release_lock(record['shift'])
+    stopped = [r for r, i in record['roles'].items() if i['alive']]
+    # The bus's last words, before the self-kill below: the crew's result.json as it stands, then 'down'.
+    result_file = state_dir / 'result.json'
+    if result_file.exists():
+        try:
+            bus_append(state_dir, 'result', result=json.loads(result_file.read_text(encoding='utf-8')))
+        except (OSError, ValueError) as err:
+            bus_append(state_dir, 'result', result=None, error=f'result.json unreadable: {err}')
+    bus_append(state_dir, 'down', stopped=stopped, lock_released=released)
     hwnd = close_target(state_dir) if args.close else None
     print(json.dumps({'shift': record['shift'], 'handover': str(state_dir / 'handover.md'),
-                      'stopped': [r for r, i in record['roles'].items() if i['alive']],
+                      'stopped': stopped,
                       'window_closed': bool(hwnd), 'held': not args.close, 'lock_released': released}), flush=True)
     if hwnd:
         ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)   # WM_CLOSE on that window only
@@ -1375,6 +1387,7 @@ def spawn(argv):
     kept = {k: v for k, v in (read_slot(state_dir, slot) or record).items() if k != 'slot'}
     write_slot(state_dir, slot, **{**kept, 'role': member['label'], 'identity': member['identity'],
                                    'spawned': spawned})
+    bus_append(state_dir, 'spawn', role=member['label'], slot=slot, tool=tool, identity=member['identity'])
     print(json.dumps({'shift': shift, 'slot': slot, 'role': member['label'], 'identity': member['identity'],
                       'tool': tool}))
 
@@ -1409,14 +1422,29 @@ def claims_locked(state_dir, wait=5.0, stale=30.0):
     """Hold <state_dir>/claims.lock (O_EXCL) around a read-modify-write of claims.json.
 
     Two Coders claiming at once would otherwise both read the old file and one claim would be lost.
-    A lock older than `stale` seconds is left over from a crashed writer and removed.
     """
     lock = Path(state_dir) / 'claims.lock'
+    try:
+        take_file_lock(lock, wait, stale)
+    except TimeoutError:
+        raise SystemExit(f'{lock} is still held after {wait:.0f}s; try again')
+    try:
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            lock.unlink()
+
+
+def take_file_lock(lock, wait, stale):
+    """Create `lock` with O_EXCL, retrying for `wait` seconds (then TimeoutError); the caller unlinks it.
+
+    A lock older than `stale` seconds is left over from a crashed holder and removed.
+    """
     deadline = time.time() + wait
     while True:
         try:
             os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-            break
+            return
         except FileExistsError:
             try:
                 is_stale = time.time() - lock.stat().st_mtime > stale
@@ -1427,13 +1455,8 @@ def claims_locked(state_dir, wait=5.0, stale=30.0):
                     lock.unlink()
                 continue
             if time.time() > deadline:
-                raise SystemExit(f'{lock} is still held after {wait:.0f}s; try again')
+                raise TimeoutError(f'{lock} is still held after {wait:.0f}s')
             time.sleep(0.1)
-    try:
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            lock.unlink()
 
 
 def same_role(claim, role):
@@ -1490,6 +1513,129 @@ def claims_command(argv):
     parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
     args = parser.parse_args(argv)
     print(json.dumps(load_claims(resolve_shift(args.shift)), indent=2))
+
+
+BUS_LOCK_WAIT = 5.0     # seconds a bus append waits for bus.lock before giving up (with a warning)
+BUS_LOCK_STALE = 10.0   # a bus.lock older than this is left over from a crashed writer
+LOG_POLL_SECONDS = 1.0  # how often `log --follow` re-reads bus.jsonl
+
+
+def bus_append(state_dir, event, **fields):
+    """Append one event to <state_dir>/bus.jsonl: {seq, ts, event, **fields}; seq is its 1-based line number.
+
+    The shift bus (NGH-026) is a plain file, no process: every mailbox row and launcher event lands here, in order.
+    bus.lock serialises writers so seq is unique and increasing; the line goes out in one write call. A bus
+    failure only warns on stderr - it never breaks the command that appended.
+    """
+    path = Path(state_dir) / 'bus.jsonl'
+    lock = Path(state_dir) / 'bus.lock'
+    try:
+        take_file_lock(lock, BUS_LOCK_WAIT, BUS_LOCK_STALE)
+        try:
+            data = path.read_bytes() if path.exists() else b''
+            # a torn last line (writer killed mid-write) is closed off so the new event starts on its own line
+            prefix = b'\n' if data and not data.endswith(b'\n') else b''
+            seq = data.count(b'\n') + len(prefix) + 1
+            record = {'seq': seq, 'ts': time.strftime('%Y-%m-%dT%H:%M:%S'), 'event': event, **fields}
+            line = prefix + (json.dumps(record, ensure_ascii=False) + '\n').encode('utf-8')
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_BINARY', 0))
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
+        finally:
+            with contextlib.suppress(OSError):
+                lock.unlink()
+    except OSError as err:   # TimeoutError included
+        print(f'warning: shift bus not written ({event}): {err}', file=sys.stderr)
+
+
+def bus_events(path, offset=0):
+    """([(text, event)], new_offset): the complete lines of bus.jsonl from byte `offset` on, with each parsed
+    (event None when a line is not a JSON object); a trailing line without its newline yet is left for the next read."""
+    with open(path, 'rb') as f:
+        f.seek(offset)
+        data = f.read()
+    end = data.rfind(b'\n') + 1
+    lines = []
+    for raw in data[:end].splitlines():
+        text = raw.decode('utf-8', 'replace').rstrip('\r')
+        if not text.strip():
+            continue
+        try:
+            event = json.loads(text)
+        except ValueError:
+            event = None
+        lines.append((text, event if isinstance(event, dict) else None))
+    return lines, offset + end
+
+
+def one_line(text):
+    return ' '.join(str(text).split())
+
+
+def format_event(e):
+    """One human line per bus event, e.g. '#12 08:53:49 msg Foreman->Coder assignment asg:a1 msg:3  <body>'."""
+    head = f"#{e.get('seq', '?')} {str(e.get('ts', ''))[11:19]} {e.get('event', '?')}"
+    kind = e.get('event')
+    if kind == 'msg':
+        return (f"{head} {e.get('sender')}->{e.get('recipient')} {e.get('kind')} asg:{e.get('asg') or '-'} "
+                f"msg:{e.get('id')}  {one_line(e.get('body', ''))}")
+    if kind == 'sent':
+        return f"{head} msg:{e.get('id')}"
+    if kind == 'ack':
+        return f"{head} msg:{e.get('id')} by {e.get('by')}: {e.get('outcome')}" + \
+            (f" ({e['reason']})" if e.get('reason') else '')
+    if kind == 'start':
+        return (f"{head} ticket:{e.get('ticket') or '-'} crew:{e.get('crew')} "
+                f"members:{','.join(e.get('members') or [])} cwd:{e.get('cwd')}")
+    if kind == 'spawn':
+        return f"{head} {e.get('role')} slot:{e.get('slot')} tool:{e.get('tool')} {e.get('identity')}"
+    if kind == 'down':
+        return (f"{head} stopped:{','.join(e.get('stopped') or []) or '-'} "
+                f"lock_released:{','.join(e.get('lock_released') or []) or '-'}")
+    rest = {k: v for k, v in e.items() if k not in ('seq', 'ts', 'event')}
+    return f"{head} {one_line(json.dumps(rest, ensure_ascii=False))}"
+
+
+def log_command(argv, sleep=time.sleep):
+    parser = argparse.ArgumentParser(
+        prog='nightshift log',
+        description="Print a shift's bus (<state_dir>/bus.jsonl) in order: every mailbox message, sent and ack, and "
+                    'the start, spawn, result and down events. Reads the file only; there is no bus process. '
+                    "--follow keeps watching until Ctrl+C, or until the shift's down event has been printed.")
+    parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
+    parser.add_argument('--follow', '-f', action='store_true', help='keep printing new events as they are appended')
+    parser.add_argument('--since', type=int, default=0, metavar='N', help='only events with seq greater than N')
+    parser.add_argument('--json', action='store_true', help='print the raw JSON lines')
+    args = parser.parse_args(argv)
+    state_dir = resolve_shift(args.shift)
+    path = state_dir / 'bus.jsonl'
+    with contextlib.suppress(AttributeError, ValueError):
+        sys.stdout.reconfigure(errors='replace')   # a cp1252 console must not crash on a message body
+    offset, warned = 0, False
+    try:
+        while True:
+            if path.exists():
+                lines, offset = bus_events(path, offset)
+                done = False
+                for text, e in lines:
+                    seq = (e or {}).get('seq')
+                    done = done or (e or {}).get('event') == 'down'   # the shift is over: --follow stops here
+                    if isinstance(seq, int) and seq <= args.since:
+                        continue
+                    print(text if args.json else format_event(e) if e else f'? {text}', flush=True)
+                if done or not args.follow:
+                    return
+            else:
+                if not warned:
+                    print(f'no bus yet: {path}', file=sys.stderr, flush=True)
+                    warned = True
+                if not args.follow:
+                    return
+            sleep(LOG_POLL_SECONDS)
+    except KeyboardInterrupt:
+        return
 
 
 class ProtocolViolation(FolderLocked):
@@ -1576,13 +1722,17 @@ def msg_header(row):
 
 
 def insert_message(conn, state_dir, kind, sender, recipient, body, asg=None):
-    """Store a message with both incarnations as they are now; returns its id."""
+    """Store a message with both incarnations as they are now and put it on the shift bus; returns its id.
+
+    Every mailbox row is written here, so every one lands on the bus as a 'msg' event.
+    """
     with conn:
         cur = conn.execute(
             'INSERT INTO messages (kind, sender, sender_incarnation, recipient, recipient_incarnation, asg, body, '
             'created, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (kind, sender, incarnation(state_dir, sender), recipient, incarnation(state_dir, recipient), asg, body,
              time.strftime('%Y-%m-%d %H:%M:%S'), 'stored'))
+    bus_append(state_dir, 'msg', id=cur.lastrowid, kind=kind, sender=sender, recipient=recipient, asg=asg, body=body)
     return cur.lastrowid
 
 
@@ -1625,6 +1775,7 @@ def msg(argv):
         row = get_message(conn, args.id)
     if row is None:
         raise SystemExit(f'no message msg:{args.id} in shift {state_dir.name}')
+    bus_append(state_dir, 'sent', id=args.id)
     print(json.dumps(row))
 
 
@@ -1689,12 +1840,14 @@ def ack(argv):
         if reason:
             insert_message(conn, state_dir, 'note', label, human_contact_label(state_dir),
                            f'protocol violation: {reason} (ack of msg:{args.id} by {label})')
+            bus_append(state_dir, 'ack', id=args.id, by=label, outcome='protocol violation', reason=reason)
             print(f'protocol violation: {reason}', file=sys.stderr)
             raise ProtocolViolation(5, reason)
         outcome = 'already acknowledged' if row['state'] == 'acknowledged' else 'acknowledged'
         with conn:
             conn.execute("UPDATE messages SET state = 'acknowledged' WHERE id = ?", (args.id,))
         row = get_message(conn, args.id)
+    bus_append(state_dir, 'ack', id=args.id, by=label, outcome=outcome)
     print(json.dumps({'ack': outcome, 'row': row}))
 
 
@@ -2200,7 +2353,7 @@ def resume(argv):
 def main():
     commands = {'start': start, 'status': status, 'down': down, 'spawn': spawn, 'loop': loop, 'resume': resume,
                 'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack,
-                'build': build}
+                'build': build, 'log': log_command}
     if len(sys.argv) > 1 and sys.argv[1] in commands:
         commands[sys.argv[1]](sys.argv[2:])
         return
@@ -2226,7 +2379,8 @@ def main():
                '  ack SHIFT ROLE ID                           acknowledge and print the stored body; exit 5 = do not act\n'
                "  build SHIFT --cwd DIR --cmd 'COMMAND' [--timeout MIN]\n"
                '                                              run a build one at a time per folder; evidence in builds/<n>.json\n'
-               '  build --cancel SHIFT N                      kill build N and mark it cancelled')
+               '  build --cancel SHIFT N                      kill build N and mark it cancelled\n'
+               '  log SHIFT [--follow] [--since N] [--json]   print the shift bus (bus.jsonl): messages, acks, start..down')
     parser.add_argument('--pane', help=argparse.SUPPRESS)
     parser.add_argument('--state-dir', help=argparse.SUPPRESS)
     parser.add_argument('--start', action='store_true', help=argparse.SUPPRESS)
