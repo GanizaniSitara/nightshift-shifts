@@ -43,7 +43,7 @@ def test_wt_command_is_one_tab_two_columns_foreman_left():
     assert argv[argv.index('split-pane') + 1:argv.index('split-pane') + 4] == ['-V', '-s', '0.5']
     assert argv[argv.index('move-focus') + 1] == 'left'
     # start mode: short pane titles, crew profile, cwd passed through to the pane
-    assert argv.count('--title') == 2 and 'Foreman' in argv and 'Coder' in argv
+    assert _titles(argv) == ['Nightshift-shift-abc Foreman', 'Nightshift-shift-abc Coder']
     assert argv.count('--profile') == 2 and launcher.PROFILE in argv
     assert argv.count('--cwd') == 2 and 'C:/git/proj' in argv
     assert '--start' in argv
@@ -53,6 +53,68 @@ def test_wt_command_trial_titles_carry_shift_name():
     argv = launcher.wt_command('Nightshift-trial-123', Path('C:/x'), agents=False)
     assert 'Nightshift | Foreman | Nightshift-trial-123' in argv
     assert '--profile' not in argv
+    argv = launcher.wt_command('Nightshift-trial-123', Path('C:/x'), agents=True, mode_flag='--live', ticket='NGH-001')
+    assert _titles(argv) == ['Nightshift | Foreman | Nightshift-trial-123', 'Nightshift | Coder | Nightshift-trial-123']
+
+
+# ── pane, window and loop titles (NGH-023) ───────────────────────────────────
+
+def test_start_pane_titles_use_the_ticket_else_the_shift_name():
+    argv = launcher.wt_command('Nightshift-shift-abc', Path('C:/x'), agents=True, mode_flag='--start', cwd='C:/w',
+                               ticket='NGH-019')
+    assert _titles(argv) == ['NGH-019 Foreman', 'NGH-019 Coder']
+    assert argv.count('--suppressApplicationTitle') == 2
+    assert argv[argv.index('--pane') + 1] == 'Foreman'   # the wrapper still gets the bare role label
+    argv = launcher.wt_command('Nightshift-shift-abc', Path('C:/x'), agents=True, mode_flag='--start', cwd='C:/w')
+    assert _titles(argv) == ['Nightshift-shift-abc Foreman', 'Nightshift-shift-abc Coder']
+    assert launcher.pane_title('NGH-019', 'Coder-2') == 'NGH-019 Coder-2'
+
+
+def test_start_dry_run_from_a_ticket_titles_panes_with_it(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    monkeypatch.setattr(launcher, 'ticket_prompt', lambda t: (t, 'Ticket NGH-019: x', str(tmp_path)))
+    launcher.start(['--dry-run', 'NGH-019'])
+    plan = json.loads(capsys.readouterr().out)
+    assert {r: v['pane_title'] for r, v in plan['roles'].items()} == {'Foreman': 'NGH-019 Foreman',
+                                                                     'Coder': 'NGH-019 Coder'}
+    assert _titles(plan['wt_argv']) == ['NGH-019 Foreman', 'NGH-019 Coder']
+
+
+@pytest.mark.parametrize('tickets, title', [
+    (['NGH-019'], 'Nightshift NGH-019'),
+    (['NGH-019', 'NGH-020'], 'Nightshift NGH-019..NGH-020'),
+    (['NGH-019', 'NGH-007', 'NGH-020'], 'Nightshift NGH-019..NGH-020'),
+])
+def test_loop_title(tickets, title):
+    assert launcher.loop_title(tickets) == title
+
+
+def test_finished_loop_titles_and_closes_its_own_window(monkeypatch, tmp_path):
+    d = tmp_path / 'shift-NGH-040'
+    d.mkdir()
+    titled, closed = [], []
+    monkeypatch.delenv('PYTEST_CURRENT_TEST')
+    monkeypatch.setattr(launcher.ctypes.windll.kernel32, 'SetConsoleTitleW', lambda t: titled.append(t))
+    monkeypatch.setattr(launcher, 'close_terminal_windows', lambda prefix: closed.append(prefix))
+    monkeypatch.setattr(launcher, 'start', lambda argv: d)
+    monkeypatch.setattr(launcher, 'wait_for_result', lambda state_dir, stall, **kw: {'status': 'done', 'stage': 'tested'})
+    monkeypatch.setattr(launcher, 'down', lambda argv: None)
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: subprocess.CompletedProcess([], 0, b'', b''))
+    launcher.loop(['NGH-040', 'NGH-041', '--no-notify'])
+    assert titled == ['Nightshift NGH-040..NGH-041'] and closed == ['Nightshift NGH-040..NGH-041']
+
+
+def test_architecture_doc_mentions_every_command():
+    import ast
+    import inspect
+    import re
+    tree = ast.parse(inspect.getsource(launcher.main))
+    commands = next(n.value for n in ast.walk(tree)
+                    if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', None) == 'commands')
+    keys = [k.value for k in commands.keys]
+    assert 'start' in keys and 'build' in keys
+    doc = (Path(launcher.__file__).resolve().parent / 'docs' / 'ARCHITECTURE.md').read_text(encoding='utf-8')
+    assert [k for k in keys if not re.search(rf'\b{re.escape(k)}\b', doc)] == []
 
 
 # ── crew manifests (nightshift-crews/*.yaml) ─────────────────────────────────
@@ -173,7 +235,7 @@ def test_wt_layout_for_n_panes(n, expected):
     top = n if n <= 4 else -(-n // 2)
     # pane creation order: the top row's first pane, then (2 rows) the bottom row's first, then the rest in order
     order = labels if n <= 4 else [labels[0], labels[top]] + labels[1:top] + labels[top + 1:]
-    assert _titles(argv) == order
+    assert _titles(argv) == [f'S {label}' for label in order]
     assert '--crew' not in argv
 
 
@@ -194,7 +256,7 @@ def test_start_dry_run_custom_crew(monkeypatch, tmp_path, capsys):
     assert plan['crew'] == 'trio' and plan['model'] == 'claude-sonnet-5-5'
     assert list(plan['roles']) == ['Foreman', 'Coder-1', 'Coder-2', 'Coder-3']
     assert plan['roles']['Foreman']['peer'] == f'{s}-coder-1, {s}-coder-2, {s}-coder-3'
-    assert plan['roles']['Coder-2'] == {'session_name': f'{s}-coder-2', 'pane_title': 'Coder-2', 'peer': f'{s}-foreman',
+    assert plan['roles']['Coder-2'] == {'session_name': f'{s}-coder-2', 'pane_title': f'{s} Coder-2', 'peer': f'{s}-foreman',
                                         'receives_prompt': False, 'first_message': launcher.START_MESSAGES['Coder']}
     assert plan['wt_argv'].count('--crew') == 4 and 'focus-pane' in plan['wt_argv']
 
@@ -348,18 +410,18 @@ def test_start_dry_run_default_crew_is_unchanged_golden(monkeypatch, tmp_path, c
     py, script = sys.executable, str(Path(launcher.__file__).resolve())
 
     def pane_args(role):
-        return ['--profile', 'Nightshift Crew', '--title', role, '--suppressApplicationTitle', '-d', '%USERPROFILE%',
+        return ['--profile', 'Nightshift Crew', '--title', f'{shift} {role}', '--suppressApplicationTitle', '-d', '%USERPROFILE%',
                 py, script, '--pane', role, '--state-dir', state, '--start', '--cwd', cwd]
     assert plan == {
         'dry_run': True, 'shift': shift, 'state_dir': state, 'cwd': cwd, 'ticket': None,
         'prompt_file': str(Path(state) / 'prompt.txt'), 'model': 'claude-opus-5-5', 'profile': 'Nightshift Crew',
         'permission_mode': 'auto', 'lock': str(launcher.lock_path(cwd)),
         'roles': {
-            'Foreman': {'session_name': f'{shift}-foreman', 'pane_title': 'Foreman', 'peer': f'{shift}-coder',
+            'Foreman': {'session_name': f'{shift}-foreman', 'pane_title': f'{shift} Foreman', 'peer': f'{shift}-coder',
                         'receives_prompt': True,
                         'first_message': 'Begin the assignment: the task text is at the end of your role instructions, '
                                          'after "The human task for this shift follows, verbatim:".'},
-            'Coder': {'session_name': f'{shift}-coder', 'pane_title': 'Coder', 'peer': f'{shift}-foreman',
+            'Coder': {'session_name': f'{shift}-coder', 'pane_title': f'{shift} Coder', 'peer': f'{shift}-foreman',
                       'receives_prompt': False,
                       'first_message': 'Begin your Coder role: send READY to Foreman and await assignments.'}},
         'wt_argv': ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized', 'new-tab', *pane_args('Foreman'),
@@ -552,6 +614,28 @@ def test_down_handover_without_result_or_launch_json(monkeypatch, tmp_path, caps
     launcher.down(['bare0001'])
     handover = (d / 'handover.md').read_text(encoding='utf-8')
     assert '(no result.json)' in handover and '(no launch.json)' in handover and ': passed — 5 passed' in handover
+
+
+@pytest.mark.parametrize('ticket, windows, expected', [
+    ('NGH-023', {1: 'NGH-023 Foreman', 2: 'NGH-099 Foreman', 3: 'other'}, 1),        # this shift's ticket title
+    (None, {4: 'Nightshift-shift-titl0001 Coder', 5: 'NGH-023 Coder'}, 4),           # free-text: the shift name
+    (None, {6: 'Foreman', 7: 'other'}, 6),                                            # legacy bare title
+    ('NGH-023', {8: 'NGH-023 Foreman', 9: 'Coder'}, None),                            # two matches: close nothing
+])
+def test_down_without_hwnd_falls_back_to_this_shifts_titles(monkeypatch, tmp_path, capsys, ticket, windows, expected):
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'shifts')
+    d = _shift(tmp_path, 'Nightshift-shift-titl0001', {'Foreman': 601})
+    if ticket:
+        (d / 'ticket.txt').write_text(ticket, encoding='utf-8')
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid: False)
+    monkeypatch.setattr(launcher, 'suite_result', lambda: ('passed', '5 passed'))
+    monkeypatch.setattr(launcher.subprocess, 'run', _fake_run([(['taskkill'], subprocess.CompletedProcess([], 0))]))
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: windows)
+    closed = []
+    monkeypatch.setattr(launcher.ctypes.windll.user32, 'PostMessageW', lambda h, m, w, l: closed.append(h.value))
+    launcher.down(['titl0001'])
+    out = json.loads(capsys.readouterr().out)
+    assert closed == ([expected] if expected else []) and out['window_closed'] is bool(expected)
 
 
 def test_status_all_shows_result_status(monkeypatch, tmp_path, capsys):

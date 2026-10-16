@@ -7,7 +7,8 @@ task; Coder gets its role and peer identity, sends READY and awaits work. The ta
 reaches the panes by file path only, never as argv text. Panes run in the
 caller's current directory (no worktree is created) in Claude's auto permission
 mode (--permission-mode auto). Each `start` is a new shift: mesh names are
-<shift>-foreman / <shift>-coder, pane labels are just Foreman / Coder, and
+<shift>-foreman / <shift>-coder, pane titles are '<ticket or shift> <Role>' (e.g. 'NGH-019 Foreman'), a loop
+window is titled 'Nightshift <first ticket>..<last ticket>', and
 <state_dir>/<Role>.json records pid, name, peer and model. There is no restart or
 resume; a closed pane is not relaunched. `start --dry-run` prints the plan as
 JSON without launching or writing anything. A working folder holds one live shift at a time:
@@ -394,8 +395,20 @@ def layout_description(n):
     return f'2 rows: {top} columns over {n - top}'
 
 
+def pane_title(label, role):
+    """Start-mode pane title: '<ticket or shift> <Role>', e.g. 'NGH-019 Foreman' (owner format, 16 Oct)."""
+    return f'{label} {role}'
+
+
+def loop_title(tickets):
+    """The loop's console title: 'Nightshift NGH-019..NGH-020', or 'Nightshift NGH-019' for one ticket."""
+    if not tickets:
+        return 'Nightshift loop'
+    return 'Nightshift ' + tickets[0] + (f'..{tickets[-1]}' if len(tickets) > 1 else '')
+
+
 def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=None, members=DEFAULT_LABELS,
-               crew='default'):
+               crew='default', ticket=None):
     """wt.exe argv for one tab holding `members` (pane labels, in order).
 
     2 panes: side by side, focus left (unchanged since the first crew). 3-4: one row of equal columns,
@@ -411,8 +424,8 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
         if role:
             if agents:
                 command.extend(['--profile', PROFILE])
-            # start mode shows short titles; the trial modes keep the shift name in the title.
-            title = role if mode_flag == '--start' else 'Nightshift | ' + role + ' | ' + name
+            # start mode shows '<ticket or shift> <Role>'; the trial modes keep the shift name in the title.
+            title = pane_title(ticket or name, role) if mode_flag == '--start' else 'Nightshift | ' + role + ' | ' + name
             command.extend(['--title', title, '--suppressApplicationTitle',
                             '-d', '%USERPROFILE%', sys.executable, script, '--pane', role, '--state-dir', str(state_dir)])
             if mode_flag:
@@ -651,13 +664,15 @@ def start(argv):
         parser.error(f'the working folder contains ";", which Windows Terminal treats as a command separator: {cwd}')
     members = crew_members(crew, name)
     labels = [m['label'] for m in members]
-    command = wt_command(name, state_dir, agents=True, mode_flag='--start', cwd=cwd, members=labels, crew=crew['name'])
+    command = wt_command(name, state_dir, agents=True, mode_flag='--start', cwd=cwd, members=labels, crew=crew['name'],
+                         ticket=ticket)
     if args.dry_run:
         plan = {
             'dry_run': True, 'shift': name, 'state_dir': str(state_dir), 'cwd': cwd, 'ticket': ticket,
             'prompt_file': str(state_dir / 'prompt.txt'), 'model': crew['model'], 'profile': PROFILE,
             'permission_mode': crew['permission_mode'], 'lock': str(lock_path(cwd)),
-            'roles': {m['label']: {'session_name': m['identity'], 'pane_title': m['label'], 'peer': m['peer'],
+            'roles': {m['label']: {'session_name': m['identity'], 'pane_title': pane_title(ticket or name, m['label']),
+                                   'peer': m['peer'],
                                    'receives_prompt': m['human_contact'], 'first_message': opening_message(m)}
                       for m in members},
             'wt_argv': command, 'prompt': prompt}
@@ -918,8 +933,12 @@ def down(argv):
     hwnd = launch_record.get('hwnd')
     windows = terminal_windows()
     if not hwnd:
-        # Shift started before the hwnd was recorded: fall back to the one window titled by a crew pane.
-        candidates = [h for h, title in windows.items() if title in ('Foreman', 'Coder')]
+        # Shift started before the hwnd was recorded: fall back to the one window titled by one of this shift's
+        # panes ('<ticket or shift> <Role>'), or by a bare 'Foreman'/'Coder' for shifts from before those titles.
+        ticket_file = state_dir / 'ticket.txt'
+        label = (ticket_file.read_text(encoding='utf-8').strip() if ticket_file.is_file() else '') or state_dir.name
+        titles = {pane_title(label, m['label']) for m in crew_roster(state_dir)} | {'Foreman', 'Coder'}
+        candidates = [h for h, title in windows.items() if title in titles]
         hwnd = candidates[0] if len(candidates) == 1 else None
     window_open = bool(hwnd and hwnd in windows)
     if window_open:
@@ -1593,6 +1612,8 @@ def loop(argv, continue_from=None):
         tickets = tickets[:args.max]
     if args.project:
         print(json.dumps({'event': 'selected', 'project': args.project, 'tickets': tickets}), flush=True)
+    if 'PYTEST_CURRENT_TEST' not in os.environ:
+        ctypes.windll.kernel32.SetConsoleTitleW(loop_title(tickets))   # the name the finished-loop close looks for
     for ticket in tickets:
         previous = (continue_from or {}).get(ticket)
         for attempt in range(1, args.retries + 2):
@@ -1654,7 +1675,7 @@ def loop(argv, continue_from=None):
     # A finished loop closes its own Terminal window; a stopped one stays open so the human can read why.
     # Never under pytest: a crew running the suite closed the live loop's window and killed it (15 Oct).
     if 'PYTEST_CURRENT_TEST' not in os.environ:
-        close_terminal_windows('Nightshift loop')
+        close_terminal_windows(loop_title(tickets))
 
 
 def stale_locks():

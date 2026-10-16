@@ -13,7 +13,7 @@ exists; where the two differ, this file wins.
 
 | Piece | Role | Where |
 |---|---|---|
-| `nightshift_shifts.py` | the launcher and loop: `start`, `status`, `down`, `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019) | this repo |
+| `nightshift_shifts.py` | the launcher and loop: `start`, `status`, `down`, `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020) | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`, placeholders filled in); the task text is appended for Foreman | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
@@ -47,6 +47,19 @@ exists; where the two differ, this file wins.
 5. `nightshift down` captures the last lines of each pane, writes `handover.md` (result,
    commits since start, test outcome, denials, claims, pane tails), kills the crew processes,
    releases the lock and closes only that shift's Terminal window.
+
+## Window and pane titles (NGH-023)
+
+- Each `start` pane is titled `<ticket or shift> <Role>`, one space, no dash: `NGH-019 Foreman`,
+  `NGH-019 Coder-2`; a free-text shift uses its shift name (`Nightshift-shift-1a2b3c4d Coder`).
+  `--suppressApplicationTitle` keeps the CLI from overwriting it, and the window shows the
+  focused pane's title. One helper (`pane_title`) builds it for `wt_command`, the dry-run plan
+  and `down`.
+- The legacy trial modes keep `Nightshift | <Role> | <trial>`.
+- `loop` sets its own console title to `Nightshift <first>..<last>` (`Nightshift NGH-019` for one
+  ticket; `loop_title`), and a finished loop closes the Terminal window with that title.
+- `down` closes the hwnd recorded in `launch.json`; without one it falls back to the single window
+  titled by one of this shift's panes, or a bare `Foreman`/`Coder` for shifts from before NGH-023.
 
 ## The shift folder is the source of truth
 

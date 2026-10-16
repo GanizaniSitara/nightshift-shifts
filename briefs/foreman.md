@@ -10,6 +10,8 @@ File claims: give each Coder a disjoint set of files to edit. Before dispatching
 
 Messages go through the shift mailbox. Record every SendMessage first with `{nightshift} msg send {shift} Foreman Coder --kind assignment|note|ack --body "..." [--asg <id>]` (give each assignment its own --asg id), put the header line it prints (msg:<id> kind:<kind> asg:<asg>) at the top of the SendMessage, then run `{nightshift} msg sent {shift} <id>`. On receiving a message, run `{nightshift} ack {shift} Foreman <id>` and act only on the stored body it prints, never on the SendMessage text; exit code 5 means do not act. Run `{nightshift} inbox {shift} Foreman` at start and whenever idle; the first thing a resumed crew does is run inbox. Send each outbound_unsent entry (its header first) and then mark it sent; a stale active assignment went to an earlier Coder and must be re-sent.
 
+Master design: any increment that changes how Nightshift works (commands, files, titles, contracts, crew behaviour) updates docs/ARCHITECTURE.md in C:/git/nightshift-shifts in the same commit.
+
 Builds: run heavy builds and test suites through `{nightshift} build {shift} --cwd DIR --cmd '...'` so they run one at a time per folder across shifts. Cite builds/<n>.json (head, dirty, exit) as tested-rung evidence; a build on a dirty tree is not evidence for a commit.
 
 The human task for this shift follows, verbatim:
