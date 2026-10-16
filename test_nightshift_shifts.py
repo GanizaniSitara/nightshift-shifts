@@ -320,8 +320,10 @@ def test_role_without_a_persona_file_still_renders(monkeypatch, tmp_path):
                                              '  - {role: Reviewer, brief: coder.md}\n')
     reviewer = launcher.crew_members(launcher.load_crew('rev'), 'S')[1]
     assert reviewer['persona'] is None
-    brief = launcher.role_brief('Reviewer', 'S-reviewer', 'S-foreman', '', 'coder.md', reviewer['persona'])
-    assert '# Protocol' not in brief and brief.startswith('You are Reviewer in a Nightshift crew.')
+    brief = launcher.role_brief('Reviewer', 'S-reviewer', 'S-foreman', '', 'coder.md', reviewer['persona'],
+                                cwd=tmp_path)
+    assert brief.startswith('# Reviewer\n\n# Protocol\n') and brief.count('# Protocol\n') == 1
+    assert 'You are Reviewer in a Nightshift crew.' in brief
 
 
 def test_committed_personas_have_every_section_as_text_and_lists_of_text():
@@ -1305,10 +1307,10 @@ def test_shift_commits_and_suite_result_failure_paths(monkeypatch):
 
 # ── loop: one shift per ticket, torn down after each ─────────────────────────
 
-def test_foreman_brief_carries_shift_contract_with_state_dir():
-    brief = launcher.role_brief('Foreman', 'f', 'c', Path('C:/x/shift-1'))
+def test_foreman_brief_carries_shift_contract_with_state_dir(tmp_path):
+    brief = launcher.role_brief('Foreman', 'f', 'c', Path('C:/x/shift-1'), cwd=tmp_path)
     assert 'C:\\x\\shift-1\\result.json' in brief.replace('/', '\\') and '"done" or "blocked"' in brief
-    assert 'test_nightshift_shifts.py' in brief
+    assert 'test_nightshift_shifts.py' not in brief
 
 
 def test_wait_for_result_returns_result_json(tmp_path, monkeypatch):
@@ -6835,3 +6837,374 @@ def test_accept_trust_prompt_moves_to_the_accepting_option_then_presses_enter(mo
 def test_accept_trust_prompt_ignores_tools_without_a_known_dialog(monkeypatch):
     monkeypatch.setattr(launcher.subprocess, 'run', lambda *a, **k: pytest.fail('no peek for an unknown tool'))
     launcher.accept_trust_prompt(types.SimpleNamespace(pid=1, poll=lambda: None), 'opencode')
+
+
+# ── per-repository configuration and instructions (NGH-043) ──────────────────
+
+def _repo043_file(repo, name, text):
+    path = Path(repo) / '.nightshift' / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding='utf-8')
+    return path
+
+
+@pytest.mark.parametrize('text', [
+    '', 'null\n', '[]\n', 'false\n', 'config\n', 'target_branch: [broken\n',
+    'unknown: true\n', 'target_branch: 2\n', 'target_branch: true\n',
+    'target_branch: null\n', 'default_crew: []\n', 'default_crew: false\n',
+    'build: []\n', 'build: null\n', 'build: command\n', 'build: {unknown: 1}\n',
+    'build: {cmd: 2}\n', 'build: {cmd: false}\n', 'build: {cmd: null}\n',
+    'build: {timeout: true}\n', 'build: {timeout: "90"}\n',
+    'build: {timeout: []}\n', 'build: {timeout: null}\n',
+    'build: {timeout: -1}\n', 'build: {timeout: .nan}\n',
+    'build: {timeout: .inf}\n', 'build: {timeout: -.inf}\n',
+])
+def test_repo043_invalid_config_names_path_and_fails_before_start(monkeypatch, tmp_path, text):
+    path = _repo043_file(tmp_path, 'config.yaml', text)
+    shifts = tmp_path / 'state-that-must-not-exist'
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', shifts)
+    monkeypatch.setattr(launcher, 'launch', lambda *a: pytest.fail('invalid config launched a window'))
+    with pytest.raises(SystemExit) as err:
+        launcher.start(['--dry-run', '--no-worktree', '--cwd', str(tmp_path), 'plain task'])
+    assert path.as_posix() in str(err.value).replace('\\', '/')
+    assert not shifts.exists()
+
+
+@pytest.mark.parametrize('config', [{}, {'build': {}}, {'build': {'timeout': 90}},
+                                     {'build': {'timeout': 0.5, 'cmd': 'check --all'}}])
+def test_repo043_valid_config_is_reported_verbatim_in_dry_run(monkeypatch, tmp_path, capsys, config):
+    import yaml
+    _repo043_file(tmp_path, 'config.yaml', yaml.safe_dump(config))
+    launcher.start(['--dry-run', '--no-worktree', '--cwd', str(tmp_path), 'plain task'])
+    plan = json.loads(capsys.readouterr().out)
+    assert plan['repo_config'] == config
+
+
+def test_repo043_no_config_preserves_builtin_defaults(monkeypatch, tmp_path, capsys):
+    launcher.start(['--dry-run', '--no-worktree', '--cwd', str(tmp_path), 'plain task'])
+    plan = json.loads(capsys.readouterr().out)
+    assert plan.get('repo_config') is None
+    assert set(plan['roles']) == {'Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice'}
+    text = launcher.role_brief('Coder', 'S-coder', 'S-foreman', cwd=tmp_path)
+    assert '# Protocol' in text and '# Repository' not in text
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_repo043_start_config_defaults_and_explicit_cli_win(worktree_world, capsys, explicit):
+    w = worktree_world
+    _wt_git(w.repo, 'branch', 'configured')
+    _repo043_file(w.repo, 'config.yaml', 'target_branch: configured\ndefault_crew: trio\n')
+    _repo043_file(w.repo, 'crews/trio.yaml', TRIO)
+    flags = ['--target-branch', 'main', '--crew', 'default'] if explicit else []
+    launcher.start(['--dry-run', '--cwd', str(w.repo), *flags, 'plain task'])
+    plan = json.loads(capsys.readouterr().out)
+    assert plan['worktree']['target_branch'] == ('main' if explicit else 'configured')
+    assert set(plan['roles']) == ({'Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice'} if explicit else
+                                  {'Foreman', 'Coder-1', 'Coder-2', 'Coder-3'})
+    assert plan['repo_config'] == {'target_branch': 'configured', 'default_crew': 'trio'}
+    assert not w.launches
+
+
+def test_repo043_repo_crew_overrides_builtin_and_other_names_fall_back(monkeypatch, tmp_path):
+    _crew_file(monkeypatch, tmp_path, 'same', TRIO)
+    _crew_file(monkeypatch, tmp_path, 'fallback', TRIO)
+    local = TRIO.replace('claude-sonnet-5-5', 'local-model')
+    _repo043_file(tmp_path, 'crews/same.yaml', local)
+    assert launcher.load_crew('same', repo_root=tmp_path)['model'] == 'local-model'
+    assert launcher.load_crew('fallback', repo_root=tmp_path)['model'] == 'claude-sonnet-5-5'
+    _repo043_file(tmp_path, 'crews/same.yaml', 'roles: []\n')
+    with pytest.raises(SystemExit, match='non-empty list'):
+        launcher.load_crew('same', repo_root=tmp_path)
+
+
+def test_repo043_canonical_root_prefers_worktree_metadata_and_resolves_fallback(tmp_path):
+    canonical, work, state = (tmp_path / name for name in ('canonical repo', 'linked worktree', 'state'))
+    for path in (canonical, work, state):
+        path.mkdir()
+    (state / 'worktree.json').write_text(json.dumps({'repo_root': str(canonical), 'worktree_dir': str(work)}))
+    assert Path(launcher.canonical_repo_root(cwd=work, state_dir=state)) == canonical.resolve()
+    assert Path(launcher.canonical_repo_root(cwd=work / '..' / work.name)) == work.resolve()
+
+
+@pytest.mark.parametrize('role,brief_file', [('Foreman', 'foreman.md'), ('Coder', 'coder.md'),
+                                          ('ReviewBot', 'coder.md')])
+def test_repo043_prompt_layers_expand_all_placeholders_preserve_json_and_custom_role(tmp_path, role, brief_file):
+    state = tmp_path / 'state' / 'Nightshift-shift-repo043'
+    state.mkdir(parents=True)
+    cwd = tmp_path / 'working folder with café'
+    cwd.mkdir()
+    _repo043_file(cwd, 'config.yaml', 'build:\n  cmd: "check --json"\n')
+    _repo043_file(cwd, 'instructions.md', 'COMMON-REPO {shift} {identity} {state_dir} {nightshift} {cwd}\n'
+                                         'Literal JSON: {"pass": true, "nested": {"n": 1}}\n')
+    _repo043_file(cwd, f'{role.lower()}.md', 'ROLE-REPO {role} {peer_name}\n')
+    text = launcher.role_brief(role, 'identity043', 'peer043', state, brief_file, cwd=cwd)
+    assert text.count('# Protocol\n') == 1 and text.count('# Repository\n') == 1
+    assert text.index('# Protocol\n') < text.index('# Repository\n') < text.index('COMMON-REPO') < text.index('ROLE-REPO')
+    assert 'check --json' in text and 'build Nightshift-shift-repo043' in text
+    assert 'identity043' in text and 'peer043' in text
+    assert state.as_posix() in text and cwd.as_posix() in text
+    assert 'Literal JSON: {"pass": true, "nested": {"n": 1}}' in text
+    for key in ('shift', 'identity', 'state_dir', 'nightshift', 'cwd', 'role', 'peer_name'):
+        assert '{' + key + '}' not in text
+    if role == 'Foreman':
+        marker = 'The human task for this shift follows, verbatim:'
+        assert text.count('# Task\n') == 1 and text.count(marker) == 1
+        assert text.index('ROLE-REPO') < text.index('# Task\n') < text.index(marker)
+    if role == 'ReviewBot':
+        assert '# Protocol\n' in text and '# ReviewBot' in text
+
+
+@pytest.mark.parametrize('filename,text', [('instructions.md', 'repo-wide only'), ('coder.md', 'role only'),
+                                         ('config.yaml', '{}\n')])
+def test_repo043_each_optional_source_independently_enables_repository_layer(tmp_path, filename, text):
+    _repo043_file(tmp_path, filename, text)
+    brief = launcher.role_brief('Coder', 'S-coder', 'S-foreman', cwd=tmp_path)
+    assert brief.count('# Repository\n') == 1
+    if filename.endswith('.md'):
+        assert text in brief
+
+
+def test_repo043_prompt_reads_canonical_config_not_stale_worktree_copy(tmp_path):
+    canonical, work, state = (tmp_path / name for name in ('canonical', 'work', 'state'))
+    for path in (canonical, work, state):
+        path.mkdir()
+    (state / 'worktree.json').write_text(json.dumps({'repo_root': str(canonical), 'worktree_dir': str(work)}))
+    _repo043_file(canonical, 'instructions.md', 'CANONICAL-REPO')
+    _repo043_file(work, 'instructions.md', 'STALE-WORKTREE-REPO')
+    brief = launcher.role_brief('Coder', 'S-coder', 'S-foreman', state, cwd=work)
+    assert 'CANONICAL-REPO' in brief and 'STALE-WORKTREE-REPO' not in brief
+
+
+@pytest.mark.parametrize('brief_file', ['foreman.md', 'foreman-cli.md', 'foreman-agy-coder.md'])
+def test_repo043_foreman_self_host_rules_are_repository_scoped(monkeypatch, tmp_path, brief_file):
+    # This checkout is itself a live shift. Read the repository assets under
+    # review without discovering the outer shift's canonical base checkout.
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'isolated-shifts')
+    generic = (launcher.BRIEFS_DIR / brief_file).read_text(encoding='utf-8')
+    for rule in ('test_nightshift_shifts.py', 'docs/ARCHITECTURE.md', 'C:/git/nightshift-shifts',
+                 'no task IDs in commit messages'):
+        assert rule not in generic
+    other = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', brief=brief_file, cwd=tmp_path)
+    assert 'test_nightshift_shifts.py' not in other and 'docs/ARCHITECTURE.md' not in other
+    self_host = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', brief=brief_file,
+                                    cwd=Path(__file__).resolve().parent)
+    assert self_host.index('# Repository') < self_host.index('test_nightshift_shifts.py') < self_host.index('# Task')
+    assert 'docs/ARCHITECTURE.md' in self_host
+
+
+@pytest.mark.parametrize('explicit_timeout,expected_minutes', [(None, 1.5), ('2.5', 2.5)])
+def test_repo043_build_infers_shift_cwd_and_converts_config_seconds_only(monkeypatch, tmp_path, capsys,
+                                                                      explicit_timeout, expected_minutes):
+    state, work, seen = _build_shift(monkeypatch, tmp_path)
+    (state / 'crew.json').write_text(json.dumps({'cwd': str(work), 'members': []}))
+    _repo043_file(work, 'config.yaml', 'build: {cmd: configured-command, timeout: 90}\n')
+    original = launcher.take_build_lock
+    waits = []
+
+    def lock(cwd, shift, n, timeout):
+        waits.append(timeout)
+        return original(cwd, shift, n, timeout)
+    monkeypatch.setattr(launcher, 'take_build_lock', lock)
+    elsewhere = tmp_path / 'unrelated-caller'
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    flags = ['--timeout', explicit_timeout, '--cmd', 'explicit-command'] if explicit_timeout else []
+    launcher.build(['bld00001', *flags])
+    record = json.loads(capsys.readouterr().out)
+    assert record['cwd'] == str(work.resolve())
+    assert record['cmd'] == ('explicit-command' if explicit_timeout else 'configured-command')
+    assert seen['popen'][0][0] == record['cmd'] and record['exit'] == 0
+    assert waits == [expected_minutes]
+
+
+def test_repo043_build_uses_worktree_metadata_for_canonical_config_and_execution(monkeypatch, tmp_path, capsys):
+    state, work, seen = _build_shift(monkeypatch, tmp_path)
+    canonical = tmp_path / 'canonical'
+    canonical.mkdir()
+    (state / 'worktree.json').write_text(json.dumps({'repo_root': str(canonical), 'worktree_dir': str(work)}))
+    _repo043_file(canonical, 'config.yaml', 'build: {cmd: canonical-command}\n')
+    _repo043_file(work, 'config.yaml', 'build: {cmd: stale-command}\n')
+    launcher.build(['bld00001'])
+    record = json.loads(capsys.readouterr().out)
+    assert record['cmd'] == 'canonical-command' and record['cwd'] == str(work.resolve())
+    assert seen['popen'][0][1]['cwd'] == str(work.resolve())
+
+
+def test_repo043_build_without_config_still_requires_command(monkeypatch, tmp_path):
+    state, work, seen = _build_shift(monkeypatch, tmp_path)
+    (state / 'crew.json').write_text(json.dumps({'cwd': str(work), 'members': []}))
+    with pytest.raises(SystemExit) as err:
+        launcher.build(['bld00001'])
+    assert err.value.code == 2 and not seen['popen']
+
+
+def test_repo043_build_explicit_cwd_selects_its_own_config(monkeypatch, tmp_path, capsys):
+    state, work, seen = _build_shift(monkeypatch, tmp_path)
+    other = tmp_path / 'explicit cwd'
+    other.mkdir()
+    (state / 'crew.json').write_text(json.dumps({'cwd': str(work), 'members': []}))
+    _repo043_file(work, 'config.yaml', 'build: {cmd: shift-command}\n')
+    _repo043_file(other, 'config.yaml', 'build: {cmd: explicit-cwd-command}\n')
+    launcher.build(['bld00001', '--cwd', str(other)])
+    record = json.loads(capsys.readouterr().out)
+    assert record['cmd'] == 'explicit-cwd-command' and record['cwd'] == str(other.resolve())
+
+
+def test_repo043_mirror_exact_modified_untracked_excluded_deleted_and_binary(worktree_world):
+    w = worktree_world
+    _wt_commit(w.repo, '.nightshift/config.yaml', 'build: {cmd: old-command}\n')
+    _wt_commit(w.repo, '.nightshift/deleted.md', 'remove this in canonical repo\n')
+    _repo043_file(w.repo, 'config.yaml', 'build: {cmd: local-command}\n')
+    (w.repo / '.nightshift' / 'deleted.md').unlink()
+    _repo043_file(w.repo, 'instructions.md', 'local café instructions\n')
+    _repo043_file(w.repo, 'crews/local.yaml', TRIO)
+    binary = w.repo / '.nightshift' / 'ignored.bin'
+    binary.write_bytes(b'\x00\xff\x00\x80')
+    exclude = w.repo / '.git' / 'info' / 'exclude'
+    exclude.write_text('/.nightshift/ignored.bin\n', encoding='utf-8')
+    before = _wt_git(w.repo, 'status', '--porcelain', '--untracked-files=all')
+    _, work, _ = _wt_start(w)
+    source = {p.relative_to(w.repo / '.nightshift').as_posix(): p.read_bytes()
+              for p in (w.repo / '.nightshift').rglob('*') if p.is_file()}
+    mirrored = {p.relative_to(work / '.nightshift').as_posix(): p.read_bytes()
+                for p in (work / '.nightshift').rglob('*') if p.is_file()}
+    assert mirrored == source
+    assert _wt_git(w.repo, 'status', '--porcelain', '--untracked-files=all') == before
+    assert _wt_git(work, 'diff', '--cached', '--name-only') == ''
+
+
+def test_repo043_excluded_local_config_visible_in_worktree_without_staging(worktree_world):
+    w = worktree_world
+    _repo043_file(w.repo, 'config.yaml', 'build: {cmd: local-check}\n')
+    (w.repo / '.git' / 'info' / 'exclude').write_text('/.nightshift/\n', encoding='utf-8')
+    assert _wt_git(w.repo, 'status', '--porcelain') == ''
+    _, work, _ = _wt_start(w)
+    assert (work / '.nightshift' / 'config.yaml').read_text() == 'build: {cmd: local-check}\n'
+    assert _wt_git(work, 'ls-files', '.nightshift') == ''
+
+
+def test_repo043_absent_canonical_layer_does_not_delete_target_branch_policy(worktree_world):
+    w = worktree_world
+    _wt_git(w.repo, 'checkout', '-b', 'configured-target')
+    _wt_commit(w.repo, '.nightshift/instructions.md', 'target branch policy\n')
+    _wt_git(w.repo, 'checkout', 'main')
+    assert not (w.repo / '.nightshift').exists()
+    _, work, _ = _wt_start(w, '--target-branch', 'configured-target')
+    assert (work / '.nightshift' / 'instructions.md').read_text() == 'target branch policy\n'
+    assert launcher.git_state(str(work))[1] is False
+
+
+def test_repo043_explicit_start_target_stays_pinned_when_config_changes_before_land(worktree_world, capsys):
+    w = worktree_world
+    main_head = _wt_git(w.repo, 'rev-parse', 'main')
+    _wt_git(w.repo, 'checkout', '-b', 'explicit-target')
+    _repo043_file(w.repo, 'config.yaml', 'target_branch: main\n')
+    state, work, meta = _wt_start(w, '--target-branch', 'explicit-target')
+    assert meta['target_branch'] == 'explicit-target'
+    sha = _wt_commit(work, 'feature.txt', 'pinned target feature\n')
+    _repo043_file(w.repo, 'config.yaml', 'target_branch: different-config-target\n')
+    _wt_test_commit(state, work, capsys)
+    _wt_land(state, capsys)
+    assert _wt_git(w.repo, 'rev-parse', 'explicit-target') == sha
+    assert _wt_git(w.repo, 'rev-parse', 'main') == main_head
+
+
+def test_repo043_only_exact_untracked_layer_is_ignored_not_similar_names(worktree_world):
+    w = worktree_world
+    _repo043_file(w.repo, 'instructions.md', 'local policy\n')
+    _, work, _ = _wt_start(w)
+    assert launcher.git_state(str(work))[1] is False
+    (work / '.nightshift-not-config').write_text('real untracked work\n')
+    _, dirty, porcelain = launcher.git_state(str(work))
+    assert dirty is True and any('.nightshift-not-config' in line for line in porcelain)
+
+
+def test_repo043_local_config_does_not_block_clean_build_landing_or_teardown(worktree_world, capsys):
+    w = worktree_world
+    _repo043_file(w.repo, 'config.yaml', 'build: {cmd: local-check}\n')
+    state, work, meta = _wt_start(w)
+    assert (work / '.nightshift' / 'config.yaml').exists()
+    sha = _wt_commit(work, 'feature.txt', 'tested feature\n')
+    _wt_test_commit(state, work, capsys)
+    _wt_land(state, capsys)
+    assert _wt_git(w.repo, 'rev-parse', 'main') == sha
+    assert _wt_git(w.repo, 'ls-tree', '-r', '--name-only', 'main', '.nightshift') == ''
+    launcher.down([state.name])
+    assert not work.exists() and not _wt_git(w.repo, 'branch', '--list', meta['branch'])
+    assert (w.repo / '.nightshift' / 'config.yaml').read_text() == 'build: {cmd: local-check}\n'
+
+
+@pytest.mark.parametrize('change', ['modified', 'deleted', 'staged'])
+def test_repo043_tracked_config_changes_are_dirty_and_prevent_land(worktree_world, capsys, change):
+    w = worktree_world
+    _wt_commit(w.repo, '.nightshift/instructions.md', 'tracked repository policy\n')
+    state, work, _ = _wt_start(w)
+    _wt_test_commit(state, work, capsys)
+    policy = work / '.nightshift' / 'instructions.md'
+    if change == 'deleted':
+        policy.unlink()
+    else:
+        policy.write_text('changed tracked policy\n')
+        if change == 'staged':
+            _wt_git(work, 'add', '.nightshift/instructions.md')
+    assert launcher.git_state(str(work))[1] is True
+    with pytest.raises(SystemExit):
+        launcher.land([state.name])
+    assert not (state / 'landed.json').exists()
+
+
+@pytest.mark.parametrize('tracked', [False, True])
+def test_repo043_recovery_never_commits_local_config_but_preserves_tracked_edits(worktree_world, capsys, tracked):
+    w = worktree_world
+    if tracked:
+        _wt_commit(w.repo, '.nightshift/instructions.md', 'old tracked policy\n')
+    _repo043_file(w.repo, 'config.yaml', 'build: {cmd: local-check}\n')
+    state, work, meta = _wt_start(w)
+    if tracked:
+        (work / '.nightshift' / 'instructions.md').write_text('recovered tracked policy\n')
+    (work / 'shared.txt').write_text('recovered feature\n')
+    launcher.down([state.name])
+    assert not work.exists()
+    assert _wt_git(w.repo, 'show', meta['branch'] + ':shared.txt') == 'recovered feature'
+    paths = _wt_git(w.repo, 'ls-tree', '-r', '--name-only', meta['branch'], '.nightshift').splitlines()
+    assert paths == (['.nightshift/instructions.md'] if tracked else [])
+    if tracked:
+        assert _wt_git(w.repo, 'show', meta['branch'] + ':.nightshift/instructions.md') == 'recovered tracked policy'
+
+
+def test_repo043_untracked_config_only_down_does_not_make_recovery_commit(worktree_world):
+    w = worktree_world
+    _repo043_file(w.repo, 'instructions.md', 'local only\n')
+    state, work, meta = _wt_start(w)
+    before = _wt_git(work, 'rev-parse', 'HEAD')
+    launcher.down([state.name])
+    assert not work.exists()
+    assert _wt_git(w.repo, 'rev-parse', meta['branch']) == before
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_repo043_spawn_crew_lookup_uses_canonical_root_not_process_cwd(tmp_path, injected, capsys):
+    state = _container(tmp_path)
+    canonical, work = tmp_path / 'canonical', tmp_path / 'work'
+    canonical.mkdir()
+    work.mkdir()
+    (state / 'worktree.json').write_text(json.dumps({'repo_root': str(canonical), 'worktree_dir': str(work)}))
+    _repo043_file(canonical, 'crews/local043.yaml', 'roles:\n'
+                  '  - {role: Foreman, brief: foreman.md, human_contact: true}\n'
+                  '  - {role: ReviewBot, brief: coder.md, model: local-model}\n')
+    launcher.spawn([CONT_SHIFT, '--role', 'ReviewBot', '--crew', 'local043'])
+    result = json.loads(capsys.readouterr().out)
+    member = json.loads((state / 'crew.json').read_text())['members'][-1]
+    assert result['role'] == 'ReviewBot' and member['model'] == 'local-model'
+    assert len(injected.inputs) == 1
+
+
+def test_repo043_pane_fallback_manifest_and_prompt_use_repo_root(monkeypatch, tmp_path):
+    _repo043_file(tmp_path, 'crews/default.yaml', 'model: repo-model\nroles:\n'
+                  '  - {role: Foreman, brief: foreman.md, human_contact: true}\n'
+                  '  - {role: Coder, brief: coder.md}\n')
+    _repo043_file(tmp_path, 'instructions.md', 'PANE-REPO-POLICY')
+    seen, _ = _capture_role_launch(monkeypatch, tmp_path, 'Coder', str(tmp_path))
+    command = seen['cmd']
+    assert command[command.index('--model') + 1] == 'repo-model'
+    assert 'PANE-REPO-POLICY' in command[command.index('--append-system-prompt') + 1]

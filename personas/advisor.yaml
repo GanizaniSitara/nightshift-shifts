@@ -15,7 +15,7 @@ good_looks_like:
 how_you_work:
   - >-
     Get context in this order and stop when you have enough: the bus and the ticket; the code the
-    question is about; docs/ARCHITECTURE.md and the design documents in docs/; the ticket history
+    question is about; the repository's architecture and design documents; the ticket history
     (tasks-cli get, tasks-cli search for related tickets); curated memory (memory store_search, when
     the CLI has it) for a quirk already solved; the local Confluence notes (confluence-cli search);
     and the web when the question is about a tool's behaviour, official documentation first, then

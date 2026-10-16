@@ -954,3 +954,53 @@ with **Foreman-driven landing (`nightshift land`)**:
   GPT-6 Astra in `codex.yaml`; Copilot's owner-set policy is Gemini 3.8 Flash for every role).
 - Whether to converge all messaging on mailbox + agents-cli, or keep native mesh for Claude.
 - Parallel shifts across separate codebases (NGH-013).
+
+## Per-repository `.nightshift` configuration and instruction layer (NGH-043)
+
+Nightshift keeps its global role personas and protocol briefs repository-agnostic. A repository
+may supply a `.nightshift/` layer for its own build contract, instructions, role additions and
+crew manifests:
+
+```text
+<repo>/.nightshift/
+  config.yaml        # optional machine-readable repository contract
+  instructions.md    # optional instructions appended for every role
+  foreman.md         # optional role-specific instructions
+  crews/             # optional repository-specific crew manifests
+```
+
+The supported `config.yaml` keys are `target_branch` (string, default branch for worktree
+creation and landing), `default_crew` (string, used when `start --crew` is omitted), and `build`
+(a mapping with string `cmd` and numeric `timeout`, in seconds). The config timeout is expressed
+in seconds; the CLI `--timeout` option remains expressed in minutes. Unknown keys and non-mapping
+YAML fail fast with a `SystemExit` naming the config path. When present, `start --dry-run` includes
+the resolved configuration as `repo_config`.
+
+Configuration discovery resolves the canonical repository root from `worktree.json`'s `repo_root`
+when running in an isolated shift worktree; otherwise it uses the resolved working directory.
+When `build --cwd` is omitted, the build uses the shift's recorded worktree/direct working folder.
+When a git worktree is created, an existing `<repo_root>/.nightshift/` directory—including
+untracked or modified files excluded through `.git/info/exclude`—is mirrored into the worktree
+without staging or committing it. Tracked `.nightshift/` edits remain dirty and are preserved;
+untracked local-only copies are never staged into recovery commits. `land` and `down` ignore these
+untracked `.nightshift/` copies.
+
+`start` resolves the target branch once from the explicit CLI option, repository config, or
+`main`, and records that resolved target in `worktree.json`. Landing keeps that recorded target
+stable unless `land --target-branch` explicitly overrides it.
+
+Repository crew lookup checks `<repo_root>/.nightshift/crews/<name>.yaml` before falling back to
+the built-in `crews/<name>.yaml`. This lets a work repository provide an approved manifest without
+modifying Nightshift's built-in crew definitions.
+
+`role_brief` stacks prompts in four sections: `# <Role>` for the persona from `personas/`,
+`# Protocol` for `briefs/common.md` plus the role brief, `# Repository` for the resolved build
+command and optional `.nightshift/instructions.md` plus `.nightshift/<role_lower>.md`, and `# Task`
+for the Foreman's verbatim human task. Standard placeholders (`{shift}`, `{identity}`,
+`{state_dir}`, `{nightshift}`, `{cwd}`) are expanded in repository instructions. The repository
+section is omitted when no repository config or markdown instructions exist.
+
+This repository self-hosts the layer with `target_branch: main` and the default build command
+`C:/miniconda3/envs/python312/python.exe -m pytest test_nightshift_shifts.py -q`. Its shared
+architecture rule lives in `.nightshift/instructions.md`; Foreman-specific pytest and exact-clean-
+commit conventions live in `.nightshift/foreman.md`, so other repositories do not inherit them.

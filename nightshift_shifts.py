@@ -159,9 +159,59 @@ def shift_requires(state_dir):
     return value if value in STAGES else DEFAULT_REQUIRES
 
 
-def load_crew(name='default'):
-    """Read and check CREWS_DIR/<name>.yaml; SystemExit with a plain reason when it is unusable."""
+def canonical_repo_root(cwd=None, state_dir=None):
+    """Use the shift's recorded repository, otherwise the resolved working directory."""
+    cwd = Path(cwd or os.getcwd()).resolve()
+    if state_dir:
+        info = worktree_info(state_dir)
+        if info:
+            return Path(info['repo_root']).resolve()
+    for shift_dir in shift_dirs():
+        info = worktree_info(shift_dir)
+        if info and cwd.is_relative_to(Path(info['worktree_dir']).resolve()):
+            return Path(info['repo_root']).resolve()
+    return cwd
+
+
+def load_repo_config(repo_root):
+    """Read the optional, strictly typed repository contract; errors name its path."""
+    path = Path(repo_root) / '.nightshift' / 'config.yaml'
+    if not path.exists():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding='utf-8'))
+    except (OSError, yaml.YAMLError) as err:
+        raise SystemExit(f'{path}: {err}') from None
+    if not isinstance(data, dict):
+        raise SystemExit(f'{path}: config must be a mapping')
+    unknown = data.keys() - {'target_branch', 'default_crew', 'build'}
+    if unknown:
+        raise SystemExit(f'{path}: unknown config keys: {", ".join(map(str, unknown))}')
+    for key in ('target_branch', 'default_crew'):
+        if key in data and (not isinstance(data[key], str) or not data[key].strip()):
+            raise SystemExit(f'{path}: {key} must be a non-empty string')
+    if 'build' in data:
+        build = data['build']
+        if not isinstance(build, dict):
+            raise SystemExit(f'{path}: build must be a mapping')
+        unknown = build.keys() - {'cmd', 'timeout'}
+        if unknown:
+            raise SystemExit(f'{path}: unknown build keys: {", ".join(map(str, unknown))}')
+        if 'cmd' in build and (not isinstance(build['cmd'], str) or not build['cmd'].strip()):
+            raise SystemExit(f'{path}: build.cmd must be a non-empty string')
+        if 'timeout' in build and (type(build['timeout']) not in (int, float)
+                                  or not math.isfinite(build['timeout']) or build['timeout'] < 0):
+            raise SystemExit(f'{path}: build.timeout must be a finite non-negative number of seconds')
+    return data
+
+
+def load_crew(name='default', repo_root=None):
+    """Read a repository crew first, falling back to CREWS_DIR/<name>.yaml."""
     path = CREWS_DIR / f'{name}.yaml'
+    if repo_root is not None:
+        local = Path(repo_root) / '.nightshift' / 'crews' / f'{name}.yaml'
+        if local.is_file():
+            path = local
     if not path.is_file():
         available = sorted(p.stem for p in CREWS_DIR.glob('*.yaml')) if CREWS_DIR.is_dir() else []
         raise SystemExit(f'no crew manifest {path}; available crews: {", ".join(available) or "(none)"}')
@@ -352,18 +402,37 @@ def persona_text(role, persona):
     return text + '---\n\n# Protocol\n\n'
 
 
-def role_brief(role, identity, peer_name, state_dir='', brief=None, persona=None):
+def role_brief(role, identity, peer_name, state_dir='', brief=None, persona=None, cwd=None, repo_root=None):
     """Crew instructions: the role's persona (PERSONAS_DIR/<persona>, default <role>.yaml when it exists; none
     otherwise) rendered first, then BRIEFS_DIR/common.md + the role's brief file (default <role>.md), with
-    {role}/{identity}/{peer_name}/{state_dir}/{shift} filled in ({shift} is the state folder's name, '' without one).
-    Every CLI (claude, agy, codex, copilot) gets its brief from here.
+    then the canonical repository's config and markdown, and finally Foreman's task marker. Standard placeholders
+    include {cwd}; {shift} is the state folder's name, '' without one. Every CLI gets its brief from here.
 
     Edit those files to change how a crew behaves; nothing here needs touching.
     """
     persona = persona or default_persona(role)
-    text = persona_text(role, persona) if persona else ''
+    text = persona_text(role, persona) if persona else f'# {role}\n\n# Protocol\n\n'
     for name in ('common.md', brief or role.lower() + '.md'):
         text += (BRIEFS_DIR / name).read_text(encoding='utf-8').strip() + '\n\n'
+    # Older/custom Foreman briefs may still carry the task marker: it belongs after Repository.
+    marker = 'The human task for this shift follows, verbatim:'
+    text = text.replace('# Task\n', '').replace(marker, '')
+    info = worktree_info(state_dir) if state_dir else None
+    cwd = Path(cwd or (info or {}).get('worktree_dir') or
+               (read_crew_json(state_dir) or {}).get('cwd') or os.getcwd()).resolve()
+    repo_root = canonical_repo_root(repo_root or cwd, state_dir)
+    config = load_repo_config(repo_root)
+    repo_dir = repo_root / '.nightshift'
+    instructions = [p.read_text(encoding='utf-8').strip()
+                    for p in (repo_dir / 'instructions.md', repo_dir / f'{role.lower()}.md') if p.is_file()]
+    if config is not None or instructions:
+        text += '\n# Repository\n\n'
+        cmd = (config or {}).get('build', {}).get('cmd')
+        if cmd:
+            text += f'- Default build/test command (`{{nightshift}} build {{shift}}`): `{cmd}`\n\n'
+        text += '\n\n'.join(instructions) + '\n\n'
+    if role.lower() == 'foreman':
+        text += f'# Task\n\n{marker}\n\n'
     shift = Path(state_dir).name if state_dir else ''
     # Plain replace, not str.format: the briefs contain literal JSON braces.
     # {nightshift} is the exact command: the crews' shell is Git Bash, where the nightshift.cmd shim
@@ -371,7 +440,8 @@ def role_brief(role, identity, peer_name, state_dir='', brief=None, persona=None
     nightshift_cmd = f'{SUITE_PYTHON} {(REPO_DIR / "nightshift_shifts.py").as_posix()}'
     state_posix = Path(state_dir).as_posix() if state_dir else ''
     for key, value in (('{role}', role), ('{identity}', identity), ('{peer_name}', peer_name),
-                       ('{state_dir}', state_posix), ('{shift}', shift), ('{nightshift}', nightshift_cmd)):
+                       ('{state_dir}', state_posix), ('{shift}', shift), ('{nightshift}', nightshift_cmd),
+                       ('{cwd}', cwd.as_posix())):
         text = text.replace(key, value)
     return text
 
@@ -804,7 +874,9 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                 members = saved['members']
                 crew_name, permission_mode = saved.get('crew', 'default'), saved.get('permission_mode')
             else:
-                crew_def = load_crew(crew or 'default')
+                repo_root = canonical_repo_root(cwd, state_dir)
+                config = load_repo_config(repo_root) or {}
+                crew_def = load_crew(crew or config.get('default_crew') or 'default', repo_root=repo_root)
                 members = crew_members(crew_def, shift)
                 crew_name, permission_mode = crew_def['name'], crew_def['permission_mode']
             member = next((m for m in members if m['label'] == role), None)
@@ -817,7 +889,8 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             # a role's own permissions: (skip | auto | default) wins over the crew-level permission_mode
             permission_mode = member.get('permissions') or permission_mode or START_PERMISSION_MODE
             first_message = opening_message(member, state_dir)
-            brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'], member.get('persona'))
+            brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'], member.get('persona'),
+                               cwd=cwd)
             if member['human_contact']:
                 brief += Path(state_dir, 'prompt.txt').read_text(encoding='utf-8')
         if tool in TOOL_EXES:
@@ -1234,6 +1307,24 @@ def worktree_info(state_dir):
     return json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
 
 
+def mirror_repo_layer(repo_root, worktree_dir):
+    """Copy the canonical on-disk layer exactly, including local files and tracked deletions."""
+    repo, work = Path(repo_root).resolve(), Path(worktree_dir).resolve()
+    if repo == work:
+        raise SystemExit('cannot mirror repository instructions onto the canonical checkout')
+    source, destination = repo / '.nightshift', work / '.nightshift'
+    if not source.is_dir():
+        return
+    if destination.is_symlink():
+        destination.unlink()
+    elif destination.exists():
+        if destination.is_dir():
+            shutil.rmtree(destination)
+        else:
+            destination.unlink()
+    shutil.copytree(source, destination, symlinks=True)
+
+
 def plan_worktree(cwd, name, ticket, target):
     root = git_run(cwd, 'rev-parse', '--show-toplevel', check=False)
     if root.returncode:
@@ -1288,13 +1379,16 @@ def landing_locked(info, state_dir):
 def land(argv):
     parser = argparse.ArgumentParser(prog='nightshift land')
     parser.add_argument('shift')
+    parser.add_argument('--target-branch', help='override the repository default landing branch')
     parser.add_argument('--keep-conflicts', action='store_true')
     args = parser.parse_args(argv)
     state_dir = resolve_shift(args.shift)
     info = worktree_info(state_dir)
     if not info:
         parser.error('shift has no isolated worktree')
-    cwd, repo, target = info['worktree_dir'], info['repo_root'], info['target_branch']
+    cwd, repo = info['worktree_dir'], info['repo_root']
+    config = load_repo_config(repo) or {}
+    target = args.target_branch or info.get('target_branch') or config.get('target_branch') or 'main'
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(mailbox_guard(lock_path(repo), timeout_ms=5000))
@@ -1415,7 +1509,13 @@ def teardown_worktree(state_dir, hold=False, floor=None):
                 raise SystemExit(f'recovery worktree is detached or on another branch: {cwd}; left intact')
             if not landed:
                 if dirty:
-                    git_run(cwd, 'add', '--all')
+                    # Preserve tracked config edits, but never commit local-only repository instructions.
+                    git_run(cwd, 'add', '--update')
+                    untracked = [p for p in git_run(cwd, 'ls-files', '--others', '--exclude-standard', '-z')
+                                 .stdout.decode('utf-8', 'replace').split('\0')
+                                 if p and not p.startswith('.nightshift/') and p != '.nightshift']
+                    if untracked:
+                        git_run(cwd, 'add', '--', *untracked)
                     git_run(cwd, 'commit', '-m', f'Nightshift recovery: {state_dir.name}')
                 recovery['recovery_sha'] = git_text(cwd, 'rev-parse', 'HEAD')
             recovery['removal_started'] = True
@@ -1457,16 +1557,15 @@ def start(argv):
     parser.add_argument('--prompt-file', help='read the task from this UTF-8 file instead (safest for text with quotes or & | < > ^ %%)')
     parser.add_argument('--cwd', help='folder the crew works in (default: the ticket codebase, else the current directory)')
     parser.add_argument('--no-worktree', action='store_true', help='work in place with the existing folder lock')
-    parser.add_argument('--target-branch', default='main', help='branch to start from and land onto (default main)')
+    parser.add_argument('--target-branch', help='branch to start from and land onto (repository default, else main)')
     parser.add_argument('--continue-from', metavar='SHIFT_DIR',
                         help='an earlier shift folder for the same task: its handover.md is appended so the crew carries on')
-    parser.add_argument('--crew', default='default',
+    parser.add_argument('--crew',
                         help='crew manifest crews/CREW.yaml: roles, briefs, colours, counts, model '
                              '(default: default = one Foreman, one Advisor, one Coder, one Tester)')
     parser.add_argument('--dry-run', action='store_true',
                         help='print the intended command, roles and prompt as JSON; launch and write nothing')
     args = parser.parse_args(argv)
-    crew = load_crew(args.crew)
     if args.prompt is not None and args.prompt_file:
         parser.error('give the task either as an argument or with --prompt-file, not both')
     prompt = Path(args.prompt_file).read_text(encoding='utf-8') if args.prompt_file else args.prompt
@@ -1492,9 +1591,13 @@ def start(argv):
     if not Path(cwd).is_dir():
         parser.error(f'working folder does not exist: {cwd}')
     cwd = str(Path(cwd).resolve())
+    repo_root = canonical_repo_root(cwd)
+    config = load_repo_config(repo_root)
+    crew = load_crew(args.crew or (config or {}).get('default_crew') or 'default', repo_root=repo_root)
     if ';' in cwd:
         parser.error(f'the working folder contains ";", which Windows Terminal treats as a command separator: {cwd}')
-    worktree = None if args.no_worktree else plan_worktree(cwd, name, ticket, args.target_branch)
+    target = args.target_branch or (config or {}).get('target_branch') or 'main'
+    worktree = None if args.no_worktree else plan_worktree(cwd, name, ticket, target)
     if worktree:
         cwd = worktree['worktree_dir']
     members = crew_members(crew, name)
@@ -1538,6 +1641,8 @@ def start(argv):
         plan.update(wt_argv=command, prompt=prompt)
         if worktree:
             plan['worktree'] = worktree
+        if config is not None:
+            plan['repo_config'] = config
         if crew['name'] != 'default':
             plan['crew'] = crew['name']   # the default crew's plan stays exactly as it was before manifests
         if 'max_credits' in crew:
@@ -1553,6 +1658,7 @@ def start(argv):
         WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
         git_run(worktree['repo_root'], 'worktree', 'add', '-b', worktree['branch'], cwd, worktree['base_sha'])
         write_json(state_dir / 'worktree.json', worktree)
+        mirror_repo_layer(repo_root, cwd)
     (state_dir / 'prompt.txt').write_text(prompt, encoding='utf-8')
     (state_dir / 'requires.txt').write_text(required, encoding='utf-8')
     (state_dir / 'crew.json').write_text(json.dumps({'crew': crew['name'], 'members': members, 'slots': crew['slots'],
@@ -1937,15 +2043,18 @@ def spawn(argv):
     role = args.role
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', role):
         raise SystemExit(f'role name {role!r} must be letters, digits or _ (it names files and panes)')
+    state_dir = resolve_shift(args.shift)
+    saved = read_crew_json(state_dir)
+    cwd = (saved or {}).get('cwd') or os.getcwd()
+    repo_root = canonical_repo_root(cwd, state_dir)
     crew_role = None   # --crew NAME: the role as manifest NAME defines it
     if args.crew:
-        crew_role = next((r for r in load_crew(args.crew)['roles'] if r['role'].lower() == role.lower()), None)
+        crew_role = next((r for r in load_crew(args.crew, repo_root=repo_root)['roles']
+                          if r['role'].lower() == role.lower()), None)
         if crew_role is None:
             raise SystemExit(f'crew {args.crew} has no role {role}')
         if args.cli is None:
             tool = crew_role['tool']
-    state_dir = resolve_shift(args.shift)
-    saved = read_crew_json(state_dir)
     slots = (saved or {}).get('slots')
     if not slots:
         raise SystemExit(f'shift {state_dir.name} has no slot grid (its crew layout is split); nothing to spawn into')
@@ -2002,7 +2111,7 @@ def spawn(argv):
         # a role the shift never had but its crew manifest names (an Advisor added to an older 3-pane shift):
         # the manifest gives brief and colour, and the model when the manifest role runs the spawned tool
         try:
-            manifest_roles = load_crew(saved.get('crew', 'default'))['roles']
+            manifest_roles = load_crew(saved.get('crew', 'default'), repo_root=repo_root)['roles']
         except SystemExit:
             manifest_roles = []   # the shift's manifest is gone or unusable: spawn as before
         manifest_role = next((r for r in manifest_roles if r['role'].lower() == role.lower()), None)
@@ -2877,13 +2986,16 @@ def git_state(cwd):
         head = subprocess.run(['git', '-C', cwd, 'rev-parse', 'HEAD'], capture_output=True, timeout=30)
         if head.returncode != 0:
             return None, None, []
-        status = subprocess.run(['git', '-C', cwd, 'status', '--porcelain'], capture_output=True, timeout=60)
+        status = subprocess.run(['git', '-C', cwd, 'status', '--porcelain', '--untracked-files=all'],
+                                capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return None, None, []
     sha = (head.stdout or b'').decode('utf-8', 'replace').strip() or None
     if status.returncode != 0:
         return sha, None, []
-    porcelain = [line for line in (status.stdout or b'').decode('utf-8', 'replace').splitlines() if line.strip()]
+    porcelain = [line for line in (status.stdout or b'').decode('utf-8', 'replace').splitlines()
+                 if line.strip() and not (line.startswith('?? ') and
+                    (line[3:].lstrip('"').startswith('.nightshift/') or line[3:] == '.nightshift'))]
     return sha, bool(porcelain), porcelain
 
 
@@ -2932,7 +3044,7 @@ def build(argv):
     parser.add_argument('n', nargs='?', type=int, help='with --cancel: the build number')
     parser.add_argument('--cwd', help='folder to build in (its build lock serialises builds there)')
     parser.add_argument('--cmd', help='the command line to run (through the shell)')
-    parser.add_argument('--timeout', type=float, default=BUILD_TIMEOUT_MINUTES,
+    parser.add_argument('--timeout', type=float,
                         help=f'minutes to wait for the folder before giving up with exit 6 (default {BUILD_TIMEOUT_MINUTES})')
     parser.add_argument('--cancel', action='store_true', help='cancel build N of SHIFT')
     args = parser.parse_args(argv)
@@ -2942,11 +3054,20 @@ def build(argv):
             parser.error('--cancel needs the build number: nightshift build --cancel SHIFT N')
         cancel_build(state_dir, args.n)
         return
-    if not args.cwd or not args.cmd:
-        parser.error('give both --cwd DIR and --cmd COMMAND')
-    if not Path(args.cwd).is_dir():
-        parser.error(f'build folder does not exist: {args.cwd}')
-    cwd = str(Path(args.cwd).resolve())
+    info = worktree_info(state_dir)
+    saved = read_crew_json(state_dir) or {}
+    build_cwd = args.cwd or (info or {}).get('worktree_dir') or saved.get('cwd')
+    if not build_cwd:
+        parser.error('give --cwd DIR; the shift has no recorded working folder')
+    if not Path(build_cwd).is_dir():
+        parser.error(f'build folder does not exist: {build_cwd}')
+    cwd = str(Path(build_cwd).resolve())
+    config = load_repo_config(canonical_repo_root(cwd, state_dir)) or {}
+    build_config = config.get('build', {})
+    args.cmd = args.cmd if args.cmd is not None else build_config.get('cmd')
+    if not args.cmd:
+        parser.error('give --cmd COMMAND or set build.cmd in .nightshift/config.yaml')
+    timeout = args.timeout if args.timeout is not None else build_config.get('timeout', BUILD_TIMEOUT_MINUTES * 60) / 60
     builds_dir = state_dir / 'builds'
     n = reserve_build(builds_dir)
     path, cancel_marker = builds_dir / f'{n}.json', builds_dir / f'{n}.cancel'
@@ -2956,7 +3077,7 @@ def build(argv):
     write_json(path, record)
     lock = None
     try:
-        lock = take_build_lock(cwd, state_dir.name, n, args.timeout)
+        lock = take_build_lock(cwd, state_dir.name, n, timeout)
         record['head'], record['dirty'], record['porcelain'] = git_state(cwd)
         record['started'] = time.strftime('%Y-%m-%d %H:%M:%S')
         if cancel_marker.exists():
@@ -3646,7 +3767,7 @@ def main():
                '  msg sent SHIFT ID                           mark a stored message as sent with SendMessage\n'
                '  inbox SHIFT ROLE                            unacked inbound, unsent outbound, active assignments\n'
                '  ack SHIFT ROLE ID                           acknowledge and print the stored body; exit 5 = do not act\n'
-               "  build SHIFT --cwd DIR --cmd 'COMMAND' [--timeout MIN]\n"
+               "  build SHIFT [--cwd DIR] [--cmd 'COMMAND'] [--timeout MIN]\n"
                '                                              run a build one at a time per folder; evidence in builds/<n>.json\n'
                '  build --cancel SHIFT N                      kill build N and mark it cancelled\n'
                '  log SHIFT [--follow] [--since N] [--json]   print the shift bus (bus.jsonl): messages, acks, start..down')
