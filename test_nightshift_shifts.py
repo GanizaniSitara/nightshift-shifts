@@ -139,8 +139,10 @@ def test_default_manifest_matches_the_original_crew():
     crew = launcher.load_crew()
     assert crew == {'name': 'default', 'model': 'claude-opus-5-5', 'permission_mode': 'auto',
                     'contract': 'result.json', 'layout': 'split', 'roles': [
-                        {'role': 'Foreman', 'brief': 'foreman.md', 'count': 1, 'human_contact': True, 'colour': 'red'},
-                        {'role': 'Coder', 'brief': 'coder.md', 'count': 1, 'human_contact': False, 'colour': 'green'}]}
+                        {'role': 'Foreman', 'brief': 'foreman.md', 'count': 1, 'human_contact': True, 'colour': 'red',
+                         'tool': 'claude', 'model': 'claude-opus-5-5'},
+                        {'role': 'Coder', 'brief': 'coder.md', 'count': 1, 'human_contact': False, 'colour': 'green',
+                         'tool': 'claude', 'model': 'claude-opus-5-5'}]}
     members = launcher.crew_members(crew, 'S')
     assert [(m['label'], m['identity'], m['peer']) for m in members] == [('Foreman', 'S-foreman', 'S-coder'),
                                                                           ('Coder', 'S-coder', 'S-foreman')]
@@ -301,6 +303,130 @@ def test_pane_start_uses_the_manifest_member(monkeypatch, tmp_path):
     assert seen['cmd'][seen['cmd'].index('--append-system-prompt') + 1].endswith('THE TASK') and seen['colour'] == 'red'
     with pytest.raises(SystemExit, match='not a member'):
         launcher.pane('Coder-9', str(state), start=True, cwd=str(tmp_path), crew='trio')
+    assert json.loads((state / 'Foreman.json').read_text(encoding='utf-8'))['tool'] == 'claude'
+
+
+# ── per-role tool: agy (Gemini) Coder (NGH-012) ───────────────────────────────
+
+MIXED = """\
+model: claude-sonnet-5-5
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true}
+  - {role: Coder, brief: coder.md, tool: agy, model: gemini-x}
+  - {role: Reviewer, brief: coder.md}
+"""
+
+
+def test_manifest_tool_defaults_to_claude_and_roles_take_their_own_model(monkeypatch, tmp_path):
+    _crew_file(monkeypatch, tmp_path, 'mixed', MIXED)
+    crew = launcher.load_crew('mixed')
+    assert [(r['role'], r['tool'], r['model']) for r in crew['roles']] == [
+        ('Foreman', 'claude', 'claude-sonnet-5-5'), ('Coder', 'agy', 'gemini-x'), ('Reviewer', 'claude', 'claude-sonnet-5-5')]
+    members = launcher.crew_members(crew, 'S')
+    assert [(m['tool'], m['model']) for m in members] == [
+        ('claude', 'claude-sonnet-5-5'), ('agy', 'gemini-x'), ('claude', 'claude-sonnet-5-5')]
+
+
+def test_manifest_rejects_an_unknown_tool_naming_the_allowed_ones(monkeypatch, tmp_path):
+    _crew_file(monkeypatch, tmp_path, 'bad', 'roles:\n  - {role: Foreman, brief: foreman.md, human_contact: true}\n'
+                                             '  - {role: Coder, brief: coder.md, tool: codex}\n')
+    with pytest.raises(SystemExit, match="tool 'codex' for Coder is not supported; use one of: claude, agy"):
+        launcher.load_crew('bad')
+
+
+def test_agy_command_argv_is_exact():
+    assert launcher.agy_command('gemini-x', 'BRIEF', 'GO') == [
+        str(launcher.AGY_EXE), '--model', 'gemini-x', '--mode', 'auto', '-i', 'BRIEF\n\nGO']
+    assert launcher.AGY_EXE.parts[-4:] == ('Microsoft', 'WinGet', 'Links', 'agy.exe')
+
+
+def test_register_name_calls_agents_cli_and_swallows_failures(monkeypatch):
+    calls = []
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: calls.append((argv, k['timeout'])))
+    launcher.register_name(42, 'S-coder')
+    assert calls == [(['agents-cli', 'name', '42', 'S-coder'], 15)]
+
+    def boom(argv, **k):
+        raise subprocess.TimeoutExpired(argv, 15)
+    monkeypatch.setattr(launcher.subprocess, 'run', boom)
+    launcher.register_name(42, 'S-coder')      # no exception
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: (_ for _ in ()).throw(OSError('no agents-cli')))
+    launcher.register_name(42, 'S-coder')
+
+
+def test_pane_start_agy_coder_runs_agy_and_registers_its_name(monkeypatch, tmp_path):
+    state = tmp_path / 'Nightshift-shift-agy00001'
+    state.mkdir()
+    (state / 'prompt.txt').write_text('THE TASK', encoding='utf-8')
+    seen = {}
+
+    class Child:
+        pid = 77
+
+        def wait(self):
+            return 0
+    monkeypatch.setenv('CLAUDECODE', '1')
+    monkeypatch.setattr(launcher.subprocess, 'Popen',
+                        lambda cmd, **k: seen.update(cmd=cmd, cwd=k['cwd'], env=k['env']) or Child())
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: seen.setdefault('runs', []).append(argv))
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: pytest.fail('trust prompt is Claude-only'))
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: pytest.fail('/color is Claude-only'))
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane('Coder', str(state), start=True, cwd=str(tmp_path), crew='gemini-coder')
+    s = 'Nightshift-shift-agy00001'
+    brief = launcher.role_brief('Coder', f'{s}-coder', f'{s}-foreman', str(state), 'coder-agy.md')
+    assert seen['cmd'] == launcher.agy_command('gemini-3.8-flash-high', brief, launcher.START_MESSAGES['Coder'])
+    assert seen['cwd'] == str(tmp_path) and 'CLAUDECODE' not in seen['env'] and seen['env']['FORCE_COLOR'] == '3'
+    assert seen['runs'] == [['agents-cli', 'name', '77', f'{s}-coder']]
+    record = json.loads((state / 'Coder.json').read_text(encoding='utf-8'))
+    assert record['tool'] == 'agy' and record['model'] == 'gemini-3.8-flash-high' and record['name'] == f'{s}-coder'
+
+
+def test_gemini_coder_crew_selects_the_agy_briefs_and_fills_them():
+    crew = launcher.load_crew('gemini-coder')
+    assert [(r['role'], r['brief'], r['tool'], r['model'], r['colour']) for r in crew['roles']] == [
+        ('Foreman', 'foreman-agy-coder.md', 'claude', 'claude-opus-5-5', 'red'),
+        ('Coder', 'coder-agy.md', 'agy', 'gemini-3.8-flash-high', 'green')]
+    foreman = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', 'C:/x/S', 'foreman-agy-coder.md')
+    coder = launcher.role_brief('Coder', 'S-coder', 'S-foreman', 'C:/x/S', 'coder-agy.md')
+    for brief in (foreman, coder):
+        assert not any(p in brief for p in ('{role}', '{identity}', '{peer_name}', '{state_dir}', '{shift}',
+                                            '{nightshift}'))
+        assert 'CODER-DONE' in brief and 'CODER-BLOCKED' in brief and 'never launch Claude sessions' in brief
+    assert "agents-cli wait S-coder --match 'CODER-DONE|CODER-BLOCKED' --timeout 30m" in foreman
+    assert 'agents-cli send S-coder' in foreman and 'agents-cli tail S-coder' in foreman
+    assert foreman.rstrip().endswith('verbatim:')
+    assert 'nightshift_shifts.py claim S S-coder' in coder and 'Exit code 4' in coder
+    assert 'nightshift_shifts.py ack S Coder <id>' in coder and 'agents-cli tail' in coder
+
+
+def test_pid_alive_accepts_agy(monkeypatch):
+    csv = '"agy.exe","900","Console","1","1 K"\r\n'
+    monkeypatch.setattr(launcher.subprocess, 'run',
+                        lambda argv, **k: subprocess.CompletedProcess([], 0, stdout=csv.encode(), stderr=b''))
+    assert launcher.pid_alive(900) is True
+
+
+def test_shift_record_reports_each_role_tool(monkeypatch, tmp_path):
+    d = _shift(tmp_path, 'Nightshift-shift-tool0001', {'Foreman': 1, 'Coder': 2})
+    info = json.loads((d / 'Coder.json').read_text(encoding='utf-8'))
+    (d / 'Coder.json').write_text(json.dumps(dict(info, tool='agy')), encoding='utf-8')
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid: True)
+    roles = launcher.shift_record(d)['roles']
+    assert roles['Coder']['tool'] == 'agy' and roles['Foreman']['tool'] == 'claude'
+
+
+def test_start_dry_run_gemini_coder_shows_the_agy_coder(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    monkeypatch.setattr(launcher.subprocess, 'run', _fake_run([]))
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('Popen called'))
+    monkeypatch.chdir(tmp_path)
+    launcher.start(['--dry-run', '--crew', 'gemini-coder', 'task'])
+    plan = json.loads(capsys.readouterr().out)
+    assert plan['crew'] == 'gemini-coder'
+    coder = plan['roles']['Coder']
+    assert (coder['tool'], coder['model'], coder['exe']) == ('agy', 'gemini-3.8-flash-high', str(launcher.AGY_EXE))
+    assert 'tool' not in plan['roles']['Foreman']
 
 
 # ── role briefs live in nightshift-briefs/*.md ────────────────────────────────

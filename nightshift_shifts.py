@@ -62,6 +62,9 @@ START_MESSAGES = {'Foreman': 'Begin the assignment: the task text is at the end 
 MAILKEEP = 'C:/Tools/mailkeep/Mailkeep.Cli.exe'
 NOTIFY_IDENTITY = 'owner_id'                # Mailkeep identity for owner@example.com
 NOTIFY_TO = 'owner@example.com'        # `loop` emails the owner here when it halts or finishes
+TOOLS = ('claude', 'agy')              # the CLI a crew role runs (manifest `tool:`); claude is the default
+# Antigravity's agy (Gemini) as installed by winget; it has no --name or system-prompt flag (NGH-012).
+AGY_EXE = Path(os.environ.get('LOCALAPPDATA', '')) / 'Microsoft' / 'WinGet' / 'Links' / 'agy.exe'
 DEFAULT_LABELS = ('Foreman', 'Coder')   # panes of the trial modes and of shifts started before crew.json existed
 STAGES = ('implemented', 'tested', 'deployed', 'validated')   # the result ladder, lowest rung first
 DEFAULT_REQUIRES = 'tested'
@@ -128,8 +131,12 @@ def load_crew(name='default'):
         if type(count) is not int or count < 1:
             raise SystemExit(f'crew {name}: count for {role} must be a whole number >= 1, not {count!r}')
         human = entry.get('human_contact') is True
+        tool = str(entry.get('tool') or 'claude')
+        if tool not in TOOLS:
+            raise SystemExit(f'crew {name}: tool {tool!r} for {role} is not supported; use one of: {", ".join(TOOLS)}')
         checked.append({'role': role, 'brief': brief, 'count': count, 'human_contact': human,
-                        'colour': str(entry.get('colour') or ('red' if human else 'green'))})
+                        'colour': str(entry.get('colour') or ('red' if human else 'green')),
+                        'tool': tool, 'model': str(entry.get('model') or '')})
     humans = [r['role'] for r in checked if r['human_contact']]
     if len(humans) != 1:
         raise SystemExit(f'crew {name}: exactly one role needs human_contact: true, found {len(humans)}')
@@ -141,13 +148,16 @@ def load_crew(name='default'):
     layout = data.get('layout', 'split')
     if layout != 'split':
         raise SystemExit(f"crew {name}: layout {layout!r} is not supported; use 'split'")
-    return {'name': name, 'model': str(data.get('model') or MODEL),
+    model = str(data.get('model') or MODEL)
+    for r in checked:
+        r['model'] = r['model'] or model   # a role without its own model: runs the crew model
+    return {'name': name, 'model': model,
             'permission_mode': str(data.get('permission_mode') or START_PERMISSION_MODE),
             'contract': str(data.get('contract') or 'result.json'), 'layout': layout, 'roles': checked}
 
 
 def crew_members(crew, shift):
-    """Panes in launch order: [{role, label, identity, brief, colour, human_contact, peer}].
+    """Panes in launch order: [{role, label, identity, brief, colour, human_contact, tool, model, peer}].
 
     A role with count 1 is labelled Role and named <shift>-role; count N gives Role-1..N / <shift>-role-1..N.
     The human-contact member's peer is every other member (comma-separated); everyone else's is it.
@@ -158,7 +168,8 @@ def crew_members(crew, shift):
             suffix = f'-{n}' if r['count'] > 1 else ''
             members.append({'role': r['role'], 'label': r['role'] + suffix,
                             'identity': f"{shift}-{r['role'].lower()}{suffix}", 'brief': r['brief'],
-                            'colour': r['colour'], 'human_contact': r['human_contact']})
+                            'colour': r['colour'], 'human_contact': r['human_contact'],
+                            'tool': r['tool'], 'model': r['model']})
     lead = next(m for m in members if m['human_contact'])
     for m in members:
         m['peer'] = ', '.join(o['identity'] for o in members if o is not m) if m is lead else lead['identity']
@@ -206,6 +217,19 @@ def crew_env(environ):
     env.pop('NO_COLOR', None)
     env.update(TERM='xterm-256color', COLORTERM='truecolor', FORCE_COLOR='3')
     return env
+
+
+def agy_command(model, brief, first_message):
+    """argv for an agy (Gemini) crew member: agy has no --name or system-prompt flag, so the brief is the prompt."""
+    return [str(AGY_EXE), '--model', model, '--mode', 'auto', '-i', brief + '\n\n' + first_message]
+
+
+def register_name(pid, identity):
+    """Name a non-Claude pane in agents-cli so Foreman can send/wait/tail it by identity; failures are ignored."""
+    try:
+        subprocess.run(['agents-cli', 'name', str(pid), identity], capture_output=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def accept_trust_prompt(child):
@@ -291,7 +315,7 @@ def set_role_colour(child, colour, cwd):
 
 def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/nightshift', crew=None):
     if live or start:
-        model, permission_mode = MODEL, START_PERMISSION_MODE
+        model, permission_mode, tool = MODEL, START_PERMISSION_MODE, 'claude'
         colour = 'red' if role == 'Foreman' else 'green'
         shift = Path(state_dir).name
         peer = 'Coder' if role == 'Foreman' else 'Foreman'
@@ -326,20 +350,28 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             if member is None:
                 raise SystemExit(f"pane {role} is not a member of crew {crew_def['name']}")
             identity, peer_name, colour = member['identity'], member['peer'], member['colour']
-            model, permission_mode = crew_def['model'], crew_def['permission_mode']
+            model, permission_mode, tool = member['model'], crew_def['permission_mode'], member['tool']
             first_message = opening_message(member)
             brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'])
             if member['human_contact']:
                 brief += Path(state_dir, 'prompt.txt').read_text(encoding='utf-8')
-        exe = Path('C:/nvm4w/nodejs/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
-        command = [str(exe), '--name', identity, '--model', model,
-                   '--permission-mode', permission_mode, '--append-system-prompt', brief, first_message]
+        if tool == 'agy':
+            command = agy_command(model, brief, first_message)
+        else:
+            exe = Path('C:/nvm4w/nodejs/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
+            command = [str(exe), '--name', identity, '--model', model,
+                       '--permission-mode', permission_mode, '--append-system-prompt', brief, first_message]
         child = subprocess.Popen(command, cwd=cwd, env=crew_env(os.environ))
-        Path(state_dir, role + '.json').write_text(json.dumps({
-            'pid': child.pid, 'wrapper_pid': os.getpid(), 'role': role, 'started': time.time(),
-            'name': identity, 'peer': peer_name, 'model': model, 'cwd': cwd}), encoding='utf-8')
-        accept_trust_prompt(child)
-        set_role_colour(child, colour, cwd)
+        record = {'pid': child.pid, 'wrapper_pid': os.getpid(), 'role': role, 'started': time.time(),
+                  'name': identity, 'peer': peer_name, 'model': model, 'cwd': cwd}
+        if start:
+            record['tool'] = tool
+        Path(state_dir, role + '.json').write_text(json.dumps(record), encoding='utf-8')
+        if tool == 'agy':
+            register_name(child.pid, identity)   # the trust dialog and /color are Claude-only
+        else:
+            accept_trust_prompt(child)
+            set_role_colour(child, colour, cwd)
         code = child.wait()
         print(f'{role} exited with code {code}.')
         input('Press Enter to close this pane.')
@@ -673,7 +705,10 @@ def start(argv):
             'permission_mode': crew['permission_mode'], 'lock': str(lock_path(cwd)),
             'roles': {m['label']: {'session_name': m['identity'], 'pane_title': pane_title(ticket or name, m['label']),
                                    'peer': m['peer'],
-                                   'receives_prompt': m['human_contact'], 'first_message': opening_message(m)}
+                                   'receives_prompt': m['human_contact'], 'first_message': opening_message(m),
+                                   # Claude roles keep the pre-manifest shape; other tools show what will run
+                                   **({'tool': m['tool'], 'model': m['model'], 'exe': str(AGY_EXE)}
+                                      if m['tool'] != 'claude' else {})}
                       for m in members},
             'wt_argv': command, 'prompt': prompt}
         if crew['name'] != 'default':
@@ -713,7 +748,8 @@ def process_start_epoch(pid):
 
 
 def pid_alive(pid, started=None):
-    """True if this PID is a Claude process started when the crew member was (CSV PID field compared whole).
+    """True if this PID is a crew CLI process (claude.exe, node.exe or agy.exe) started when the crew member
+    was (CSV PID field compared whole).
 
     Windows reuses PIDs, so a dead crew member's PID can turn up on another process - even another
     Claude session - and make a finished shift look alive; the start time settles it.
@@ -723,7 +759,7 @@ def pid_alive(pid, started=None):
     for line in out.splitlines():
         if line.startswith('"'):
             fields = line.strip('"').split('","')
-            if fields[1:2] == [str(pid)] and fields[0].lower() in ('claude.exe', 'node.exe'):
+            if fields[1:2] == [str(pid)] and fields[0].lower() in ('claude.exe', 'node.exe', 'agy.exe'):
                 if started is None:
                     return True
                 created = process_start_epoch(pid)
@@ -749,6 +785,7 @@ def shift_record(state_dir):
         pid = info['pid']
         record['roles'][role] = {
             'pid': pid, 'wrapper_pid': info.get('wrapper_pid'), 'name': info.get('name'), 'cwd': info.get('cwd'),
+            'tool': info.get('tool', 'claude'),
             'alive': pid_alive(pid, info['started']) if 'started' in info else pid_alive(pid),
             'registered': (sessions / f'{pid}.json').exists(),
         }

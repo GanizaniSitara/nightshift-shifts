@@ -28,7 +28,7 @@ once NGH-025 lands.
 | Piece | Role | Where |
 |---|---|---|
 | `nightshift_shifts.py` | the launcher and loop: `start`, `status`, `down`, `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020) | this repo |
-| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, pane layout | this repo |
+| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (claude or agy) and `model`, pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`, placeholders filled in); the task text is appended for Foreman | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | `C:\Tools\tasks-cli.exe` |
@@ -45,7 +45,8 @@ once NGH-025 lands.
    live shift holds it), writes `prompt.txt`, and runs `wt.exe` with one `new-tab`/`split-pane`
    per role. Each pane runs this same script as a **wrapper** (`--pane ROLE`), which launches the
    role's CLI, records `<Role>.json` (pid, name, start time, cwd), answers Claude's trust dialog
-   if it appears, sets the role colour, and waits for the CLI to exit.
+   if it appears, sets the role colour, and waits for the CLI to exit. `<Role>.json` also records
+   the role's `tool` (claude or agy), which `status` reports per role.
 2. Each Claude member starts with `--name <shift>-<role>`, `--permission-mode auto` (owner
    decision: classifier-guarded, never `manual`, never bypass), and
    `--append-system-prompt` = its brief. The wrapper scrubs inherited `CLAUDE*` env so a crew
@@ -61,6 +62,26 @@ once NGH-025 lands.
 5. `nightshift down` captures the last lines of each pane, writes `handover.md` (result,
    commits since start, test outcome, denials, claims, pane tails), kills the crew processes,
    releases the lock and closes only that shift's Terminal window.
+
+## Mixed crews: per-role tool and model (NGH-012)
+
+- A manifest role may say `tool: claude` (default) or `tool: agy`; anything else is refused naming
+  the allowed tools. `model:` on a role overrides the crew `model:` for that role only.
+- An agy pane runs `%LOCALAPPDATA%\Microsoft\WinGet\Links\agy.exe --model <model> --mode auto -i
+  "<brief>\n\n<opening message>"` (`agy_command`). agy has no `--name` or system-prompt flag, so the brief
+  is the prompt text. The wrapper scrubs the env the same way (`crew_env`), then names the pane with
+  `agents-cli name <pid> <identity>` (`register_name`, failures ignored) so it can be addressed by its
+  shift identity. The trust-dialog answer and `/color` are Claude-only and skipped.
+- `pid_alive` counts `agy.exe` as a crew process alongside `claude.exe`/`node.exe`.
+- `start --dry-run` adds `tool`, `model` and `exe` to each non-Claude role; Claude roles keep the
+  original shape (the default crew's plan is golden-tested byte for byte).
+- `crews/gemini-coder.yaml` is the first mixed crew: Claude Foreman (`foreman-agy-coder.md`), agy
+  Coder on `gemini-3.8-flash-high` (`coder-agy.md`). The agy Coder cannot use ListAgents/SendMessage:
+  it writes reports in its own window, each ending with `CODER-DONE` or `CODER-BLOCKED`. Foreman
+  assigns with mailbox `msg send` → `agents-cli send <coder> "<header> <text>"` → `msg sent`,
+  waits with `agents-cli wait <coder> --match 'CODER-DONE|CODER-BLOCKED' --timeout 30m`, reads
+  `agents-cli tail`, and checks the marker ends the new report, not an old one. Its proactive check
+  is `agents-cli ls`/`tail` instead of ListAgents.
 
 ## Window and pane titles (NGH-023)
 
@@ -126,7 +147,7 @@ revision-bound evidence. No worktrees per shift (owner: not needed).
 | Acceptance gates G0–G5 as the delivery sequence | replaced by ticketed increments run by the loop; G0–G3 and most of G5 are covered, G4 pending | departure in method, not in content |
 | `down` with handover; `resume` re-dispatches acked-but-unfinished work | `down`/handover, loop retries with handover carry-over, `resume` after reboot | matches |
 | Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | none built; NGH-014 holds the design for owner agreement | not started |
-| Second coder, heterogeneous CLIs later | claims ready; Gemini Coder spec'd (NGH-012), Copilot (NGH-022) | not started |
+| Second coder, heterogeneous CLIs later | claims ready; per-role `tool:` with an agy Gemini Coder crew (NGH-012, not yet run live); Copilot (NGH-022) | in progress |
 | "Portable package", CLI language open | Python in its own repo; binary decision NGH-021 | open |
 | — (not in the design) | loop, result ladder, crew manifest, email on halt, denial capture | additions |
 | — (owner, 16 Oct) | container with slot grid, `spawn`, Foreman-owned `down`, launcher exits; loop optional | NGH-025, not started |
