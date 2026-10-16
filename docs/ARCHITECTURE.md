@@ -9,6 +9,20 @@ The design this grew from is in `portable-shifts-design.md` and its three review
 (`*-fable-critique.md`, `*-mistral-critique.md`, `*-argon-gaps.md`). This file describes what
 exists; where the two differ, this file wins.
 
+## Container, not loop (owner decision, 16 Oct 2026; NGH-025)
+
+The owner has reset the shape of the thing. Nightshift is **not a persistent process**. The
+executable launches a container and exits: one Windows Terminal tab holding a grid of slots
+(1x4 now, 2x4 later), the first slots filled with the crew from the manifest, the rest empty
+shells. From then on **Foreman owns the container**: it may fill an empty slot through
+`nightshift spawn` (any CLI; the Nightshift CLI is the one component that knows how to put a
+session into a tab slot, agents-cli only drives consoles), and when the ticket is tested and
+deployed it writes the records and runs `nightshift down` itself. If Foreman dies, the shift is
+dead until a human looks; there is no watcher of watchers. The `loop` below is kept as an
+optional batch runner and is no longer the default path. Everything under "A shift, step by
+step" that says the loop starts, polls or tears down a shift is superseded by this section
+once NGH-025 lands.
+
 ## Components
 
 | Piece | Role | Where |
@@ -115,6 +129,7 @@ revision-bound evidence. No worktrees per shift (owner: not needed).
 | Second coder, heterogeneous CLIs later | claims ready; Gemini Coder spec'd (NGH-012), Copilot (NGH-022) | not started |
 | "Portable package", CLI language open | Python in its own repo; binary decision NGH-021 | open |
 | — (not in the design) | loop, result ladder, crew manifest, email on halt, denial capture | additions |
+| — (owner, 16 Oct) | container with slot grid, `spawn`, Foreman-owned `down`, launcher exits; loop optional | NGH-025, not started |
 
 ## Not decided / not built
 
