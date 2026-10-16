@@ -451,9 +451,9 @@ def codex_command(model, brief, first_message, reasoning=None, permissions=None)
 
 
 def copilot_command(model, brief, first_message, permissions=None, reasoning=None, context=None, session_name=None,
-                    max_credits=None, usage_file=None):
+                    max_credits=None):
     """argv for a Copilot CLI crew member: tools per `permissions`, no auto-update, optional reasoning effort,
-    context tier and AI credit cap (with its usage written to usage_file), interactive initial prompt."""
+    context tier and AI credit cap, interactive initial prompt."""
     cmd = [str(COPILOT_EXE), *permission_flags('copilot', permissions), '--no-auto-update', '--model', model]
     if reasoning:
         cmd += ['--reasoning-effort', reasoning]
@@ -461,27 +461,20 @@ def copilot_command(model, brief, first_message, permissions=None, reasoning=Non
         cmd += ['--context', context]
     if max_credits:
         cmd += ['--max-ai-credits', str(max_credits)]
-        if usage_file:
-            cmd += ['--usage-output-file', str(usage_file)]
     if session_name is not None:
         cmd += ['--name', session_name]
     return cmd + ['-i', brief + '\n\n' + first_message]
 
 
 def tool_command(tool, model, brief, first_message, permissions=None, reasoning=None, context=None,
-                 session_name=None, max_credits=None, usage_file=None):
+                 session_name=None, max_credits=None):
     """argv for a non-Claude crew member (agy, codex or copilot), as pane() runs it and start --dry-run shows it."""
     if tool == 'agy':
         return agy_command(model, brief, first_message, permissions=permissions)
     if tool == 'codex':
         return codex_command(model, brief, first_message, reasoning=reasoning, permissions=permissions)
     return copilot_command(model, brief, first_message, permissions=permissions, reasoning=reasoning, context=context,
-                           session_name=session_name, max_credits=max_credits, usage_file=usage_file)
-
-
-def usage_file(state_dir, label):
-    """<state_dir>/<label>-usage.json: where a credit-capped Copilot pane writes its final usage (for result.json)."""
-    return Path(state_dir, f'{label}-usage.json').resolve().as_posix()
+                           session_name=session_name, max_credits=max_credits)
 
 
 def register_name(pid, identity):
@@ -830,8 +823,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
         if tool in TOOL_EXES:
             session_name = f'{role} ({identity})'
             command = tool_command(tool, model, brief, first_message, permission_mode, reasoning, context,
-                                   session_name=session_name, max_credits=max_credits,
-                                   usage_file=usage_file(state_dir, role))
+                                   session_name=session_name, max_credits=max_credits)
         else:
             exe = Path('C:/nvm4w/nodejs/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
             command = [str(exe), '--name', identity, '--model', model,
@@ -1533,8 +1525,7 @@ def start(argv):
                                                                m.get('permissions') or crew['permission_mode'],
                                                                m.get('reasoning'), m.get('context'),
                                                                session_name=f"{m['label']} ({m['identity']})",
-                                                               max_credits=m.get('max_credits'),
-                                                               usage_file=usage_file(state_dir, m['label']))}
+                                                               max_credits=m.get('max_credits'))}
                                       if m['tool'] != 'claude' else {}),
                                    'permission_flags': permission_flags(
                                        m['tool'], m.get('permissions') or crew['permission_mode'])}

@@ -6655,16 +6655,20 @@ def test_start_dry_run_claude_copilot_caps_each_copilot_pane(monkeypatch, tmp_pa
         cmd = roles[label]['command']
         assert roles[label]['max_credits'] == 30
         assert cmd[cmd.index('--max-ai-credits') + 1] == '30'
-        assert cmd[cmd.index('--usage-output-file') + 1] == \
-            (Path(plan['state_dir']) / f'{label}-usage.json').resolve().as_posix()
+        # the bundled Copilot 1.0.74 (--no-auto-update) rejects --usage-output-file (NGH-042)
+        assert '--usage-output-file' not in cmd
+        assert not any('usage.json' in str(a) for a in cmd)
         assert cmd[-4] == '--name' and cmd[-2] == '-i'
 
 
-def test_copilot_command_credit_cap_and_usage_file():
+def test_copilot_command_credit_cap_without_usage_file():
     head = [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash']
-    assert launcher.copilot_command('gemini-3.8-flash', 'B', 'F', max_credits=30, usage_file='C:/s/Coder-usage.json') \
-        == head + ['--max-ai-credits', '30', '--usage-output-file', 'C:/s/Coder-usage.json', '-i', 'B\n\nF']
-    assert launcher.copilot_command('gemini-3.8-flash', 'B', 'F', usage_file='C:/s/x.json') == head + ['-i', 'B\n\nF']
+    assert launcher.copilot_command('gemini-3.8-flash', 'B', 'F', max_credits=30) \
+        == head + ['--max-ai-credits', '30', '-i', 'B\n\nF']
+    assert launcher.copilot_command('gemini-3.8-flash', 'B', 'F') == head + ['-i', 'B\n\nF']
+    with pytest.raises(TypeError):
+        launcher.copilot_command('gemini-3.8-flash', 'B', 'F', usage_file='C:/s/x.json')
+    assert not hasattr(launcher, 'usage_file')
 
 
 def _budget_crew(monkeypatch, tmp_path, budget, roles):

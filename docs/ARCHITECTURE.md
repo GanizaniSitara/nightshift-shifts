@@ -626,10 +626,12 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   top-level key, so the budget has one source of truth. The share is carried like `reasoning` through
   `crew_members`, `crew.json` (which also records the budget as top-level `max_credits`), `spawn`
   (respawn and `--crew` included, same-tool only) and `pane()`, and reaches Copilot as
-  `--max-ai-credits <share> --usage-output-file <state_dir>/<label>-usage.json`, a soft cap per pane.
+  `--max-ai-credits <share>` only, a soft cap per pane. No `--usage-output-file`: `--no-auto-update` runs the
+  bundled Copilot 1.0.74, which rejects that option and exits 1 at launch.
   `start --dry-run` shows the budget first in the plan and each Copilot role's share.
   Before writing `result.json`, the Claude Foreman (`foreman.md`) reads each Copilot pane's credits from
-  that file, or from `/usage` sent with agents-cli and read from its tail, and records
+  `<state_dir>/<label>-usage.json` when present, else from `/usage` sent with agents-cli and read from its
+  tail, and records
   `"usage": {"budget": B, "total_used": T, "panes": {"<label>": {"credits_used": n, "cap": share}}}`.
   `COPILOT_MODEL` (the default for a spawned copilot role) is `gemini-3.8-flash`.
 - `crews/claude-copilot.yaml` (NGH-041, 2x4): Foreman, Advisor and Coder on Claude `claude-opus-5-5`
