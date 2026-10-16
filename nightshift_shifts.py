@@ -1503,6 +1503,17 @@ def claim(argv):
         conflicts = [p for p in paths if p in claims and not same_role(claims[p], args.role)]
         for p in conflicts:
             print(f"{p} is already claimed by {claims[p].get('role')} since {claims[p].get('time')}", file=sys.stderr)
+        for other_dir in SHIFTS_DIR.iterdir() if SHIFTS_DIR.exists() else []:
+            if not other_dir.is_dir() or other_dir == state_dir or not shift_record(other_dir)['alive']:
+                continue
+            other_claims = load_claims(other_dir)
+            for p in paths:
+                if p in other_claims:
+                    held = other_claims[p]
+                    print(f"{p} is already claimed by {held.get('role')} (shift {other_dir.name}) "
+                          f"since {held.get('time')}", file=sys.stderr)
+                    if p not in conflicts:
+                        conflicts.append(p)
         if conflicts:
             raise FileClaimed(4, f'{len(conflicts)} of {len(paths)} paths are claimed by another role')
         now = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -2211,12 +2222,14 @@ def loop(argv, continue_from=None):
     parser.add_argument('--stall-minutes', type=int, default=20)
     parser.add_argument('--retries', type=int, default=2,
                         help='rerun a ticket this many times after its crew dies or stalls (default 2)')
-    parser.add_argument('--no-notify', action='store_true',
-                        help='do not email the owner when the loop halts or finishes')
+    parser.add_argument('--notify', dest='notify', action='store_true', default=False,
+                        help='email the owner via Mailkeep when the loop halts or finishes')
+    parser.add_argument('--no-notify', dest='notify', action='store_false',
+                        help='do not email the owner (default)')
     args = parser.parse_args(argv)
 
     def notify(subject, status, records):
-        if args.no_notify:
+        if not args.notify:
             return
         # stderr, so stdout stays the shift event stream that ends with 'stopped' or 'finished'.
         print(json.dumps({'event': 'notified', 'subject': subject, **notify_owner(subject, notify_body(status, records))}),
@@ -2359,7 +2372,10 @@ def resume(argv):
     parser.add_argument('--project', metavar='PREFIX', help='only tickets of this project, e.g. NGH')
     parser.add_argument('--dry-run', action='store_true', help='print the plan; clear no locks and start nothing')
     parser.add_argument('--stall-minutes', type=int, default=20)
-    parser.add_argument('--no-notify', action='store_true', help='do not email the owner when the loop halts or finishes')
+    parser.add_argument('--notify', dest='notify', action='store_true', default=False,
+                        help='email the owner via Mailkeep when the loop halts or finishes')
+    parser.add_argument('--no-notify', dest='notify', action='store_false',
+                        help='do not email the owner (default)')
     args = parser.parse_args(argv)
     plan = resume_plan(args.project)
     print(json.dumps({'dry_run': args.dry_run, **plan}, indent=2), flush=True)
@@ -2370,7 +2386,7 @@ def resume(argv):
             Path(entry['lock']).unlink()
     if plan['resume']:
         tickets = [r['ticket'] for r in plan['resume']]
-        flags = ['--stall-minutes', str(args.stall_minutes)] + (['--no-notify'] if args.no_notify else [])
+        flags = ['--stall-minutes', str(args.stall_minutes)] + (['--notify'] if args.notify else [])
         loop(tickets + flags, continue_from={r['ticket']: r['continue_from'] for r in plan['resume']})
 
 

@@ -1356,68 +1356,80 @@ def _loop_shift(monkeypatch, tmp_path, outcomes):
     monkeypatch.setattr(launcher, 'close_terminal_windows', lambda prefix: None)
 
 
-def test_loop_emails_once_when_blocked(monkeypatch, tmp_path):
+def test_loop_emails_once_when_blocked(monkeypatch, tmp_path, notified):
     _loop_shift(monkeypatch, tmp_path, iter([{'status': 'blocked', 'summary': 'needs a key'}]))
     (tmp_path / 'shift-0').mkdir()
     (tmp_path / 'shift-0' / 'denials.json').write_text(
         json.dumps([{'time': 't', 'role': 'Coder', 'line': 'Bash denied'}]), encoding='utf-8')
     monkeypatch.setattr(launcher, 'start', lambda argv: tmp_path / 'shift-0')
-    mail = _fake_mail(monkeypatch)
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: _ok({}))
     with pytest.raises(SystemExit):
-        launcher.loop(['NGH-051'])
-    assert [c['argv'][1] for c in mail] == ['prepare', 'queue', 'send']
-    argv = mail[0]['argv']
-    assert argv[argv.index('--subject') + 1] == 'Nightshift: blocked NGH-051'
-    body = mail[0]['body']
+        launcher.loop(['NGH-051', '--notify'])
+    assert len(notified) == 1
+    subject, body = notified[0]
+    assert subject == 'Nightshift: blocked NGH-051'
     assert 'needs a key' in body and str(tmp_path / 'shift-0' / 'handover.md') in body and 'Coder: Bash denied' in body
 
 
-def test_loop_emails_once_after_retries_are_exhausted(monkeypatch, tmp_path):
+def test_loop_emails_once_after_retries_are_exhausted(monkeypatch, tmp_path, notified):
     _loop_shift(monkeypatch, tmp_path, iter([{'status': 'stalled', 'summary': 'idle'}] * 3))
-    mail = _fake_mail(monkeypatch)
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: _ok({}))
     with pytest.raises(SystemExit):
-        launcher.loop(['NGH-052', '--retries', '2'])
-    assert [c['argv'][1] for c in mail] == ['prepare', 'queue', 'send']
-    argv = mail[0]['argv']
-    assert argv[argv.index('--subject') + 1] == 'Nightshift: stalled NGH-052'
-    assert str(tmp_path / 'shift-2' / 'handover.md') in mail[0]['body'] and '(none)' in mail[0]['body']
+        launcher.loop(['NGH-052', '--retries', '2', '--notify'])
+    assert len(notified) == 1
+    subject, body = notified[0]
+    assert subject == 'Nightshift: stalled NGH-052'
+    assert str(tmp_path / 'shift-2' / 'handover.md') in body and '(none)' in body
 
 
-def test_loop_emails_once_at_the_end_of_a_done_batch(monkeypatch, tmp_path):
+def test_loop_emails_once_at_the_end_of_a_done_batch(monkeypatch, tmp_path, notified):
     _loop_shift(monkeypatch, tmp_path, iter([{'status': 'done', 'stage': 'tested', 'summary': 'first'},
                                              {'status': 'done', 'stage': 'tested', 'summary': 'second'}]))
     events = []
-    mail = _fake_mail(monkeypatch, events=events)
-    launcher.loop(['NGH-053', 'NGH-054'])
-    assert [e for e in events if e[0] == 'mailkeep'] == [('mailkeep', 'prepare'), ('mailkeep', 'queue'), ('mailkeep', 'send')]
-    assert events[-3:] == [('mailkeep', 'prepare'), ('mailkeep', 'queue'), ('mailkeep', 'send')]   # none between tickets
-    argv = mail[0]['argv']
-    assert argv[argv.index('--subject') + 1] == 'Nightshift: finished NGH-054'
-    body = mail[0]['body']
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: events.append(len(notified)) or _ok({}))
+    launcher.loop(['NGH-053', 'NGH-054', '--notify'])
+    assert events == [0, 0]   # no notification between tickets
+    assert len(notified) == 1
+    subject, body = notified[0]
+    assert subject == 'Nightshift: finished NGH-054'
     for ticket, summary, shift in (('NGH-053', 'first', 'shift-0'), ('NGH-054', 'second', 'shift-1')):
         assert ticket in body and f'done: {summary}' in body and str(tmp_path / shift / 'handover.md') in body
 
 
-def test_loop_emails_when_the_folder_is_locked(monkeypatch):
+def test_loop_emails_when_the_folder_is_locked(monkeypatch, notified):
     monkeypatch.setattr(launcher, 'start',
                         lambda argv: (_ for _ in ()).throw(launcher.FolderLocked(3, 'folder C:/x is held')))
-    mail = _fake_mail(monkeypatch)
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: _ok({}))
     with pytest.raises(SystemExit):
-        launcher.loop(['NGH-055'])
-    argv = mail[0]['argv']
-    assert argv[argv.index('--subject') + 1] == 'Nightshift: blocked NGH-055'
-    assert 'no shift started' in mail[0]['body'] and 'folder C:/x is held' in mail[0]['body']
+        launcher.loop(['NGH-055', '--notify'])
+    assert len(notified) == 1
+    subject, body = notified[0]
+    assert subject == 'Nightshift: blocked NGH-055'
+    assert 'no shift started' in body and 'folder C:/x is held' in body
 
 
-@pytest.mark.parametrize('status', ['blocked', 'done'])
-def test_loop_no_notify_sends_nothing(monkeypatch, tmp_path, status):
+@pytest.mark.parametrize('flags', [[], ['--no-notify'], ['--notify', '--no-notify']])
+@pytest.mark.parametrize('status', ['blocked', 'done', 'stalled', 'died', 'short'])
+def test_loop_default_and_no_notify_send_nothing(monkeypatch, tmp_path, notified, status, flags):
     _loop_shift(monkeypatch, tmp_path, iter([{'status': status, 'stage': 'tested', 'summary': 's'}]))
-    mail = _fake_mail(monkeypatch)
-    try:
-        launcher.loop(['NGH-056', '--no-notify'])
-    except SystemExit:
-        pass
-    assert mail == []
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: _ok({}))
+    if status == 'done':
+        launcher.loop(['NGH-056', '--retries', '0'] + flags)
+    else:
+        with pytest.raises(SystemExit) as exc:
+            launcher.loop(['NGH-056', '--retries', '0'] + flags)
+        assert exc.value.code == 2
+    assert notified == []
+
+
+@pytest.mark.parametrize('flags', [[], ['--no-notify']])
+def test_loop_folder_lock_is_silent_without_notify(monkeypatch, notified, flags):
+    monkeypatch.setattr(launcher, 'start',
+                        lambda argv: (_ for _ in ()).throw(launcher.FolderLocked(3, 'folder C:/x is held')))
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: _ok({}))
+    with pytest.raises(SystemExit) as exc:
+        launcher.loop(['NGH-055'] + flags)
+    assert exc.value.code == 2 and notified == []
 
 
 # ── file claims ───────────────────────────────────────────────────────────────
@@ -1457,6 +1469,51 @@ def test_claim_conflict_exits_4_and_writes_nothing(monkeypatch, tmp_path, capsys
     assert f"{launcher.normalise_path('C:/scripts/held.py')} is already claimed by coder-a since " in captured.err
     assert (d / 'claims.json').read_text(encoding='utf-8') == before   # free.py not claimed either
     assert not (d / 'claims.lock').exists()
+
+
+@pytest.mark.parametrize('owner', ['coder-b', 'CODER-A'])
+@pytest.mark.parametrize('existing', [False, True])
+def test_claim_other_live_shift_conflict_is_all_or_nothing(monkeypatch, tmp_path, capsys, owner, existing):
+    d = _claims_shift(monkeypatch, tmp_path)
+    other = _shift(tmp_path, 'Nightshift-shift-other001', {'Foreman': 101})
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid: pid == 101)
+    held = launcher.normalise_path('C:/scripts/held.py')
+    timestamp = '2026-10-15 01:02:03'
+    launcher.save_claims(other, {held: {'role': owner, 'time': timestamp}})
+    if existing:
+        launcher.save_claims(d, {launcher.normalise_path('C:/scripts/own.py'):
+                                 {'role': 'coder-a', 'time': 'old'}})
+    before = (d / 'claims.json').read_bytes() if existing else None
+    other_before = (other / 'claims.json').read_bytes()
+
+    with pytest.raises(launcher.FileClaimed) as exc:
+        launcher.claim(['clm00001', 'coder-a', 'C:/scripts/free.py', 'C:\\SCRIPTS\\held.py'])
+
+    assert exc.value.code == 4
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == f'{held} is already claimed by {owner} (shift {other.name}) since {timestamp}\n'
+    assert ((d / 'claims.json').read_bytes() if (d / 'claims.json').exists() else None) == before
+    assert (other / 'claims.json').read_bytes() == other_before
+    assert not (d / 'claims.lock').exists() and not list(d.glob('*.tmp'))
+
+
+def test_claim_ignores_dead_shift_but_preserves_other_shift_claims(monkeypatch, tmp_path, capsys):
+    d = _claims_shift(monkeypatch, tmp_path)
+    dead = _shift(tmp_path, 'Nightshift-shift-dead0001', {'Foreman': 101})
+    live = _shift(tmp_path, 'Nightshift-shift-live0001', {'Tester': 202})
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid: pid == 202)
+    held = launcher.normalise_path('C:/scripts/held.py')
+    other_path = launcher.normalise_path('C:/scripts/other.py')
+    launcher.save_claims(dead, {held: {'role': 'coder-b', 'time': 'old'}})
+    launcher.save_claims(live, {other_path: {'role': 'coder-b', 'time': 'new'}})
+    before = {p: (p / 'claims.json').read_bytes() for p in (dead, live)}
+
+    launcher.claim(['clm00001', 'coder-a', 'C:/scripts/held.py', 'C:/scripts/free.py'])
+
+    assert json.loads(capsys.readouterr().out)['claimed'] == [held, launcher.normalise_path('C:/scripts/free.py')]
+    assert launcher.load_claims(d)[held]['role'] == 'coder-a'
+    assert {p: (p / 'claims.json').read_bytes() for p in (dead, live)} == before
 
 
 def test_claim_same_role_reclaims_case_insensitively_and_refreshes_time(monkeypatch, tmp_path, capsys):
@@ -1696,16 +1753,34 @@ def test_resume_dry_run_prints_the_plan_and_changes_nothing(monkeypatch, tmp_pat
     assert calls == [] and dead.exists()
 
 
-def test_resume_clears_stale_locks_then_loops_in_ticket_order_with_continue_from(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize('flags, forwarded', [([], []), (['--no-notify'], []), (['--notify'], ['--notify']),
+                                           (['--notify', '--no-notify'], [])])
+def test_resume_clears_stale_locks_then_loops_in_ticket_order_with_continue_from(
+        monkeypatch, tmp_path, capsys, flags, forwarded):
     newer, op = _resume_shifts(monkeypatch, tmp_path, live=(400,))
     calls = _resume_fakes(monkeypatch)
     live = _lock('C:/live', 'Nightshift-shift-live0003')
     dead = _lock('C:/dead', 'Nightshift-shift-op000001')
-    launcher.resume(['--stall-minutes', '5', '--no-notify'])
+    launcher.resume(['--stall-minutes', '5'] + flags)
     assert json.loads(capsys.readouterr().out)['dry_run'] is False
     assert not dead.exists() and live.exists()
-    assert calls == [(['NGH-010', 'OP-001', '--stall-minutes', '5', '--no-notify'],
+    assert calls == [(['NGH-010', 'OP-001', '--stall-minutes', '5'] + forwarded,
                       {'NGH-010': str(newer), 'OP-001': str(op)})]
+
+
+@pytest.mark.parametrize('flags, expected', [([], 0), (['--no-notify'], 0), (['--notify'], 1)])
+@pytest.mark.parametrize('status', ['done', 'blocked'])
+def test_resume_notifications_are_opt_in(monkeypatch, tmp_path, notified, flags, expected, status):
+    _resume_shifts(monkeypatch, tmp_path, live=(400,))
+    _loop_shift(monkeypatch, tmp_path, iter([{'status': status, 'stage': 'tested', 'summary': 's'}] * 2))
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: _ok({}))
+    if status == 'done':
+        launcher.resume(flags)
+    else:
+        with pytest.raises(SystemExit) as exc:
+            launcher.resume(flags)
+        assert exc.value.code == 2
+    assert len(notified) == expected
 
 
 def test_resume_with_nothing_to_rerun_does_not_loop(monkeypatch, tmp_path, capsys):

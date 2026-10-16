@@ -291,10 +291,11 @@ several tickets unattended. `nightshift loop T1 T2 …` (or `--project NGH [--ma
 Python, no model: start a shift → poll for `result.json`, crew death, a 20-minute idle stall, and
 classifier denials → `down --close` → note the ticket → next. A died/stalled shift is rerun with a fresh crew
 that gets the previous handover (`--retries`, default 2); `blocked` stops the loop for a human.
-It emails the owner through Mailkeep when it halts or finishes (NGH-016) and closes its own
-window on success. `nightshift resume` reruns tickets whose last shift never reached done
-(after a reboot). The loop is the "guardian"; a model-driven "master of masters" is a persona
-decision not yet taken (NGH-014).
+By default the loop and `resume` send no completion or halt email. `--notify` explicitly opts
+into owner notification through Mailkeep; the compatible `--no-notify` flag remains accepted.
+The loop closes its own window on success. `nightshift resume` reruns tickets whose last shift
+never reached done (after a reboot). The loop is the "guardian"; a model-driven "master of masters"
+is a persona decision not yet taken (NGH-014).
 
 ## Messaging: two transports, one record
 
@@ -337,7 +338,10 @@ There is no bus process: each command appends its own line and `nightshift log` 
 
 Folder lock between shifts (NGH-010); file claims between coders inside a shift (NGH-011);
 build slot (NGH-020) serialises expensive builds per folder and records
-revision-bound evidence. No worktrees per shift (owner: not needed).
+revision-bound evidence. Claims are checked against every live shift: a claim held by any role
+in another live shift conflicts, and `claim` reports the owning shift and claim time, exits 4,
+and changes none of the requested paths when any requested path conflicts. Claims belonging to
+dead shifts are ignored. No worktrees per shift (owner: not needed).
 
 ## Design vs built — reconciliation (keep current)
 
@@ -353,7 +357,7 @@ revision-bound evidence. No worktrees per shift (owner: not needed).
 | Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | Tester (NGH-024) and a dormant Fable Advisor that only Foreman may consult (NGH-027) built into the default crew; Reviewer/DevOps/Controller not built, NGH-014 holds the design | in progress |
 | Second coder, heterogeneous CLIs later | claims ready; per-role `tool:` with an agy Gemini Coder crew (NGH-012, not yet run live); Copilot (NGH-022) | in progress |
 | "Portable package", CLI language open | Python in its own repo; binary decision NGH-021 | open |
-| — (not in the design) | loop, result ladder, crew manifest, email on halt, denial capture | additions |
+| — (not in the design) | loop, result ladder, crew manifest, opt-in Mailkeep notification, denial capture | additions |
 | — (owner, 16 Oct) | container with slot grid (1x4), `slots/`, `spawn`, Foreman-owned `down --hold/--close`, launcher exits; loop optional | NGH-025, built |
 
 ## Not decided / not built
