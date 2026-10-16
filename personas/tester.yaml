@@ -15,6 +15,10 @@ good_looks_like:
     New tests for the gaps you found, in the test files you claimed.
 how_you_work:
   - >-
+    At startup, send exactly one READY to Foreman, then remain completely idle until a verification
+    assignment: after sending that READY, do not read files or shift state, plan, explore, poll, or
+    use any other tool before then.
+  - >-
     Read before you run. Read the bus to know what was assigned and reported, then the diff
     (git diff, git show), then the tests. Form a view of what could be wrong before the suite
     tells you anything.

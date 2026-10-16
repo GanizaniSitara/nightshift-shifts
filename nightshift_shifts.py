@@ -365,6 +365,11 @@ def opening_message(member, state_dir=None):
     return message
 
 
+def is_advisor(member):
+    """Whether this is the single manifest Advisor whose pane is held until consultation."""
+    return member.get('role') == ADVISOR and member.get('label') == ADVISOR
+
+
 def default_persona(role):
     """personas/<role lower>.yaml when that file exists, else None (a custom role without one gets no persona)."""
     name = f'{role.lower()}.yaml'
@@ -494,6 +499,37 @@ def crew_env(environ, tool='claude', account=None, role=None):
     if role is not None:
         env.update(compaction_control(tool, role)['environment'])
     return env
+
+
+def install_agy_statusline():
+    """Install the generic Nightshift agy status line without replacing a user's different command."""
+    path = Path.home() / '.gemini' / 'antigravity-cli' / 'settings.json'
+    command = 'C:/scripts/nightshift.cmd statusline'
+    try:
+        data = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        current = data.get('statusLine')
+        if current and current.get('command') != command:
+            print('Nightshift agy role status line unavailable: preserving the existing custom statusLine command.',
+                  file=sys.stderr)
+            return False
+        data['statusLine'] = {'type': 'command', 'command': command, 'enabled': True, 'stack_with_default': True}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+        return True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def agy_statusline(argv):
+    """The generic configured agy status-line command; each pane supplies its own manifest identity via env."""
+    del argv
+    sys.stdin.read()  # agy pipes its status JSON; role identity is supplied by the per-pane launcher env.
+    colour = {'red': '31', 'purple': '35', 'green': '32', 'blue': '34', 'yellow': '33'}.get(
+        os.environ.get('NIGHTSHIFT_ROLE_COLOUR'), '37')
+    role = os.environ.get('NIGHTSHIFT_ROLE')
+    identity = os.environ.get('NIGHTSHIFT_IDENTITY')
+    if role and identity:
+        print(f'\033[{colour}m{role} · {identity}\033[0m')
 
 
 def permission_flags(tool, permissions):
@@ -920,6 +956,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                                cwd=cwd)
             if member['human_contact']:
                 brief += Path(state_dir, 'prompt.txt').read_text(encoding='utf-8')
+            consult = (saved or {}).get('consult') if is_advisor(member) else None
         if tool in TOOL_EXES:
             session_name = f'{role} ({identity})'
             command = tool_command(tool, model, brief, first_message, permission_mode, reasoning, context,
@@ -933,16 +970,46 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             if reasoning:
                 command += ['--effort', reasoning]
         env = crew_env(os.environ, tool=tool, account=account, role=member['role'] if start else role)
+        if tool == 'agy':
+            env.update(NIGHTSHIFT_ROLE=role, NIGHTSHIFT_IDENTITY=identity, NIGHTSHIFT_ROLE_COLOUR=colour)
         set_pane_background(ROLE_BACKGROUNDS.get(colour, CAMPBELL_BACKGROUND)
-                            if tool in ('codex', 'copilot') else CAMPBELL_BACKGROUND)
+                            if tool in ('agy', 'codex', 'copilot') else CAMPBELL_BACKGROUND)
+        pre_record = None
+        if start and consult:
+            # The consultation is recorded only after this Advisor incarnation exists, then becomes the exact
+            # first prompt.  This keeps mailbox fencing and the visible first message in lockstep.
+            pre_record = {'wrapper_pid': os.getpid(), 'role': role, 'started': time.time(), 'name': identity,
+                          'peer': peer_name, 'model': model, 'cwd': cwd, 'tool': tool}
+            previous = member_info(state_dir, role)
+            if previous:
+                pre_record['history'] = previous.get('history', []) + [
+                    {k: v for k, v in previous.items() if k != 'history'}]
+            Path(state_dir, role + '.json').write_text(json.dumps(pre_record), encoding='utf-8')
+            with mailbox(state_dir) as conn:
+                message_id = insert_message(conn, state_dir, 'assignment', human_contact_label(state_dir), role,
+                                            consult['question'], consult['asg'])
+                with conn:
+                    conn.execute("UPDATE messages SET state = 'sent', delivered_epoch = ? WHERE id = ?",
+                                 (time.time(), message_id))
+                row = get_message(conn, message_id)
+            bus_append(state_dir, 'sent', id=row['id'])
+            first_message = msg_header(row) + '\n\n' + consult['question']
+            if tool in TOOL_EXES:
+                command = tool_command(tool, model, brief, first_message, permission_mode, reasoning, context,
+                                       session_name=session_name, max_credits=max_credits)
+            else:
+                command = [str(exe), '--name', identity, '--model', model,
+                           *permission_flags('claude', permission_mode), '--append-system-prompt', brief]
+            write_json(Path(state_dir) / 'crew.json', {**saved, 'consult': None})
         try:
             child = subprocess.Popen(command, cwd=cwd, env=env)
-            record = {'pid': child.pid, 'wrapper_pid': os.getpid(), 'role': role, 'started': time.time(),
-                      'name': identity, 'peer': peer_name, 'model': model, 'cwd': cwd}
+            record = {**(pre_record or {}), 'pid': child.pid, 'wrapper_pid': os.getpid(), 'role': role,
+                      'started': (pre_record or {}).get('started', time.time()), 'name': identity,
+                      'peer': peer_name, 'model': model, 'cwd': cwd}
             if start:
                 record['tool'] = tool
             previous = member_info(state_dir, role)
-            if previous:
+            if previous and not pre_record:
                 # earlier incarnations of this role; 'started' stays the current one, so mailbox fencing is unchanged
                 record['history'] = previous.get('history', []) + [{k: v for k, v in previous.items() if k != 'history'}]
             Path(state_dir, role + '.json').write_text(json.dumps(record), encoding='utf-8')
@@ -974,7 +1041,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                     print(f'{role}: Claude role colour was not confirmed; opening message not sent.')
             code = child.wait()
         finally:
-            if tool in ('codex', 'copilot'):
+            if tool in ('agy', 'codex', 'copilot'):
                 set_pane_background(CAMPBELL_BACKGROUND)
         print(f'{role} exited with code {code}.')
         if start and slot:
@@ -1039,6 +1106,8 @@ def install_profile(state_dir):
             existing.update(desired)
     (state_dir / 'terminal-settings-before.json').write_text(original, encoding='utf-8')
     settings.write_text(json.dumps(config, indent=4) + '\n', encoding='utf-8')
+    if any(m.get('tool') == 'agy' for m in (read_crew_json(state_dir) or {}).get('members', [])):
+        install_agy_statusline()
 
 
 def layout_description(n):
@@ -1086,8 +1155,9 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
 
     def place(parts, i):
         """Cell i (0-based): a crew member, or an empty slot past the last member."""
-        if i < len(members):
-            add(parts, members[i])
+        role = members[i] if i < len(members) else None
+        if role:
+            add(parts, role)
             if slots:
                 command.extend(['--slot', str(i + 1)])
         else:
@@ -1634,10 +1704,16 @@ def start(argv):
     if worktree:
         cwd = worktree['worktree_dir']
     members = crew_members(crew, name)
-    labels = [m['label'] for m in members]
-    command = wt_command(name, state_dir, agents=True, mode_flag='--start', cwd=cwd, members=labels, crew=crew['name'],
-                         ticket=ticket, slots=crew['slots'],
-                         codex_colours={m['label']: m['colour'] for m in members if m['tool'] in ('codex', 'copilot')})
+    advisor = next((m for m in members if is_advisor(m)), None)
+    labels = [m['label'] for m in members if m is not advisor]
+    advisor_slot = members.index(advisor) + 1 if advisor else None
+    slots = crew['slots'] or (len(members) if advisor else None)
+    cells = [None if m is advisor else m['label'] for m in members]
+    if slots:
+        cells += [None] * (slots - len(cells))
+    command = wt_command(name, state_dir, agents=True, mode_flag='--start', cwd=cwd, members=cells, crew=crew['name'],
+                         ticket=ticket, slots=slots,
+                         codex_colours={m['label']: m['colour'] for m in members if m['tool'] in ('agy', 'codex', 'copilot')})
     if args.dry_run:
         plan = {
             'dry_run': True, 'shift': name, 'state_dir': str(state_dir), 'cwd': cwd, 'ticket': ticket,
@@ -1646,6 +1722,7 @@ def start(argv):
             'roles': {m['label']: {'session_name': m['identity'], 'pane_title': pane_title(ticket or name),
                                    'peer': m['peer'],
                                    'receives_prompt': m['human_contact'], 'first_message': opening_message(m),
+                                   **({'status': 'not_started', 'reserved_slot': advisor_slot} if m is advisor else {}),
                                     'compaction': compaction_control(m['tool'], m['role']),
                                    # Claude roles on the crew model keep the pre-manifest shape; a Claude role on
                                    # another model (the Fable Advisor) shows it; other tools show what will run
@@ -1666,9 +1743,8 @@ def start(argv):
                                    'permission_flags': permission_flags(
                                        m['tool'], m.get('permissions') or crew['permission_mode'])}
                       for m in members}}
-        if crew['slots']:
+        if slots:
             # The container (NGH-025): which slot holds which crew pane, and the empty ones `spawn` can fill.
-            cells = labels + [None] * (crew['slots'] - len(labels))
             plan['slots'] = [{'slot': n, 'role': role, 'pane_title': pane_title(ticket or name)}
                              for n, role in enumerate(cells, 1)]
         plan.update(wt_argv=command, prompt=prompt)
@@ -1694,7 +1770,8 @@ def start(argv):
         mirror_repo_layer(repo_root, cwd)
     (state_dir / 'prompt.txt').write_text(prompt, encoding='utf-8')
     (state_dir / 'requires.txt').write_text(required, encoding='utf-8')
-    (state_dir / 'crew.json').write_text(json.dumps({'crew': crew['name'], 'members': members, 'slots': crew['slots'],
+    (state_dir / 'crew.json').write_text(json.dumps({'crew': crew['name'], 'members': members, 'slots': slots,
+                                                     'advisor_slot': advisor_slot,
                                                      'permission_mode': crew['permission_mode'], 'model': crew['model'],
                                                      'cwd': cwd, **({'max_credits': crew['max_credits']}
                                                                     if 'max_credits' in crew else {})},
@@ -1703,8 +1780,7 @@ def start(argv):
         (state_dir / 'ticket.txt').write_text(ticket, encoding='utf-8')
     bus_append(state_dir, 'start', shift=name, ticket=ticket, cwd=cwd, crew=crew['name'], members=labels)
     install_profile(state_dir)
-    launch(command, name, state_dir, {'mode': 'start', 'prompt_file': str(state_dir / 'prompt.txt')}, labels,
-           crew['slots'])
+    launch(command, name, state_dir, {'mode': 'start', 'prompt_file': str(state_dir / 'prompt.txt')}, labels, slots)
     start_note = f'started shift {name}' + (f' ticket {ticket}' if ticket else '')
     floor_append('launcher', start_note, to='all')
     return state_dir
@@ -1755,14 +1831,20 @@ def shift_record(state_dir):
     record['task'] = prompt.read_text(encoding='utf-8').strip().splitlines()[0][:120] if prompt.exists() else ''
     sessions = Path.home() / '.claude' / 'sessions'
     try:
-        labels = [m['label'] for m in json.loads((state_dir / 'crew.json').read_text(encoding='utf-8'))['members']]
+        crew = json.loads((state_dir / 'crew.json').read_text(encoding='utf-8'))
+        labels = [m['label'] for m in crew['members']]
     except (OSError, ValueError, KeyError, TypeError):
         labels = DEFAULT_LABELS   # shifts started before crew manifests
     for role in labels:
         info_path = state_dir / f'{role}.json'
         if not info_path.exists():
+            if role == ADVISOR and crew.get('advisor_slot'):
+                record['roles'][role] = {'status': 'not_started', 'reserved_slot': crew['advisor_slot'], 'alive': False}
             continue
         info = json.loads(info_path.read_text(encoding='utf-8'))
+        if not info.get('pid'):
+            record['roles'][role] = {'status': 'starting', 'alive': False}
+            continue
         pid = info['pid']
         record['roles'][role] = {
             'pid': pid, 'wrapper_pid': info.get('wrapper_pid'), 'name': info.get('name'), 'cwd': info.get('cwd'),
@@ -2012,7 +2094,7 @@ def down(argv, floor=None):
     args = parser.parse_args(argv)
     state_dir = resolve_shift(args.shift)
     record = shift_record(state_dir)
-    tails = {role: pane_tail(info['pid']) for role, info in record['roles'].items() if info['alive']}
+    tails = {role: pane_tail(info['pid']) for role, info in record['roles'].items() if info.get('alive')}
     record_denials(state_dir, tails)
     # When Foreman already ran `down` (--hold) and a caller later runs `down --close`, the crew is already gone:
     # keep the handover captured while the panes were live rather than overwriting it with '(pane not readable)'.
@@ -2021,7 +2103,10 @@ def down(argv, floor=None):
                     f"Stopped: {time.strftime('%Y-%m-%d %H:%M')}", '']
         handover += handover_report(state_dir, record)
         for role, info in record['roles'].items():
-            handover += [f"## {role} ({info['name']}, pid {info['pid']}, {'alive' if info['alive'] else 'gone'})", '',
+            if 'pid' not in info:
+                handover += [f"## {role} ({info.get('status', 'not_started')})", '']
+                continue
+            handover += [f"## {role} ({info.get('name')}, pid {info['pid']}, {'alive' if info['alive'] else 'gone'})", '',
                          '```', *(tails.get(role, []) or ['(pane not readable)']), '```', '']
         (state_dir / 'handover.md').write_text('\n'.join(handover), encoding='utf-8')
     # The member whose process tree runs this `down` (Foreman ending its own shift) is killed last, after the
@@ -2119,8 +2204,22 @@ def spawn(argv):
             raise SystemExit(f"role {existing['label']} is already live in shift {state_dir.name} "
                              f'(starting in slot {starting[0]})')
     free = [n for n, state in states.items() if state in ('empty', 'dead')]
+    advisor_slot = saved.get('advisor_slot')
+    is_manifest_advisor = role.lower() == ADVISOR.lower()
+    if advisor_slot and not is_manifest_advisor:
+        if args.slot == advisor_slot:
+            raise SystemExit(f'{ADVISOR} slot {advisor_slot} is reserved until consultation')
+        free = [n for n in free if n != advisor_slot]
+    if not is_manifest_advisor:
+        advisor_slot = None
+    if advisor_slot and args.slot not in (None, advisor_slot):
+        raise SystemExit(f'{ADVISOR} is reserved for slot {advisor_slot}')
+    if advisor_slot and not saved.get('consult') and not member_info(state_dir, role).get('pid'):
+        raise SystemExit(f'use consult to start the {ADVISOR}')
     if args.slot:
         slot = args.slot if args.slot in free else None
+    elif advisor_slot:
+        slot = advisor_slot if advisor_slot in free else None
     else:
         # a dead member goes back into its own slot; otherwise the lowest free slot, dead or empty alike
         own = [n for n in free if n in mine]
@@ -2253,6 +2352,32 @@ def spawn(argv):
     bus_append(state_dir, 'spawn', role=member['label'], slot=slot, tool=tool, identity=member['identity'])
     print(json.dumps({'shift': shift, 'slot': slot, 'role': member['label'], 'identity': member['identity'],
                       'tool': tool}))
+
+
+def consult(argv):
+    """Start the absent manifest Advisor with a durable first assignment in its reserved pane."""
+    parser = argparse.ArgumentParser(prog='nightshift consult')
+    parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
+    parser.add_argument('question', help='the Foreman question for the Advisor')
+    parser.add_argument('--asg', required=True, help='the durable consultation assignment id')
+    args = parser.parse_args(argv)
+    if not args.question.strip():
+        parser.error('the consultation question is empty')
+    state_dir = resolve_shift(args.shift)
+    saved = read_crew_json(state_dir) or {}
+    advisor = next((m for m in saved.get('members', []) if is_advisor(m)), None)
+    if not advisor or not saved.get('advisor_slot'):
+        raise SystemExit(f'shift {state_dir.name} has no reserved {ADVISOR}')
+    if member_info(state_dir, advisor['label']).get('pid'):
+        raise SystemExit(f'{ADVISOR} is already started; use msg send for later questions')
+    if saved.get('consult'):
+        raise SystemExit(f'{ADVISOR} consultation is already starting')
+    write_json(state_dir / 'crew.json', {**saved, 'consult': {'question': args.question, 'asg': args.asg}})
+    try:
+        spawn([state_dir.name, '--role', advisor['label'], '--slot', str(saved['advisor_slot'])])
+    except BaseException:
+        write_json(state_dir / 'crew.json', saved)
+        raise
 
 
 class FileClaimed(FolderLocked):
@@ -3379,7 +3504,7 @@ def wait_for_result(state_dir, stall_minutes, poll_seconds=30, clock=time.time, 
             return {'status': 'died', 'summary': 'crew processes ended without writing result.json'}
         record_denials(state_dir, {role: pane_tail(info['pid'])
                                    for role, info in record['roles'].items() if info['alive']})
-        idle = [session_idle_since(info['pid']) for info in record['roles'].values()]
+        idle = [session_idle_since(info['pid']) for info in record['roles'].values() if info.get('alive')]
         if idle and all(i is not None and i >= stall_minutes * 60 for i in idle):
             return {'status': 'stalled', 'summary': f'both sessions idle for {stall_minutes} minutes with no result.json'}
         sleep(poll_seconds)
@@ -3979,10 +4104,11 @@ def gaffer(argv):
     return report
 
 
-COMMANDS = {'start': start, 'status': status, 'down': down, 'spawn': spawn, 'loop': loop, 'resume': resume,
+COMMANDS = {'start': start, 'status': status, 'down': down, 'spawn': spawn, 'consult': consult, 'loop': loop, 'resume': resume,
             'land': land,
             'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack,
-            'build': build, 'log': log_command, 'floor': floor, 'cleaner': cleaner, 'warden': warden, 'gaffer': gaffer}
+            'build': build, 'log': log_command, 'floor': floor, 'cleaner': cleaner, 'warden': warden, 'gaffer': gaffer,
+            'statusline': agy_statusline}
 
 
 def main():
@@ -4003,6 +4129,7 @@ def main():
                '                                              dispatch below the floor concurrency cap\n'
                '  spawn SHIFT --role ROLE [--cli claude|gemini|codex|copilot] [--crew NAME] [--slot N]\n'
                "                                              start a session in a free slot of the shift's 1x4 window\n"
+               '  consult SHIFT QUESTION --asg ID             start the reserved Advisor with a durable first assignment\n'
                '  loop TICKET [TICKET...] [--stall-minutes N] optional batch runner: start, wait for result.json, down --close, next\n'
                '  loop --project PREFIX [--max N]             same over a project\'s backlog, lowest number first\n'
                '  resume [--project PREFIX] [--dry-run]       rerun tickets whose latest shift never reached done (--continue-from it)\n'

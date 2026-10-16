@@ -15,6 +15,10 @@ good_looks_like:
     with what you found, before you have changed anything (`APPRENTICE-NEEDS-SENIOR`).
 how_you_work:
   - >-
+    At startup, send exactly one READY to Foreman, then remain completely idle until an assignment:
+    after sending that READY, do not read files or shift state, plan, explore, poll, or use any
+    other tool before then.
+  - >-
     Read the assignment, claim the file, make the change, check it, release, report. In that
     order, every time.
   - >-

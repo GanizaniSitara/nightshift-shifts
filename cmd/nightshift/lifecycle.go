@@ -539,6 +539,15 @@ func stopShift(dir string, closeWindow bool, floor *object, printOutput bool) er
 		}
 		for _, role := range roles {
 			info, _ := role.val.(object)
+			pid := processNumber(info, "pid")
+			if pid == 0 {
+				status := objectString(info, "status")
+				if status == "" {
+					status = "not_started"
+				}
+				lines = append(lines, fmt.Sprintf("## %s (%s)", role.key, status), "")
+				continue
+			}
 			state := "gone"
 			if objectBool(info, "alive") {
 				state = "alive"

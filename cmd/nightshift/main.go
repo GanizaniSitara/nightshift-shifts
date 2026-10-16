@@ -693,6 +693,8 @@ func sameNumber(a json.Number, aok bool, b any) bool {
 func statusRecord(dir string) (object, error) {
 	record := object{{"shift", filepath.Base(dir)}, {"state_dir", dir}, {"roles", object{}}, {"task", firstLine(filepath.Join(dir, "prompt.txt"), 120)}}
 	_, members := crewMembers(dir)
+	crew, hasCrew := readObject(filepath.Join(dir, "crew.json"))
+	advisorSlot, hasAdvisorSlot := objectNumber(crew, "advisor_slot")
 	roles := record[2].val.(object)
 	alive := false
 	home := envOr("NIGHTSHIFT_HOME", userHome())
@@ -700,6 +702,13 @@ func statusRecord(dir string) (object, error) {
 		label := objectString(m, "label")
 		info, exists := readObject(filepath.Join(dir, label+".json"))
 		if !exists {
+			if label == "Advisor" && hasAdvisorSlot {
+				roles = append(roles, pair{label, object{{"status", "not_started"}, {"reserved_slot", advisorSlot}, {"alive", false}}})
+			}
+			continue
+		}
+		if !objectNumberExists(info, "pid") {
+			roles = append(roles, pair{label, object{{"status", "starting"}, {"alive", false}}})
 			continue
 		}
 		pid := processNumber(info, "pid")
@@ -725,7 +734,7 @@ func statusRecord(dir string) (object, error) {
 	record[1].val = dir
 	record[2].val = roles
 	record = append(record, pair{"alive", alive})
-	if crew, ok := readObject(filepath.Join(dir, "crew.json")); ok {
+	if hasCrew {
 		if slots, ok := objectNumber(crew, "slots"); ok {
 			arr := make([]any, 0)
 			n, _ := strconv.Atoi(slots.String())

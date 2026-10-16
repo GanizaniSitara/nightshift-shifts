@@ -181,7 +181,7 @@ As built (NGH-025):
   role), `dead` (a running cmd shell whose role's member has exited: `<role>.json` exists and
   `pid_alive` is false), `live`, `starting` (role recorded but no `<role>.json`, or one older than the
   slot's `spawned` stamp, i.e. the previous incarnation's) or `gone` (no record, or no shell to type
-  into). Empty and dead slots are free; a live member's slot is never taken. When a container pane's
+  into). Empty and dead slots are free except for an unconsulted Advisor's reserved slot; a live member's slot is never taken. When a container pane's
   member exits, the pane leaves a cmd prompt: a spawned wrapper just returns to the slot shell it was
   typed into; a crew pane wt launched directly runs `cmd.exe /k ... --slot N` and becomes a slot
   shell, and `slot_shell` keeps the dead role in the slot record (so `status` shows it dead and the
@@ -293,27 +293,34 @@ permission boundary.
 
 ## The four identities (owner, 16 Oct 2026)
 
-The top row of the 2x4 container holds four fixed identities, one per column: **Foreman** (runs the
-ticket's goal statement, sole human contact), **Advisor** (NGH-027), **Coder**, **Tester** (NGH-024);
-all four are built, see "The default crew" below. The **Apprentice** (NGH-029) is a fifth, cheap
+The top row of the 2x4 container reserves four fixed identities, one per column: **Foreman** (runs the
+ticket's goal statement, sole human contact), **Advisor** (NGH-027), **Coder**, **Tester** (NGH-024).
+Advisor is not started with the rest of the crew; its manifest slot remains an empty shell until the first
+consultation. The **Apprentice** (NGH-029) is a fifth, cheap
 coder in slot 5 (bottom row, first column) of the default, codex, codex-copilot and apprentice-* crews;
 slots 6..8 stay open for `nightshift spawn`. The
-Advisor is a dormant session on a frontier model (Fable, Astra, Mistral Large 4 or Gemini's top
-model, whichever the manifest names): it gets no instructions beyond its identity and does
-nothing until Foreman is stuck on something it cannot resolve. Then, instead of asking the human,
+Advisor is an absent-on-start frontier session (Fable, Astra, Mistral Large 4 or Gemini's top
+model, whichever the manifest names). It is spawned only when Foreman is stuck on something it cannot
+resolve. Then, instead of asking the human,
 Foreman asks the Advisor, and the Advisor is expected to take a sensible decision. Rules that
 keep it bounded: Foreman asks only after it has tried itself; the question and the answer go
 through the mailbox so the human can audit every decision; the Advisor never edits files and
 never talks to Coder or Tester; the human is still asked when the ticket itself is wrong or a
 decision cannot be undone. This is the reviewed design's "bounded consultant" (not a council).
 
+**Startup gate (NGH-050).** Every non-human worker member on Claude, Codex, Copilot or agy (except
+the active Foreman and on-demand Advisor) sends or records exactly one READY at startup, then does
+no reading, planning, exploring, inbox polling or other tool use until Foreman delivers an assignment.
+The only pre-assignment tool exception is sending or recording that READY, or following explicit
+replacement recovery instructions.
+
 As built (NGH-027):
 
 - **Manifest role.** `crews/default.yaml` has `Advisor` in column 2: brief `advisor.md`, colour
   purple, count 1, role-level `model: claude-fable-5-1` (the crew model stays Opus 5.5).
-- **Dormant opening.** `START_MESSAGES['Advisor']` tells it it is dormant: no READY, no polling,
-  reading or running anything until Foreman messages it. Foreman's peers include `<shift>-advisor`;
-  the Advisor's only peer is `<shift>-foreman`.
+- **Reserved lifecycle.** Every manifest Advisor has a reserved slot (including a `split` layout, which is
+  promoted to a slot grid for this purpose). `status` reports it as `not_started` with `reserved_slot` until
+  its first consultation; it has no process or mailbox incarnation before then.
 - **Brief (`briefs/advisor.md`).** On a Foreman message: `ack`, act on the stored body only; read
   context read-only (`bus.jsonl` if present, else the mailbox rows, plus ticket, claims, builds,
   code, only what the question needs); never edit, build, test, spawn, write tickets or talk to
@@ -322,14 +329,11 @@ As built (NGH-027):
   labelled `Advisor` unless the sender is the human contact ("only Foreman may address the
   Advisor"), and any message from it unless the recipient is the human contact ("the Advisor
   answers only Foreman"). Foreman <-> Advisor is an ordinary message.
-- **Spawn from the manifest.** `spawn SHIFT --role R` for a role not in `crew.json` but named in the
-  shift's crew manifest takes that role's brief and colour, and its model when the manifest role's
-  tool is the spawned tool. So `spawn SHIFT --role Advisor` in an older three-pane shift gives a
-  purple Fable Advisor on `advisor.md`; any other role behaves as before.
-- **Foreman's consult rule (`briefs/foreman.md`).** Never message the Advisor routinely and do not
-  wait for its READY. Only when stuck after trying: `msg send ... Foreman Advisor --kind assignment
-  --asg adv-<n>` with the question, what was tried and what is seen; wait for the result, ack it,
-  act on its DECISION, and `tasks-cli note` question and decision.
+- **First consultation.** `nightshift consult SHIFT QUESTION --asg adv-<n>` is the only way to start an
+  absent Advisor. It uses the reserved slot, creates the Advisor incarnation, stores the ordinary durable
+  `assignment` mailbox/bus row with that incarnation, and supplies its `msg:<id>` header plus the question
+  as the CLI's first prompt. This prevents a pre-incarnation message or duplicate injection. Later Foreman ↔
+  Advisor messages use normal `msg send`.
 - **Answer format.** One decision, no options: a `result` with the question's asg and body
   `DECISION: ...` / `WHY: <two lines>`. When the ticket is wrong or the decision cannot be undone the
   first line is `ASK-HUMAN: <why>` followed by the recommended decision; that, and the routine-matters
@@ -607,11 +611,13 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 
 ## The default crew: Foreman, Advisor, Coder, Tester, Apprentice (NGH-024, NGH-027, NGH-029)
 
-- `crews/default.yaml` is Foreman (red), Advisor (purple, Fable, `advisor.md`), Coder (green),
-  Tester (blue, `tester.md`) in slots 1..4 (top row) of the 2x4 container, and Apprentice (yellow,
-  `apprentice.md`, agy on `gemini-3.8-flash-high`) in slot 5, leaving slots 6..8 as empty cmd shells
-  for `spawn`. Foreman's peers are `<shift>-advisor, <shift>-coder, <shift>-tester, <shift>-apprentice`;
-  everyone else's peer is `<shift>-foreman`. Other crews (`--crew NAME`) are unaffected.
+- `crews/default.yaml` is Foreman (red) in slot 1, an initially empty reserved Advisor slot (purple,
+  Fable, `advisor.md`) in slot 2, Coder (green) and Tester (blue, `tester.md`) in slots 3..4, and
+  Apprentice (yellow, `apprentice.md`, agy on `gemini-3.8-flash-high`) in slot 5, leaving slots 6..8
+  as empty cmd shells for `spawn`. Foreman's peers are `<shift>-advisor, <shift>-coder, <shift>-tester, <shift>-apprentice`;
+  everyone else's peer is `<shift>-foreman`. The reserved Advisor startup and this worker idle gate
+  apply to every crew manifest; other crews (`--crew NAME`) may vary their roster, tools, models,
+  colours and slots.
 - Apprentice (NGH-029, NGH-038): ordinary coding goes to Apprentice first with bounded work and an
   explicit file list disjoint from Coder's claims. Coder is the senior buddy for upfront cross-cutting,
   concurrency or security work, the no-Apprentice fallback, and validated uplift after the guarded
@@ -664,10 +670,15 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   The Apprentice runs `permissions: skip` in `default.yaml` and the three `apprentice-*` manifests (owner
   decision, 16 Oct: an agy Apprentice otherwise stops at a shell prompt on every command); Claude roles keep `auto`.
 - An agy pane runs `%LOCALAPPDATA%\Microsoft\WinGet\Links\agy.exe --model <model> <permission flags> -i
-  "<brief>\n\n<opening message>"` (`agy_command`). agy has no `--name` or system-prompt flag, so the brief
-  is the prompt text. The wrapper scrubs the env the same way (`crew_env`), then names the pane with
-  `agents-cli name <pid> <identity>` (`register_name`, failures ignored) so it can be addressed by its
-  shift identity. `/color` is Claude-only and skipped; the trust dialog is answered per tool (below).
+  "<brief>\n\n<opening message>"` (`agy_command`). agy has no launch-time `--name` or system-prompt flag,
+  so the brief is prompt text and `agents-cli name <pid> <identity>` is transport-only. The launcher keeps
+  the exact `<ticket> shift` Windows Terminal title, applies the manifest Windows Terminal colour scheme and background, and configures agy's
+  supported `~/.gemini/antigravity-cli/settings.json` `statusLine` command as
+  `C:/scripts/nightshift.cmd statusline`: per-pane `NIGHTSHIFT_ROLE`, `NIGHTSHIFT_IDENTITY` and manifest
+  colour environment values make that persistent TUI line show the visible role and identity through redraws.
+  It preserves a different existing user `statusLine` command and emits a launch diagnostic that the Nightshift role
+  line is unavailable in that pane. `/color` is Claude-only; the trust dialog is
+  answered per tool (below).
 - `pid_alive` counts `agy.exe` as a crew process alongside `claude.exe`/`node.exe`.
 - `start --dry-run` adds `tool`, `model`, `exe` and `command` to each non-Claude role; `command` is the
   argv the pane will run, built by the same `tool_command` that `pane()` uses, with `<brief>` and
@@ -874,7 +885,7 @@ stderr (including structured helper errors), restores `crew.json`, and leaves th
 C:\nightshift\shifts\<shift>\
   prompt.txt       the task as given to Foreman        ticket.txt   ticket id (when started from one)
   launch.json      wt argv, launcher pid, window hwnd   Foreman.json / Coder.json / Tester.json   pid, name, start time, cwd, history
-  crew.json        members (incl. spawned), slots, cwd  slots/<N>.json  what each container slot holds (NGH-025)
+  crew.json        members (incl. spawned), slots, advisor_slot, cwd  slots/<N>.json  what each container slot holds (NGH-025)
   result.json      the shift contract (above)           handover.md  written by down
   claims.json      file claims per role                 denials.json auto-mode classifier refusals seen
   mailbox.sqlite3  messages: stored → sent → acknowledged, with sender/recipient incarnation (NGH-019)

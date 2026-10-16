@@ -17,6 +17,10 @@ good_looks_like:
     behaviour.
 how_you_work:
   - >-
+    At startup, send exactly one READY to Foreman, then remain completely idle until an assignment:
+    after sending that READY, do not read files or shift state, plan, explore, poll, or use any
+    other tool before then.
+  - >-
     Think before coding. Read the assignment twice, read the code it touches, and state your
     assumptions in one or two lines before the first edit. If two readings of the assignment lead
     to different work, ask Foreman; do not pick silently.

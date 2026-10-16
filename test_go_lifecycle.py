@@ -922,6 +922,29 @@ def test_go_down_handover_python_scalar_formatting_and_filtered_evidence(tmp_pat
     parity(tmp_path, prepare, [['down', 'fixture', '--hold']], [0], worktree=False)
 
 
+@pytest.mark.parametrize('advisor_record, expected_status', [
+    (None, 'not_started'),
+    ({'started': 3.0, 'name': 'fixture-advisor'}, 'starting'),
+])
+def test_go_down_handover_renders_absent_and_partial_advisor_without_pid(tmp_path, advisor_record, expected_status):
+    """Advisor lifecycle states without a process ID remain readable during teardown."""
+    def prepare(env, d, repo, work, info):
+        crew = json.loads((d / 'crew.json').read_bytes())
+        crew.update(slots=2, advisor_slot=2)
+        crew['members'].append({'label': 'Advisor', 'role': 'Advisor', 'identity': 'fixture-advisor',
+                                'human_contact': False})
+        write_json(d / 'crew.json', crew)
+        if advisor_record is not None:
+            write_json(d / 'Advisor.json', advisor_record)
+
+    def inspect(env, d, repo, work, info, actual):
+        handover = (d / 'handover.md').read_text(encoding='utf-8').replace('\r\n', '\n')
+        assert f'## Advisor ({expected_status})' in handover
+        assert 'fixture-advisor, pid' not in handover
+
+    parity(tmp_path, prepare, [['down', 'fixture', '--hold']], [0], inspect, worktree=False)
+
+
 def test_go_lifecycle_runs_standalone_from_foreign_cwd_without_python(tmp_path):
     if ORACLE_ONLY:
         pytest.skip('native standalone verification pending review')
