@@ -837,7 +837,7 @@ def test_gemini_coder_crew_selects_the_agy_briefs_and_fills_them():
     assert 'agents-cli send S-coder' in foreman and 'agents-cli tail S-coder' in foreman
     assert foreman.rstrip().endswith('verbatim:')
     assert 'nightshift_shifts.py claim S S-coder' in coder and 'Exit code 4' in coder
-    assert 'nightshift_shifts.py ack S Coder <id>' in coder and 'agents-cli tail' in coder
+    assert 'nightshift_shifts.py ack S S-coder <id>' in coder and 'agents-cli tail' in coder
 
 
 def test_pid_alive_accepts_agy(monkeypatch):
@@ -1961,7 +1961,7 @@ def test_tester_brief_fills_identity_and_states_the_report_format():
     assert 'S-tester' in tester and 'S-foreman' in tester
     assert 'TESTED-PASS' in tester and 'TESTED-FAIL' in tester and 'builds/' in tester
     assert f'{ns} build Nightshift-shift-abc --cwd' in tester
-    assert f'{ns} msg send Nightshift-shift-abc Tester Foreman' in tester
+    assert f'{ns} msg send Nightshift-shift-abc S-tester Foreman' in tester
     assert f'{ns} claim Nightshift-shift-abc S-tester' in tester
     assert not any(p in tester for p in ('{role}', '{identity}', '{peer_name}', '{state_dir}', '{shift}', '{nightshift}'))
 
@@ -2518,16 +2518,39 @@ def test_briefs_tell_both_roles_to_use_the_mailbox():
     ns = _nightshift_cmd()
     for me, brief in briefs.items():
         peer = 'Coder' if me == 'Foreman' else 'Foreman'
-        assert f'{ns} msg send Nightshift-shift-abc {me} {peer} --kind' in brief
+        mailbox_identity = me if me == 'Foreman' else 'S-coder'
+        assert f'{ns} msg send Nightshift-shift-abc {mailbox_identity} {peer} --kind' in brief
         assert f'{ns} msg sent Nightshift-shift-abc <id>' in brief
-        assert f'{ns} ack Nightshift-shift-abc {me} <id>' in brief
-        assert f'{ns} inbox Nightshift-shift-abc {me}' in brief
+        assert f'{ns} ack Nightshift-shift-abc {mailbox_identity} <id>' in brief
+        assert f'{ns} inbox Nightshift-shift-abc {mailbox_identity}' in brief
         assert '{nightshift}' not in brief
         assert 'header line' in brief and 'never on the SendMessage text' in brief
         assert 'exit code 5 means do not act' in brief and 'resumed crew' in brief and 'outbound_unsent' in brief
     assert briefs['Foreman'].rstrip().endswith('verbatim:')
     assert 'send READY from S-coder' in briefs['Coder']
     assert f'{ns} claim Nightshift-shift-abc S-coder' in briefs['Coder']
+
+
+@pytest.mark.parametrize('role,brief_file', [
+    ('Coder', 'coder.md'), ('Coder', 'coder-cli.md'), ('Coder', 'coder-agy.md'),
+    ('Tester', 'tester.md'), ('Tester', 'tester-cli.md'),
+    ('Advisor', 'advisor.md'), ('Advisor', 'advisor-cli.md'),
+])
+def test_custom_member_brief_uses_own_identity_for_every_mailbox_command(role, brief_file):
+    """A spawned label can borrow a role's brief without addressing that role's original member."""
+    shift = 'Nightshift-shift-abc'
+    identity = f'{shift}-helper-2'
+    brief = launcher.role_brief(role, identity, f'{shift}-foreman',
+                                Path('C:/state with spaces') / shift, brief_file)
+    ns = _nightshift_cmd()
+    commands = re.findall(rf'{re.escape(ns)} (msg send|ack|inbox) {shift} ([^\s`]+)', brief)
+    assert commands, brief_file
+    assert {command for command, _ in commands} >= {'msg send', 'ack'}
+    if brief_file not in ('coder-agy.md', 'advisor-cli.md'):
+        assert 'inbox' in {command for command, _ in commands}
+    assert all(sender == identity for _, sender in commands), (brief_file, commands)
+    assert f'{ns} msg send {shift} {identity} Foreman --kind' in brief
+    assert '{identity}' not in brief
 
 
 # ── build slot ────────────────────────────────────────────────────────────────
@@ -3438,7 +3461,7 @@ def test_advisor_brief_fills_identity_and_states_its_answer_format():
     assert not any(p in advisor for p in _PLACEHOLDERS)
     assert (state / 'bus.jsonl').as_posix() in advisor and 'mailbox' in advisor
     assert 'DECISION:' in advisor and 'WHY:' in advisor and 'ASK-HUMAN:' in advisor
-    assert 'Advisor Foreman --kind result' in advisor
+    assert 'S-advisor Foreman --kind result' in advisor
     assert re.search(r'never edits? (any )?files', advisor, re.IGNORECASE)
     assert 'never launch Claude sessions' in advisor   # common.md still leads
 

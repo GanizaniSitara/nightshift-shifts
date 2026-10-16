@@ -723,7 +723,10 @@ custom role with neither gets no persona block. `load_crew` refuses a named pers
 or not a YAML mapping. The persona is carried on each member in `crew.json`; a shift whose
 `crew.json` predates it falls back to the default lookup. `spawn` of a label that is not a role
 (`Coder2`, `Helper`, `Advisor2`) gets `<label>.yaml` if it exists, else `coder.yaml`, matching its
-`coder.md` brief fallback.
+`coder.md` brief fallback. `role_brief` substitutes `{identity}` with the member's full unique
+session identity; mailbox `resolve_role` then maps that identity back to the canonical crew label.
+Thus these Coder, Tester and Advisor variants address a custom spawned member without changing peer
+references such as `Foreman`.
 
 ## Context exhaustion and compaction safety (NGH-030)
 
