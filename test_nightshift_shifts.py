@@ -357,6 +357,7 @@ def _capture_role_launch(monkeypatch, tmp_path, role, cwd, *, member_role=None, 
     monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
     monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: None)
     monkeypatch.setattr(launcher, 'register_name', lambda *a: None)
+    monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a: None)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     launcher.pane(role, str(state), start=True, cwd=cwd)
     return seen, state
@@ -3409,7 +3410,9 @@ def test_codex_and_codex_copilot_manifests_parse_five_roles_in_2x4():
 def test_codex_and_copilot_commands_and_account_env():
     cmd = launcher.codex_command('gpt-5.6-luna', 'BRIEF', 'FIRST', reasoning='xhigh')
     assert cmd == [str(launcher.CODEX_EXE), '--dangerously-bypass-approvals-and-sandbox', '--no-daemon',
-                   '-c', 'tui.terminal_title=[]', '--model', 'gpt-5.6-luna',
+                   '-c', 'tui.terminal_title=[]',
+                   '-c', 'tui.status_line=["thread-title","model-with-reasoning","context-remaining"]',
+                   '--model', 'gpt-5.6-luna',
                    '-c', 'model_reasoning_effort=xhigh', 'BRIEF\n\nFIRST']
     cop = launcher.copilot_command('gemini-3.8-flash-high', 'BRIEF', 'FIRST')
     assert cop == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash-high',
@@ -3428,6 +3431,375 @@ def test_spawn_codex_and_copilot_use_their_default_models(tmp_path, injected, ca
     members = {m['label']: m for m in json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members']}
     assert (members['Apprentice']['tool'], members['Apprentice']['model']) == ('codex', 'gpt-6.1-sol')
     assert (members['Helper']['tool'], members['Helper']['model']) == ('copilot', 'gemini-3.8-flash-high')
+
+
+# ── Codex role identity, colours and supplied ticket headers (NGH-033) ──────
+
+@pytest.mark.parametrize('permissions, bypass', [('default', False), ('auto', True), ('skip', True)])
+def test_codex_footer_is_ordered_and_preserves_role_permissions(permissions, bypass):
+    command = launcher.codex_command('gpt-6.1-sol', 'brief', 'first', reasoning='xhigh', permissions=permissions)
+    configs = [command[i + 1] for i, arg in enumerate(command) if arg == '-c']
+    status = next(c.split('=', 1)[1] for c in configs if c.startswith('tui.status_line='))
+    assert json.loads(status) == ['thread-title', 'model-with-reasoning', 'context-remaining']
+    assert 'tui.terminal_title=[]' in configs and 'model_reasoning_effort=xhigh' in configs
+    assert not any(c.startswith('tui.theme=') for c in configs)
+    assert ('--dangerously-bypass-approvals-and-sandbox' in command) is bypass
+    assert command[-1] == 'brief\n\nfirst'
+
+
+def test_role_schemes_preserve_user_settings_and_campbell_palette(monkeypatch, tmp_path):
+    settings = tmp_path / 'Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState/settings.json'
+    settings.parent.mkdir(parents=True)
+    campbell = {'name': 'Campbell', 'background': '#101010', 'foreground': '#DDDDDD', 'red': '#990000'}
+    unrelated = {'name': 'Personal', 'background': '#123456'}
+    original = {'profiles': {'defaults': {'opacity': 91}, 'list': [{'guid': 'personal', 'name': 'Mine'}]},
+                'schemes': [campbell, unrelated, {'name': 'Nightshift red', 'background': '#BADBAD'}],
+                'keybindings': [{'command': 'copy', 'keys': 'ctrl+c'}]}
+    before = json.dumps(original)
+    settings.write_text(before, encoding='utf-8')
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path))
+    state = tmp_path / 'state'
+    state.mkdir()
+    launcher.install_profile(state)
+    config = json.loads(settings.read_text(encoding='utf-8'))
+    assert (state / 'terminal-settings-before.json').read_text(encoding='utf-8') == before
+    assert config['profiles']['defaults'] == original['profiles']['defaults']
+    assert config['profiles']['list'][0] == original['profiles']['list'][0]
+    assert config['keybindings'] == original['keybindings']
+    assert set(launcher.ROLE_BACKGROUNDS) == {'red', 'purple', 'green', 'blue', 'yellow'}
+    assert len(set(launcher.ROLE_BACKGROUNDS.values())) == 5
+    schemes = {s['name']: s for s in config['schemes']}
+    assert schemes['Campbell'] == campbell and schemes['Personal'] == unrelated
+    for colour, background in launcher.ROLE_BACKGROUNDS.items():
+        role = schemes['Nightshift ' + colour]
+        assert role['background'] == background
+        assert role['foreground'] == campbell['foreground'] and role['red'] == campbell['red']
+        assert all(k in role for k in ('black', 'brightWhite', 'cursorColor', 'selectionBackground'))
+    launcher.install_profile(state)
+    assert json.loads(settings.read_text(encoding='utf-8')) == config
+
+
+@pytest.mark.parametrize('crew', ['codex', 'default', 'apprentice-codex', 'codex-copilot'])
+def test_start_selects_role_schemes_only_for_codex_members_and_no_empty_slots(monkeypatch, tmp_path, capsys, crew):
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('unexpected launch'))
+    launcher.start(['--dry-run', '--cwd', str(tmp_path), '--crew', crew, 'task'])
+    plan = json.loads(capsys.readouterr().out)
+    members = {m['label']: m for m in launcher.crew_members(launcher.load_crew(crew), plan['shift'])}
+    for cell in _cells(plan['wt_argv']):
+        if '--slot' not in cell:
+            continue
+        member = members.get(cell[cell.index('--pane') + 1]) if '--pane' in cell else None
+        if member and member['tool'] == 'codex':
+            assert cell[cell.index('--colorScheme') + 1] == 'Nightshift ' + member['colour']
+        else:
+            assert '--colorScheme' not in cell
+
+
+def test_wt_role_colour_mapping_uses_labels_and_does_not_tint_trial_mode():
+    kwargs = dict(agents=True, members=['Foreman', 'Coder-2'], codex_colours={'Coder-2': 'purple'}, slots=4)
+    start = launcher.wt_command('S', Path('C:/state'), mode_flag='--start', **kwargs)
+    cells = [c for c in _cells(start) if '--pane' in c]
+    assert '--colorScheme' not in cells[0]
+    assert cells[1][cells[1].index('--colorScheme') + 1] == 'Nightshift purple'
+    trial = launcher.wt_command('S', Path('C:/state'), mode_flag='--live', **kwargs)
+    assert '--colorScheme' not in trial
+
+
+@pytest.mark.parametrize('from_file', [False, True])
+@pytest.mark.parametrize('prompt, ticket', [
+    ('Ticket NGH-033: supplied task\nBody with café', 'NGH-033'),
+    ('Ticket OP-123: supplied task', 'OP-123'),
+    ('Task\nTicket NGH-033: later header', None),
+    ('\nTicket NGH-033: leading blank', None),
+    (' Ticket NGH-033: indented', None),
+    ('ticket NGH-033: lowercase', None),
+    ('Ticket ngh-033: lowercase id', None),
+    ('Ticket NGH-33: id allowed by TICKET_RE', 'NGH-33'),
+    ('Ticket NGH-033 task', None),
+    ('Ticket NGH-033x: invalid suffix', None),
+    ('plain task', None),
+])
+def test_supplied_first_line_ticket_controls_title_without_fetching_task(monkeypatch, tmp_path, capsys,
+                                                                        from_file, prompt, ticket):
+    cwd = _no_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, 'ticket_prompt', lambda *a: pytest.fail('supplied prompt fetched a task'))
+    if from_file:
+        path = tmp_path / 'task.txt'
+        path.write_text(prompt, encoding='utf-8')
+        args = ['--prompt-file', str(path)]
+    else:
+        args = [prompt]
+    launcher.start(['--dry-run', '--cwd', cwd, *args])
+    plan = json.loads(capsys.readouterr().out)
+    expected_prompt = prompt.replace('\r\n', '\n') if from_file else prompt
+    assert plan['ticket'] == ticket and plan['prompt'] == expected_prompt
+    expected = (ticket or plan['shift']) + ' shift'
+    assert set(_titles(plan['wt_argv'])) == {expected}
+    state = launcher.start(['--cwd', cwd, *args])
+    assert (state / 'prompt.txt').read_text(encoding='utf-8') == prompt.replace('\r\n', '\n')
+    if ticket:
+        assert (state / 'ticket.txt').read_text(encoding='utf-8').strip() == ticket
+        assert _bus(state)[0]['ticket'] == ticket
+    else:
+        assert not (state / 'ticket.txt').exists()
+
+
+@pytest.mark.parametrize('from_file', [False, True])
+def test_crlf_first_line_ticket_is_extracted_without_changing_supplied_task(monkeypatch, tmp_path, capsys,
+                                                                          from_file):
+    prompt = 'Ticket NGH-033: task\r\nMore text'
+    cwd = _no_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, 'ticket_prompt', lambda *a: pytest.fail('supplied prompt fetched a task'))
+    if from_file:
+        path = tmp_path / 'task.txt'
+        path.write_bytes(prompt.encode('utf-8'))
+        args = ['--prompt-file', str(path)]
+    else:
+        args = [prompt]
+    launcher.start(['--dry-run', '--cwd', cwd, *args])
+    plan = json.loads(capsys.readouterr().out)
+    assert plan['ticket'] == 'NGH-033'
+    assert plan['prompt'] == (prompt.replace('\r\n', '\n') if from_file else prompt)
+    assert set(_titles(plan['wt_argv'])) == {'NGH-033 shift'}
+
+
+def test_ticket_is_derived_before_continuation_handover(monkeypatch, tmp_path, capsys):
+    cwd = _no_launch(monkeypatch, tmp_path)
+    previous = tmp_path / 'previous'
+    previous.mkdir()
+    (previous / 'handover.md').write_text('Ticket OP-999: older work', encoding='utf-8')
+    launcher.start(['--dry-run', '--cwd', cwd, '--continue-from', str(previous), 'task without a ticket'])
+    plan = json.loads(capsys.readouterr().out)
+    assert plan['ticket'] is None and 'Ticket OP-999:' in plan['prompt']
+    launcher.start(['--dry-run', '--cwd', cwd, '--continue-from', str(previous), 'Ticket NGH-033: new work'])
+    assert json.loads(capsys.readouterr().out)['ticket'] == 'NGH-033'
+
+
+def _codex_composer(prompt='› Ask Codex to do anything', footer='GPT-6.1-Sol high · 90% left', busy=True):
+    return (['Working (10s • esc to interrupt)', '', ''] if busy else ['']) + [prompt, '', '  ' + footer]
+
+
+@pytest.mark.parametrize('footer', [
+    'GPT-6.1-Sol high · C:\\git\\proj · 90% left',
+    '01a143cf-596c-7c22-85bc-9a516b197913 · GPT-6.1-Sol high · 90% left',
+    '01a143cf…', '01a143cf...', '01a143cf',
+    'Fix flaky account tests…',
+    'Tester (Nightshift-shift-e18f053a-tester) · GPT-6.1-Sol high · 90% left',
+])
+@pytest.mark.parametrize('busy', [False, True])
+@pytest.mark.parametrize('prompt', ['›', '› Ask Codex to do anything'])
+def test_codex_empty_composer_accepts_busy_and_unnamed_clipped_footer(footer, busy, prompt):
+    lines = _codex_composer(prompt, footer, busy) + ['', ' ']
+    assert launcher.codex_prompt_is_empty(lines)
+
+
+@pytest.mark.parametrize('lines', [
+    [], None, '›', [None], ['›', '', 1],
+    _codex_composer('› user draft'),
+    _codex_composer('› Ask Codex to do anything plus draft'),
+    _codex_composer('› Try a different suggested action'),
+    ['›', 'wrapped draft', '', '  GPT-6.1-Sol high'],
+    ['› Ask Codex to do anything', '', '› real current draft', '', '  GPT-6.1-Sol high'],
+    ['›', '', '', '', '', '', '', '', '  GPT-6.1-Sol high'],
+    ['›', '', 'arbitrary output'],
+    ['output', '›', '  GPT-6.1-Sol high'],
+    ['Do you trust this folder?', '›', '', '  GPT-6.1-Sol high'],
+    ['Select an option', '›', '', '  01a143cf…'],
+    ['1. Allow once', '›', '', '  01a143cf…'],
+    ['Press Enter to confirm', '›', '', '  GPT-6.1-Sol high'],
+    ['❯', '', '  GPT-6.1-Sol high'],
+])
+def test_codex_composer_rejects_drafts_historical_prompts_dialogs_and_unreadable_input(lines):
+    assert not launcher.codex_prompt_is_empty(lines)
+
+
+def _rename_world(monkeypatch, frames=None, poll=None):
+    frames = iter(frames if frames is not None else [_codex_composer()] * 2)
+    seen = {'peeks': [], 'sent': [], 'sleeps': []}
+    child = types.SimpleNamespace(pid=4321, poll=poll or (lambda: None))
+    monkeypatch.setattr(launcher.time, 'monotonic', lambda: 0.0)
+    monkeypatch.setattr(launcher.time, 'sleep', seen['sleeps'].append)
+
+    def peek(pid, timeout=10):
+        seen['peeks'].append((pid, timeout))
+        return next(frames)
+
+    def run(argv, **kw):
+        seen['sent'].append((argv, kw))
+        return subprocess.CompletedProcess(argv, 0, b'', b'')
+
+    monkeypatch.setattr(launcher, 'peek_lines', peek)
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    return child, seen
+
+
+def test_codex_rename_reads_current_empty_composer_twice_and_sends_once(monkeypatch):
+    child, seen = _rename_world(monkeypatch)
+    assert launcher.set_codex_role_name(child, 'Coder-2', 'Nightshift-S-coder-2')
+    assert len(seen['peeks']) == 2 and not seen['sleeps']
+    assert seen['sent'] == [(['agents-cli', '_attach', 'inject', '4321', '1',
+                             '/rename Coder-2 (Nightshift-S-coder-2)'],
+                            {'capture_output': True, 'timeout': 10})]
+
+
+def test_codex_rename_can_wait_for_first_readable_composer(monkeypatch):
+    child, seen = _rename_world(monkeypatch, [[], _codex_composer(), _codex_composer()])
+    assert launcher.set_codex_role_name(child, 'Tester', 'S-tester')
+    assert len(seen['peeks']) == 3 and len(seen['sent']) == 1 and seen['sleeps'] == [0.5]
+
+
+def test_codex_rename_stops_after_requested_attempt_count(monkeypatch):
+    child, seen = _rename_world(monkeypatch, [[], [], []])
+    assert not launcher.set_codex_role_name(child, 'Tester', 'S-tester', tries=3)
+    assert len(seen['peeks']) == 3 and not seen['sent']
+
+
+@pytest.mark.parametrize('frames', [
+    [_codex_composer(), _codex_composer('› draft arrived')],
+    [[], [], []],
+    [_codex_composer('› busy with draft')] * 3,
+])
+def test_codex_rename_never_injects_into_draft_or_changed_second_read(monkeypatch, frames):
+    child, seen = _rename_world(monkeypatch, frames)
+    assert not launcher.set_codex_role_name(child, 'Tester', 'S-tester', tries=1)
+    assert not seen['sent']
+
+
+@pytest.mark.parametrize('polls', [[0], [None, 0], [None, None, 0]])
+def test_codex_rename_checks_child_before_each_read_and_before_injection(monkeypatch, polls):
+    values = iter(polls)
+    child, seen = _rename_world(monkeypatch, poll=lambda: next(values))
+    assert not launcher.set_codex_role_name(child, 'Tester', 'S-tester')
+    assert not seen['sent'] and len(seen['peeks']) == len(polls) - 1
+
+
+@pytest.mark.parametrize('failure', ['nonzero', 'timeout', 'oserror'])
+def test_codex_rename_never_retries_uncertain_injection(monkeypatch, failure):
+    child, seen = _rename_world(monkeypatch)
+
+    def run(argv, **kw):
+        seen['sent'].append(argv)
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(argv, kw['timeout'])
+        if failure == 'oserror':
+            raise OSError('injection unavailable')
+        return subprocess.CompletedProcess(argv, 1, b'', b'failed')
+
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    assert not launcher.set_codex_role_name(child, 'Tester', 'S-tester')
+    assert len(seen['sent']) == 1 and len(seen['peeks']) == 2
+
+
+def test_codex_rename_deadline_includes_peek_time_and_bounds_io(monkeypatch):
+    child, seen = _rename_world(monkeypatch)
+    clock = [0.0]
+    monkeypatch.setattr(launcher.time, 'monotonic', lambda: clock[0])
+
+    def slow_peek(pid, timeout=10):
+        seen['peeks'].append(timeout)
+        clock[0] += timeout
+        return []
+
+    monkeypatch.setattr(launcher, 'peek_lines', slow_peek)
+    monkeypatch.setattr(launcher.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    assert not launcher.set_codex_role_name(child, 'Tester', 'S-tester', tries=100)
+    assert clock[0] == 30 and seen['peeks'] == [10, 10, 9.0] and not seen['sent']
+
+
+@pytest.mark.parametrize('failure', [OSError('peek unavailable'), subprocess.TimeoutExpired('peek', 1)])
+def test_codex_rename_stops_safely_on_peek_error(monkeypatch, failure):
+    child, seen = _rename_world(monkeypatch)
+
+    def peek(*a, **k):
+        raise failure
+
+    monkeypatch.setattr(launcher, 'peek_lines', peek)
+    assert not launcher.set_codex_role_name(child, 'Tester', 'S-tester')
+    assert not seen['sent']
+
+
+@pytest.mark.parametrize('rc, payload', [(1, b'{"lines":["unsafe"]}'), (0, b'not json'),
+                                       (0, b'[]'), (0, b'{"error":"unavailable"}')])
+def test_peek_lines_rejects_failed_or_invalid_console_reads(monkeypatch, rc, payload):
+    monkeypatch.setattr(launcher.subprocess, 'run',
+                        lambda *a, **k: subprocess.CompletedProcess([], rc, payload, b''))
+    assert launcher.peek_lines(4321, timeout=0.1) == []
+
+
+@pytest.mark.parametrize('failure', [None, 'get', 'set', 'oserror', 'redirected'])
+def test_pane_background_enables_vt_and_emits_osc_only_with_valid_console(monkeypatch, capsys, failure):
+    seen = []
+
+    def get_mode(handle, mode):
+        if failure == 'oserror':
+            raise OSError('no console')
+        mode._obj.value = 2
+        return failure != 'get'
+
+    def set_mode(handle, mode):
+        seen.append((handle, mode))
+        return failure != 'set'
+
+    kernel = types.SimpleNamespace(GetStdHandle=lambda n: 1234, GetConsoleMode=get_mode, SetConsoleMode=set_mode)
+    monkeypatch.setattr(launcher.ctypes.windll, 'kernel32', kernel)
+    monkeypatch.setattr(launcher, 'sys', types.SimpleNamespace(stdout=types.SimpleNamespace(
+        isatty=lambda: failure != 'redirected')))
+    assert launcher.set_pane_background('#172339') is (failure is None)
+    assert capsys.readouterr().out == ('\033]11;#172339\033\\' if failure is None else '')
+    if failure is None:
+        assert seen == [(1234, 6)]
+
+
+@pytest.mark.usefixtures('_container_isolated')
+@pytest.mark.parametrize('tool', ['codex', 'claude', 'copilot'])
+@pytest.mark.parametrize('failure', [None, 'popen', 'wait'])
+def test_pane_role_background_and_reset_survive_exit_and_launch_errors(monkeypatch, tmp_path, tool, failure):
+    d = _container(tmp_path)
+    saved = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    saved['members'][1].update(tool=tool, colour='blue', model='test-model')
+    (d / 'crew.json').write_text(json.dumps(saved), encoding='utf-8')
+    events = []
+
+    class Child:
+        pid = 42
+
+        def wait(self):
+            events.append(('wait',))
+            if failure == 'wait':
+                raise OSError('wait failed')
+            return 0
+
+    def popen(command, **kw):
+        events.append(('popen', command))
+        if failure == 'popen':
+            raise OSError('launch failed')
+        return Child()
+
+    monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
+    monkeypatch.setattr(launcher, 'set_pane_background', lambda colour: events.append(('background', colour)))
+    monkeypatch.setattr(launcher, 'register_name', lambda *a: events.append(('register',)))
+    monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a: events.append(('rename', a[1], a[2])))
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: events.append(('trust',)))
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: events.append(('colour', a[1])))
+    monkeypatch.setattr(launcher, 'process_running', lambda *a: True)
+    monkeypatch.setattr('builtins.input', lambda *a: pytest.fail('reused slot should return'))
+    if failure:
+        with pytest.raises(OSError):
+            launcher.pane('Coder', str(d), start=True, cwd=str(tmp_path), slot=2)
+    else:
+        launcher.pane('Coder', str(d), start=True, cwd=str(tmp_path), slot=2)
+    backgrounds = [e[1] for e in events if e[0] == 'background']
+    assert backgrounds == ([launcher.ROLE_BACKGROUNDS['blue'], '#0C0C0C'] if tool == 'codex' else ['#0C0C0C'])
+    assert events[0][0] == 'background' and events[1][0] == 'popen'
+    if tool == 'codex' and failure != 'popen':
+        assert ('rename', 'Coder', f'{CONT_SHIFT}-coder') in events
+        assert events[-1] == ('background', '#0C0C0C')
+    else:
+        assert not any(e[0] == 'rename' for e in events)
+    if tool == 'claude' and failure != 'popen':
+        assert ('trust',) in events and ('colour', 'blue') in events
+        command = events[1][1]
+        assert not any('/theme' in arg or '/rename' in arg for arg in command)
 
 
 # ── Apprentice (NGH-029): slot 5, per-CLI manifests, spawn --crew ────────────
@@ -3585,6 +3957,7 @@ def test_pane_start_runs_a_spawned_crew_apprentice_on_its_tool_model_and_account
         return Child()
     monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
     monkeypatch.setattr(launcher, 'register_name', lambda pid, name: None)
+    monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a: None)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
     launcher.pane('Apprentice', str(d), start=True, cwd=str(tmp_path), slot=3)

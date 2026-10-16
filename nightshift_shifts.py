@@ -55,6 +55,16 @@ import yaml
 
 MODEL = 'claude-opus-5-5'
 PROFILE = 'Nightshift Crew'
+CAMPBELL_BACKGROUND = '#0C0C0C'
+ROLE_BACKGROUNDS = {'red': '#291719', 'purple': '#241A30', 'green': '#15291E',
+                    'blue': '#172339', 'yellow': '#2B2614'}
+CAMPBELL_SCHEME = {
+    'background': CAMPBELL_BACKGROUND, 'foreground': '#CCCCCC', 'cursorColor': '#FFFFFF',
+    'selectionBackground': '#FFFFFF', 'black': '#0C0C0C', 'red': '#C50F1F', 'green': '#13A10E',
+    'yellow': '#C19C00', 'blue': '#0037DA', 'purple': '#881798', 'cyan': '#3A96DD', 'white': '#CCCCCC',
+    'brightBlack': '#767676', 'brightRed': '#E74856', 'brightGreen': '#16C60C', 'brightYellow': '#F9F1A5',
+    'brightBlue': '#3B78FF', 'brightPurple': '#B4009E', 'brightCyan': '#61D6D6', 'brightWhite': '#F2F2F2',
+}
 SHIFTS_DIR = Path('C:/Data/nightshift/shifts')
 LOCKS_DIR = Path('C:/Data/nightshift/locks')
 TRIALS_DIR = Path('C:/Data/nightshift/layout-trials')
@@ -303,7 +313,8 @@ def agy_command(model, brief, first_message, permissions=None):
 def codex_command(model, brief, first_message, reasoning=None, permissions=None):
     """argv for a Codex crew member: approvals per `permissions`, no daemon, static terminal title, optional reasoning."""
     cmd = [str(CODEX_EXE), *permission_flags('codex', permissions), '--no-daemon',
-           '-c', 'tui.terminal_title=[]', '--model', model]
+           '-c', 'tui.terminal_title=[]',
+           '-c', 'tui.status_line=["thread-title","model-with-reasoning","context-remaining"]', '--model', model]
     if reasoning:
         cmd += ['-c', f'model_reasoning_effort={reasoning}']
     return cmd + [brief + '\n\n' + first_message]
@@ -354,11 +365,14 @@ def accept_trust_prompt(child):
         time.sleep(0.5)
 
 
-def peek_lines(pid):
+def peek_lines(pid, timeout=10):
     """Visible pane lines via agents-cli, [] when unreadable."""
     try:
-        peek = subprocess.run(['agents-cli', '_attach', 'peek', str(pid), '0'], capture_output=True, timeout=10)
-        return json.loads((peek.stdout or b'{}').decode('utf-8', 'replace')).get('lines', [])
+        peek = subprocess.run(['agents-cli', '_attach', 'peek', str(pid), '0'], capture_output=True, timeout=timeout)
+        if peek.returncode:
+            return []
+        result = json.loads((peek.stdout or b'{}').decode('utf-8', 'replace'))
+        return result.get('lines', []) if isinstance(result, dict) and not result.get('error') else []
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return []
 
@@ -381,6 +395,90 @@ def inject_command(pid, command, tries=10):
             return True
         time.sleep(1)
     return False
+
+
+def codex_prompt_is_empty(lines):
+    """Recognize the current bottom composer, including while a Codex turn is running.
+
+    Unknown hints fail closed. Transcript prompts, wrapped drafts and dialogs are not input readiness.
+    The thread-title footer may be arbitrary text, clipped before the model/context fields.
+    """
+    if not isinstance(lines, list) or not all(isinstance(line, str) for line in lines):
+        return False
+    lines = [line.rstrip() for line in lines]
+    while lines and not lines[-1]:
+        lines.pop()
+    if len(lines) < 3:
+        return False
+    # Codex indents its bottom status row. Do not constrain the title's content: before /rename
+    # it may be a UUID or an automatically generated title, with no room left for other fields.
+    if not lines[-1].startswith('  '):
+        return False
+    prompts = [i for i, line in enumerate(lines) if line.lstrip().startswith('›')]
+    if not prompts:
+        return False
+    prompt = prompts[-1]
+    if prompt < len(lines) - 6 or prompt >= len(lines) - 2:
+        return False
+    if lines[prompt].strip() not in ('›', '› Ask Codex to do anything'):
+        return False
+    if any(line.strip() for line in lines[prompt + 1:-1]):
+        return False
+    # Busy status is allowed: /rename is handled locally without interrupting the active turn.
+    tail = '\n'.join(lines[max(0, prompt - 4):])
+    return not re.search(r'(?i)(?:\(y/n\)|\[y/n\]|press enter to confirm|do you trust|'
+                         r'would you like to|allow once|approve|select an option|^\s*[›❯]?\s*\d+\. )',
+                         tail, re.M)
+
+
+def set_codex_role_name(child, role, identity, tries=30):
+    """Send /rename once after two empty-composer reads, bounded to 30 seconds including I/O."""
+    deadline = time.monotonic() + 30
+    for _ in range(tries):
+        if child.poll() is not None or time.monotonic() >= deadline:
+            return False
+        try:
+            lines = peek_lines(child.pid, timeout=min(10, deadline - time.monotonic()))
+            if codex_prompt_is_empty(lines):
+                if child.poll() is not None or time.monotonic() >= deadline:
+                    return False
+                lines = peek_lines(child.pid, timeout=min(10, deadline - time.monotonic()))
+                if codex_prompt_is_empty(lines):
+                    if child.poll() is not None or time.monotonic() >= deadline:
+                        return False
+                    sent = subprocess.run(
+                        ['agents-cli', '_attach', 'inject', str(child.pid), '1', f'/rename {role} ({identity})'],
+                        capture_output=True, timeout=min(10, deadline - time.monotonic()))
+                    return sent.returncode == 0  # never retry an uncertain submission
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.5, remaining))
+    return False
+
+
+def set_pane_background(background):
+    """Set this Windows Terminal pane's default background, including a reused slot."""
+    if os.name != 'nt' or not sys.stdout.isatty():
+        return False
+    try:
+        kernel = ctypes.windll.kernel32
+        kernel.GetStdHandle.restype = ctypes.c_void_p
+        kernel.GetStdHandle.argtypes = [ctypes.c_ulong]
+        kernel.GetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        kernel.SetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        handle = kernel.GetStdHandle(-11)
+        mode = ctypes.c_ulong()
+        if not kernel.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        if not kernel.SetConsoleMode(handle, mode.value | 4):
+            return False
+        print(f'\033]11;{background}\033\\', end='', flush=True)
+        return True
+    except OSError:
+        return False
 
 
 def set_role_colour(child, colour, cwd):
@@ -539,26 +637,34 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                 command += ['--effort', reasoning]
             command.append(first_message)
         env = crew_env(os.environ) if tool == 'claude' and not account else crew_env(os.environ, tool=tool, account=account)
-        child = subprocess.Popen(command, cwd=cwd, env=env)
-        record = {'pid': child.pid, 'wrapper_pid': os.getpid(), 'role': role, 'started': time.time(),
-                  'name': identity, 'peer': peer_name, 'model': model, 'cwd': cwd}
-        if start:
-            record['tool'] = tool
-        previous = member_info(state_dir, role)
-        if previous:
-            # earlier incarnations of this role; 'started' stays the current one, so mailbox fencing is unchanged
-            record['history'] = previous.get('history', []) + [{k: v for k, v in previous.items() if k != 'history'}]
-        Path(state_dir, role + '.json').write_text(json.dumps(record), encoding='utf-8')
-        if slot:
-            # keep what is already there (a spawned slot's cmd_pid) and add who runs in it
-            kept = {k: v for k, v in (read_slot(state_dir, slot) or {}).items() if k != 'slot'}
-            write_slot(state_dir, slot, **{**kept, 'role': role, 'identity': identity, 'wrapper_pid': os.getpid()})
-        if tool != 'claude':
-            register_name(child.pid, identity)   # the trust dialog and /color are Claude-only
-        else:
-            accept_trust_prompt(child)
-            set_role_colour(child, colour, cwd)
-        code = child.wait()
+        set_pane_background(ROLE_BACKGROUNDS.get(colour, CAMPBELL_BACKGROUND)
+                            if tool == 'codex' else CAMPBELL_BACKGROUND)
+        try:
+            child = subprocess.Popen(command, cwd=cwd, env=env)
+            record = {'pid': child.pid, 'wrapper_pid': os.getpid(), 'role': role, 'started': time.time(),
+                      'name': identity, 'peer': peer_name, 'model': model, 'cwd': cwd}
+            if start:
+                record['tool'] = tool
+            previous = member_info(state_dir, role)
+            if previous:
+                # earlier incarnations of this role; 'started' stays the current one, so mailbox fencing is unchanged
+                record['history'] = previous.get('history', []) + [{k: v for k, v in previous.items() if k != 'history'}]
+            Path(state_dir, role + '.json').write_text(json.dumps(record), encoding='utf-8')
+            if slot:
+                # keep what is already there (a spawned slot's cmd_pid) and add who runs in it
+                kept = {k: v for k, v in (read_slot(state_dir, slot) or {}).items() if k != 'slot'}
+                write_slot(state_dir, slot, **{**kept, 'role': role, 'identity': identity, 'wrapper_pid': os.getpid()})
+            if tool != 'claude':
+                register_name(child.pid, identity)   # the trust dialog and /color are Claude-only
+                if tool == 'codex':
+                    set_codex_role_name(child, role, identity)
+            else:
+                accept_trust_prompt(child)
+                set_role_colour(child, colour, cwd)
+            code = child.wait()
+        finally:
+            if tool == 'codex':
+                set_pane_background(CAMPBELL_BACKGROUND)
         print(f'{role} exited with code {code}.')
         if start and slot:
             # A container slot must leave a cmd prompt behind for `spawn` to type into. A spawned wrapper was
@@ -610,6 +716,16 @@ def install_profile(state_dir):
     profile.update(name=PROFILE, commandline='cmd.exe', hidden=False,
                    font={'face': 'Cascadia Mono', 'size': 12}, antialiasingMode='grayscale',
                    colorScheme='Campbell')
+    schemes = config.setdefault('schemes', [])
+    campbell = {**CAMPBELL_SCHEME, **next((s for s in schemes if s.get('name') == 'Campbell'), {})}
+    for colour, background in ROLE_BACKGROUNDS.items():
+        desired = {**campbell, 'name': 'Nightshift ' + colour, 'background': background}
+        existing = next((s for s in schemes if s.get('name') == desired['name']), None)
+        if existing is None:
+            schemes.append(desired)
+        else:
+            existing.clear()
+            existing.update(desired)
     (state_dir / 'terminal-settings-before.json').write_text(original, encoding='utf-8')
     settings.write_text(json.dumps(config, indent=4) + '\n', encoding='utf-8')
 
@@ -636,7 +752,7 @@ def loop_title(tickets):
 
 
 def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=None, members=DEFAULT_LABELS,
-               crew='default', ticket=None, slots=None):
+               crew='default', ticket=None, slots=None, codex_colours=None):
     """wt.exe argv for one tab holding `members` (pane labels, in order).
 
     2 panes: side by side, focus left (unchanged since the first crew). 3-4: one row of equal columns,
@@ -673,6 +789,9 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
         if role:
             if agents:
                 command.extend(['--profile', PROFILE])
+                colour = (codex_colours or {}).get(role)
+                if mode_flag == '--start' and colour in ROLE_BACKGROUNDS:
+                    command.extend(['--colorScheme', 'Nightshift ' + colour])
             # start mode shows '<ticket or shift> shift'; the trial modes keep the shift name in the title.
             title = pane_title(ticket or name) if mode_flag == '--start' else 'Nightshift | ' + role + ' | ' + name
             command.extend(['--title', title, '--suppressApplicationTitle',
@@ -902,6 +1021,10 @@ def start(argv):
         ticket, prompt, ticket_cwd = ticket_prompt(prompt.strip())
     if prompt is None or not prompt.strip():
         parser.error('the task prompt is empty; give the work for Foreman, e.g. nightshift start "Fix the failing test"')
+    if ticket is None:
+        header = re.match(r'Ticket (' + TICKET_RE.pattern + r'):', prompt.splitlines()[0])
+        if header:
+            ticket = header.group(1)
     required = parse_requires(prompt)   # before the handover is appended: only the task itself sets the bar
     if args.continue_from:
         handover = Path(args.continue_from) / 'handover.md'
@@ -919,7 +1042,8 @@ def start(argv):
     members = crew_members(crew, name)
     labels = [m['label'] for m in members]
     command = wt_command(name, state_dir, agents=True, mode_flag='--start', cwd=cwd, members=labels, crew=crew['name'],
-                         ticket=ticket, slots=crew['slots'])
+                         ticket=ticket, slots=crew['slots'],
+                         codex_colours={m['label']: m['colour'] for m in members if m['tool'] == 'codex'})
     if args.dry_run:
         plan = {
             'dry_run': True, 'shift': name, 'state_dir': str(state_dir), 'cwd': cwd, 'ticket': ticket,

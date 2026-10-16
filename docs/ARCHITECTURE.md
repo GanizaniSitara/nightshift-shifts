@@ -285,6 +285,25 @@ As built (NGH-027):
   titled `<ticket or shift> shift`, or the older `<ticket or shift> <Role>`, or a bare
   `Foreman`/`Coder` for shifts from before NGH-023.
 
+## Codex identity, colour and ticket extraction (NGH-033)
+
+Codex panes add an ordered footer containing the thread title, model (including reasoning) and
+context remaining. It deliberately omits the current directory. The startup `/rename <Role> (<identity>)`
+helper names the pane once: it requires a live child and an empty current composer, including while
+the pane is busy. It rejects drafts, multiline or dialog ambiguity, unknown hints and errors, and
+uses a double-read, deadline and at-most-one injection.
+
+The five named Windows Terminal schemes are Nightshift red, purple, green, blue and yellow, with
+one Campbell base profile. `install_profile` registers the schemes; initial `--colorScheme` selects
+the scheme for each Codex pane. The matching pane background is applied with OSC 11 and VT enabled
+before Codex launch, including
+spawned and reused Codex slots. Campbell `#0C0C0C` is restored on exit and before non-Codex reuse.
+No per-role Codex syntax-theme override is required.
+
+The launcher extracts a literal `Ticket <ID>:` header from the first line of the prompt or UTF-8
+prompt file, with `<ID>` matching `TICKET_RE`. Extraction precedes the continuation handover append.
+It writes the ID to `ticket.txt` and uses it for the common `<ticket> shift` title.
+
 ## The shift folder is the source of truth
 
 ```
