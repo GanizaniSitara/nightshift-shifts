@@ -20,6 +20,9 @@ locations from `SOLID_DIR`:
 - `C:\nightshift\builds\` — the defined machine-level `BUILDS_DIR` path; the current `build`
   command still writes revision-bound evidence to `<state_dir>/builds/<N>.json`, not centrally.
 - `C:\nightshift\floor.json` — machine-level floor state for reaping, patrol and dispatch.
+- `C:\nightshift\floor\bus.jsonl` — the machine-level floor bus; `floor/cursors/` stores durable
+  per-reader cursors, `floor/bus.lock` serializes writers, and each cursor's sibling `.lock` serializes
+  only that reader's read/print/cursor-advance batch.
 
 An already-running legacy shift may keep its state under `C:\Data\nightshift\` until it is torn
 down; the root change does not move or split that shift's mailbox, claims or bus. The launcher
@@ -43,6 +46,29 @@ The three out-of-shift commands operate on `floor.json` and emit JSON reports:
   cleaner and then the warden before evaluating dispatch. At capacity it reports
   `reason: "at_capacity"` without launching; under capacity it dispatches the explicit ticket or
   a queued floor ticket and records `{shift, ticket, crew, repo, dispatched_at}` in `dispatches`.
+
+The machine-level floor bus is a separate, append-only communication channel:
+
+- `nightshift floor say FROM TEXT [--to NAME]` appends one JSON object to
+  `C:\nightshift\floor\bus.jsonl`. The default recipient is `all`; each event has exactly `ts`,
+  `from`, `to`, `text` and a 1-based monotonic `id`. Writers hold `floor/bus.lock` with the same
+  exclusive-file, stale-lock recovery pattern as the shift bus and complete the append before
+  releasing that lock. `say` prints the appended event as JSON and fails if the append cannot
+  complete.
+- `nightshift floor hear ME [--since ID] [--follow]` prints one JSON event per line when `to` is
+  `ME` or `all`. The reader cursor is an atomically replaced
+  `floor/cursors/<sha256(reader)>.json`; it advances over every complete bus event read, including
+  events for other recipients. An explicit `--since` is a non-mutating replay lower bound even when
+  it is below the saved cursor. Each read/print/advance batch holds that reader's cursor lock and
+  releases it before `--follow` sleeps. `--follow` polls for new
+  complete lines, leaves a trailing partial line for the next read, and exits cleanly on Ctrl+C. A
+  missing bus is an empty read.
+- Supervisors use stable identities `claude-supervisor` and `agy-supervisor`: they hear at every
+  patrol and before a crew start, then say directly when starting or landing a shift. The owner is
+  not a relay; the full operating note is [docs/SUPERVISOR.md](SUPERVISOR.md). After a successful
+  actual `start`, the launcher also appends `from: launcher`, `to: all` with the shift name and
+  ticket (when present). Dry-run and failed starts append no automatic start event. Go parity is
+  deferred.
 
 Warden delivers only stored messages addressed to the recipient's current incarnation. A modern
 `agents-cli send` receipt must say `submitted: true`. An older `enter: true`/`sent: <header>` receipt
@@ -527,7 +553,7 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 
 | Piece | Role | Where |
 |---|---|---|
-| `nightshift_shifts.py` | the launcher/oracle: `start` (`--no-worktree` supported by NGH-040), `status`, `down` (`--close` default, explicit `--hold`), `spawn` (NGH-025), `land` (NGH-040), `cleaner`, `warden`, `gaffer` and `floor.json` (NGH-035), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), and `log` (the shift bus, NGH-026) | this repo |
+| `nightshift_shifts.py` | the launcher/oracle: `start` (`--no-worktree` supported by NGH-040), `status`, `down` (`--close` default, explicit `--hold`), `spawn` (NGH-025), `land` (NGH-040), `cleaner`, `warden`, `gaffer` and `floor.json` (NGH-035), `floor say/hear` (NGH-053), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), and `log` (the shift bus, NGH-026) | this repo |
 | `cmd/nightshift` | standalone Go CLI: `status`, `claims`, `inbox`, `log`, `claim/release`, `msg/inbox/ack`, `build`, and native `land`, `down`, `cleaner` lifecycle operations with handover reporting | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`; copilot also `none`\|`minimal`\|`max`), `context` (`default`\|`long_context`, copilot only), `account` (`1`\|`2`), `permissions` (`skip`\|`auto`\|`default`) and the top-level `max_credits` (the shift's Copilot credit budget, split evenly across the Copilot panes), pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
@@ -857,6 +883,15 @@ C:\nightshift\shifts\<shift>\
 ```
 Anything that needs to survive a dead pane, a restart or a different CLI lives here, not in a
 process. `status` and `resume` are computed from it.
+
+The machine floor state is shared by shifts:
+
+```
+C:\nightshift\floor\
+  bus.jsonl       directed and broadcast supervisor messages (NGH-053)
+  bus.lock        held briefly by each append
+  cursors\        atomically replaced JSON cursor per reader, with a sibling reader lock
+```
 
 ## The loop (optional batch runner)
 

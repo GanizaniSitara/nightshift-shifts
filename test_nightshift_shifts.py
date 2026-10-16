@@ -4,11 +4,13 @@ Run: C:/miniconda3/envs/python312/python.exe -m pytest C:/git/nightshift-shifts/
 Nothing here launches Windows Terminal or agent sessions. Worktree integration
 tests use real temporary Git repositories and small Python build commands.
 """
+import builtins
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -17,16 +19,232 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nightshift_shifts as launcher  # noqa: E402
 
+
+# ── machine-level floor bus (NGH-053) ────────────────────────────────────────
+
+def _floor_root(monkeypatch, tmp_path):
+    """Keep floor-bus tests completely outside the machine-level live bus."""
+    root = tmp_path / 'solid'
+    monkeypatch.setattr(launcher, 'SOLID_DIR', root)
+    monkeypatch.setattr(launcher, 'FLOOR_DIR', root / 'floor')
+    monkeypatch.setattr(launcher, 'FLOOR_BUS', root / 'floor' / 'bus.jsonl')
+    monkeypatch.setattr(launcher, 'FLOOR_CURSORS', root / 'floor' / 'cursors')
+    return root / 'floor'
+
+
+def _floor_output(capsys):
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+
+
+def test_floor_cli_filters_directed_and_broadcast_messages(monkeypatch, tmp_path, capsys):
+    _floor_root(monkeypatch, tmp_path)
+    launcher.floor(['say', 'alpha', 'private', '--to', 'bravo'])
+    launcher.floor(['say', 'alpha', 'broadcast'])
+    launcher.floor(['say', 'alpha', 'other', '--to', 'charlie'])
+    sent = _floor_output(capsys)
+    assert [(event['id'], event['to'], event['text']) for event in sent] == [
+        (1, 'bravo', 'private'), (2, 'all', 'broadcast'), (3, 'charlie', 'other')]
+
+    launcher.floor(['hear', 'bravo'])
+    heard = _floor_output(capsys)
+    assert [(event['id'], event['text']) for event in heard] == [(1, 'private'), (2, 'broadcast')]
+
+
+def test_floor_explicit_since_replays_without_regressing_reader_cursor(monkeypatch, tmp_path, capsys):
+    floor_dir = _floor_root(monkeypatch, tmp_path)
+    for text in ('one', 'two'):
+        launcher.floor(['say', 'alpha', text, '--to', 'bravo'])
+    _floor_output(capsys)
+
+    launcher.floor(['hear', 'bravo'])
+    assert [event['id'] for event in _floor_output(capsys)] == [1, 2]
+    cursor = launcher._floor_cursor_path(floor_dir / 'cursors', 'bravo')
+    assert json.loads(cursor.read_text(encoding='utf-8')) == {'id': 2}
+
+    launcher.floor(['hear', 'bravo', '--since', '0'])
+    assert [event['id'] for event in _floor_output(capsys)] == [1, 2]
+    assert json.loads(cursor.read_text(encoding='utf-8')) == {'id': 2}
+
+    launcher.floor(['say', 'alpha', 'three', '--to', 'bravo'])
+    _floor_output(capsys)
+    launcher.floor(['hear', 'bravo'])
+    assert [event['id'] for event in _floor_output(capsys)] == [3]
+    assert json.loads(cursor.read_text(encoding='utf-8')) == {'id': 3}
+
+
+def test_floor_hear_holds_partial_line_until_it_is_complete(monkeypatch, tmp_path, capsys):
+    floor_dir = _floor_root(monkeypatch, tmp_path)
+    floor_dir.mkdir(parents=True)
+    event = json.dumps({'id': 1, 'ts': '2026-10-16T00:00:00', 'from': 'alpha', 'to': 'bravo', 'text': 'ready'})
+    encoded = event.encode('utf-8')
+    (floor_dir / 'bus.jsonl').write_bytes(encoded[:20])
+
+    launcher.floor(['hear', 'bravo'])
+    assert _floor_output(capsys) == []
+    with (floor_dir / 'bus.jsonl').open('ab') as stream:
+        stream.write(encoded[20:] + b'\n')
+    launcher.floor(['hear', 'bravo'])
+    assert _floor_output(capsys) == [json.loads(event)]
+
+
+def test_floor_follow_waits_for_a_completed_partial_line(monkeypatch, tmp_path, capsys):
+    floor_dir = _floor_root(monkeypatch, tmp_path)
+    floor_dir.mkdir(parents=True)
+    event = json.dumps({'id': 1, 'ts': '2026-10-16T00:00:00', 'from': 'alpha', 'to': 'bravo', 'text': 'follow'})
+    encoded = event.encode('utf-8')
+    bus = floor_dir / 'bus.jsonl'
+    bus.write_bytes(encoded[:17])
+    sleeps = []
+
+    def sleep(_seconds):
+        sleeps.append(_seconds)
+        if len(sleeps) == 1:
+            with bus.open('ab') as stream:
+                stream.write(encoded[17:] + b'\n')
+        else:
+            raise KeyboardInterrupt
+
+    launcher.floor_hear(['bravo', '--follow'], sleep=sleep)
+    assert _floor_output(capsys) == [json.loads(event)]
+    assert len(sleeps) == 2
+
+
+def test_floor_concurrent_writers_keep_every_message_and_unique_ids(monkeypatch, tmp_path):
+    floor_dir = _floor_root(monkeypatch, tmp_path)
+    workers = 12
+    gate = threading.Barrier(workers)
+    results = []
+
+    def append(number):
+        gate.wait()
+        results.append(launcher.floor_append(f'writer-{number}', f'message-{number}'))
+
+    threads = [threading.Thread(target=append, args=(number,)) for number in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    events = [json.loads(line) for line in (floor_dir / 'bus.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert len(results) == len(events) == workers
+    assert sorted(event['id'] for event in events) == list(range(1, workers + 1))
+    assert {event['text'] for event in events} == {f'message-{number}' for number in range(workers)}
+
+
+def test_same_reader_concurrent_hear_consumes_each_event_once(monkeypatch, tmp_path):
+    floor_dir = _floor_root(monkeypatch, tmp_path)
+    for text in ('one', 'two'):
+        launcher.floor_append('alpha', text, to='bravo')
+    received, gate = [], threading.Barrier(2)
+    original_print = builtins.print
+    output_lock = threading.Lock()
+
+    def record(*args, **kwargs):
+        with output_lock:
+            received.append(json.loads(args[0]))
+
+    def hear():
+        gate.wait()
+        launcher.floor_hear(['bravo'])
+
+    monkeypatch.setattr(builtins, 'print', record)
+    threads = [threading.Thread(target=hear) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    monkeypatch.setattr(builtins, 'print', original_print)
+
+    assert sorted(event['id'] for event in received) == [1, 2]
+    cursor = launcher._floor_cursor_path(floor_dir / 'cursors', 'bravo')
+    assert json.loads(cursor.read_text(encoding='utf-8')) == {'id': 2}
+
+
+def test_floor_hear_does_not_advance_cursor_when_stdout_delivery_fails(monkeypatch, tmp_path, capsys):
+    floor_dir = _floor_root(monkeypatch, tmp_path)
+    launcher.floor_append('alpha', 'retry me', to='bravo')
+    original_print = builtins.print
+    monkeypatch.setattr(builtins, 'print', lambda *args, **kwargs: (_ for _ in ()).throw(OSError('stdout closed')))
+    with pytest.raises(OSError, match='stdout closed'):
+        launcher.floor_hear(['bravo'])
+    cursor = launcher._floor_cursor_path(floor_dir / 'cursors', 'bravo')
+    assert not cursor.exists()
+
+    monkeypatch.setattr(builtins, 'print', original_print)
+    launcher.floor_hear(['bravo'])
+    assert [event['id'] for event in _floor_output(capsys)] == [1]
+    assert json.loads(cursor.read_text(encoding='utf-8')) == {'id': 1}
+
+
+def test_floor_say_reports_append_failure_as_nonzero(monkeypatch, tmp_path):
+    _floor_root(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, 'floor_append',
+                        lambda *args, **kwargs: (_ for _ in ()).throw(OSError('bus lock held')))
+    with pytest.raises(SystemExit, match='floor bus append failed: bus lock held'):
+        launcher.floor(['say', 'alpha', 'cannot', 'write'])
+
+
+def test_floor_append_completes_a_short_os_write(monkeypatch, tmp_path):
+    floor_dir = _floor_root(monkeypatch, tmp_path)
+    real_write, writes = launcher.os.write, []
+
+    def short_once(fd, data):
+        writes.append(len(data))
+        if len(writes) == 1:
+            return real_write(fd, data[:7])
+        return real_write(fd, data)
+
+    monkeypatch.setattr(launcher.os, 'write', short_once)
+    event = launcher.floor_append('alpha', 'complete record', to='bravo')
+    lines = (floor_dir / 'bus.jsonl').read_text(encoding='utf-8').splitlines()
+    assert len(writes) >= 2 and [json.loads(line) for line in lines] == [event]
+
+
+def test_actual_start_announces_to_floor_but_dry_run_has_no_floor_side_effect(monkeypatch, tmp_path, capsys):
+    floor_dir = _floor_root(monkeypatch, tmp_path)
+    cwd = _no_launch(monkeypatch, tmp_path)
+    state_dir = launcher.start(['--cwd', cwd, 'floor announcement'])
+    _floor_output(capsys)
+    events = [json.loads(line) for line in (floor_dir / 'bus.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert len(events) == 1
+    assert events[0]['from'] == 'launcher' and events[0]['to'] == 'all'
+    assert state_dir.name in events[0]['text'] and 'started shift' in events[0]['text']
+
+    dry_root = tmp_path / 'dry-solid'
+    monkeypatch.setattr(launcher, 'SOLID_DIR', dry_root)
+    monkeypatch.setattr(launcher, 'FLOOR_DIR', dry_root / 'floor')
+    monkeypatch.setattr(launcher, 'FLOOR_BUS', dry_root / 'floor' / 'bus.jsonl')
+    monkeypatch.setattr(launcher, 'FLOOR_CURSORS', dry_root / 'floor' / 'cursors')
+    launcher.start(['--dry-run', '--cwd', cwd, 'no floor announcement'])
+    assert not (dry_root / 'floor' / 'bus.jsonl').exists()
+
+
+def test_failed_start_does_not_announce_to_floor(monkeypatch, tmp_path):
+    floor_dir = _floor_root(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'shifts')
+    monkeypatch.setattr(launcher, 'install_profile', lambda state_dir: None)
+    monkeypatch.setattr(launcher, 'launch', lambda *args: (_ for _ in ()).throw(RuntimeError('launch failed')))
+    work = tmp_path / 'work'
+    work.mkdir()
+
+    with pytest.raises(RuntimeError, match='launch failed'):
+        launcher.start(['--cwd', str(work), 'failed floor announcement'])
+    assert not (floor_dir / 'bus.jsonl').exists()
+
 _real_notify = launcher.notify_owner   # restored only by tests that fake subprocess.run themselves
 
 
 @pytest.fixture(autouse=True)
 def _locks_in_tmp(monkeypatch, tmp_path):
     """No test reads or writes the real floor locks or legacy shifts."""
+    monkeypatch.setattr(launcher, 'SOLID_DIR', tmp_path / 'solid')
     monkeypatch.setattr(launcher, 'LOCKS_DIR', tmp_path / 'locks')
     monkeypatch.setattr(launcher, 'LEGACY_DIR', tmp_path / 'legacy', raising=False)
     monkeypatch.setattr(launcher, 'WORKTREES_DIR', tmp_path / 'worktrees')
     monkeypatch.setattr(launcher, 'FLOOR_FILE', tmp_path / 'floor.json')
+    monkeypatch.setattr(launcher, 'FLOOR_DIR', launcher.SOLID_DIR / 'floor')
+    monkeypatch.setattr(launcher, 'FLOOR_BUS', launcher.FLOOR_DIR / 'bus.jsonl')
+    monkeypatch.setattr(launcher, 'FLOOR_CURSORS', launcher.FLOOR_DIR / 'cursors')
     # The real user's home is itself a Git checkout; temp fixtures must not
     # discover that repository when they intentionally exercise non-git mode.
     monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))

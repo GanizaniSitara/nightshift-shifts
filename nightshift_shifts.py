@@ -74,6 +74,9 @@ LOCKS_DIR = SOLID_DIR / 'locks'
 BUILDS_DIR = SOLID_DIR / 'builds'
 WORKTREES_DIR = SOLID_DIR / 'worktrees'
 FLOOR_FILE = SOLID_DIR / 'floor.json'
+FLOOR_DIR = SOLID_DIR / 'floor'
+FLOOR_BUS = FLOOR_DIR / 'bus.jsonl'
+FLOOR_CURSORS = FLOOR_DIR / 'cursors'
 TRIALS_DIR = SOLID_DIR / 'layout-trials'
 LEGACY_DIR = Path('C:/Data/nightshift')
 FILE_LOCK_STALE_S = 30
@@ -1702,6 +1705,8 @@ def start(argv):
     install_profile(state_dir)
     launch(command, name, state_dir, {'mode': 'start', 'prompt_file': str(state_dir / 'prompt.txt')}, labels,
            crew['slots'])
+    start_note = f'started shift {name}' + (f' ticket {ticket}' if ticket else '')
+    floor_append('launcher', start_note, to='all')
     return state_dir
 
 
@@ -2528,6 +2533,183 @@ def log_command(argv, sleep=time.sleep):
             sleep(LOG_POLL_SECONDS)
     except KeyboardInterrupt:
         return
+
+
+FLOOR_LOCK_WAIT = 5.0
+FLOOR_LOCK_STALE = 10.0
+
+
+def floor_paths():
+    """Return the floor bus paths beneath the current state root."""
+    root = SOLID_DIR / 'floor'
+    bus = root / 'bus.jsonl'
+    cursors = root / 'cursors'
+    return root, bus, cursors
+
+
+def _floor_event_lines(path, offset=0):
+    """Read complete floor-bus lines from byte offset; a trailing partial line stays for the next read."""
+    try:
+        with open(path, 'rb') as stream:
+            stream.seek(offset)
+            data = stream.read()
+    except FileNotFoundError:
+        return [], offset
+    end = data.rfind(b'\n') + 1
+    events = []
+    for raw in data[:end].splitlines():
+        if not raw.strip():
+            continue
+        try:
+            event = json.loads(raw.decode('utf-8', 'replace'))
+        except (UnicodeError, ValueError):
+            continue
+        if isinstance(event, dict) and type(event.get('id')) is int:
+            events.append(event)
+    return events, offset + end
+
+
+def _floor_next_id(data):
+    """Find the next monotonic floor-bus id, ignoring an incomplete or malformed old line."""
+    highest = 0
+    for raw in data.splitlines():
+        try:
+            event = json.loads(raw.decode('utf-8', 'replace'))
+        except (UnicodeError, ValueError):
+            continue
+        event_id = event.get('id') if isinstance(event, dict) else None
+        if type(event_id) is int:
+            highest = max(highest, event_id)
+    return highest + 1
+
+
+def floor_append(sender, text, to='all'):
+    """Append one complete floor event while holding the short-lived writer lock."""
+    sender, text, to = str(sender), str(text), str(to or 'all')
+    if not sender or not text or any('\n' in value or '\r' in value for value in (sender, text, to)):
+        raise ValueError('floor bus fields must be non-empty and single-line')
+    root, path, _ = floor_paths()
+    root.mkdir(parents=True, exist_ok=True)
+    lock = root / 'bus.lock'
+    take_file_lock(lock, FLOOR_LOCK_WAIT, FLOOR_LOCK_STALE)
+    try:
+        data = path.read_bytes() if path.exists() else b''
+        prefix = b'\n' if data and not data.endswith(b'\n') else b''
+        event = {'ts': time.strftime('%Y-%m-%dT%H:%M:%S'), 'from': sender, 'to': to,
+                 'text': text, 'id': _floor_next_id(data)}
+        line = prefix + (json.dumps(event, ensure_ascii=False) + '\n').encode('utf-8')
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_BINARY', 0))
+        try:
+            remaining = memoryview(line)
+            while remaining:
+                written = os.write(fd, remaining)
+                if not written:
+                    raise OSError('floor bus write made no progress')
+                remaining = remaining[written:]
+        finally:
+            os.close(fd)
+        return event
+    finally:
+        release_file_lock(lock)
+
+
+def floor_say(argv):
+    parser = argparse.ArgumentParser(prog='nightshift floor say', description='Append a message to the floor bus.')
+    parser.add_argument('sender', metavar='FROM')
+    parser.add_argument('text', nargs='+', metavar='TEXT')
+    parser.add_argument('--to', default='all', metavar='NAME', help='recipient, or all (the default)')
+    args = parser.parse_args(argv)
+    try:
+        event = floor_append(args.sender, ' '.join(args.text), args.to)
+    except OSError as err:
+        raise SystemExit(f'floor bus append failed: {err}') from None
+    print(json.dumps(event, ensure_ascii=False), flush=True)
+    return event
+
+
+def _floor_cursor_path(cursors, reader):
+    digest = hashlib.sha256(str(reader).encode('utf-8')).hexdigest()
+    return cursors / f'{digest}.json'
+
+
+def _floor_cursor(path):
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return 0
+    if isinstance(value, dict):
+        value = value.get('id', 0)
+    return value if type(value) is int and value >= 0 else 0
+
+
+@contextlib.contextmanager
+def floor_reader_locked(cursor_path):
+    """Serialize one reader's read/print/cursor batch without blocking other readers."""
+    cursor_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = cursor_path.with_suffix('.lock')
+    try:
+        take_file_lock(lock, FLOOR_LOCK_WAIT, FLOOR_LOCK_STALE)
+    except TimeoutError as err:
+        raise SystemExit(str(err)) from None
+    try:
+        yield
+    finally:
+        release_file_lock(lock)
+
+
+def floor_hear(argv, sleep=time.sleep):
+    parser = argparse.ArgumentParser(prog='nightshift floor hear', description='Read messages addressed to a floor reader.')
+    parser.add_argument('reader', metavar='ME')
+    parser.add_argument('--since', type=int, metavar='ID', help='read after ID, without regressing the saved cursor')
+    parser.add_argument('--follow', action='store_true', help='keep watching until Ctrl+C')
+    args = parser.parse_args(argv)
+    if args.since is not None and args.since < 0:
+        parser.error('--since must be non-negative')
+    root, path, cursors = floor_paths()
+    cursor_path = _floor_cursor_path(cursors, args.reader)
+    offset = 0
+    try:
+        while True:
+            with floor_reader_locked(cursor_path):
+                saved = _floor_cursor(cursor_path)
+                baseline = args.since if args.since is not None else saved
+                events, offset = _floor_event_lines(path, offset) if path.exists() else ([], offset)
+                highest = saved
+                output = []
+                for event in events:
+                    event_id = event['id']
+                    highest = max(highest, event_id)
+                    if event_id > baseline and event.get('to') in (args.reader, 'all'):
+                        output.append(event)
+                for event in output:
+                    print(json.dumps(event, ensure_ascii=False), flush=True)
+                if args.since is None and highest > saved:
+                    write_json(cursor_path, {'id': highest})
+            if not args.follow:
+                return
+            sleep(LOG_POLL_SECONDS)
+    except KeyboardInterrupt:
+        return
+
+
+def floor(argv):
+    parser = argparse.ArgumentParser(prog='nightshift floor', description='Communicate through the machine-level floor bus.')
+    subparsers = parser.add_subparsers(dest='command', required=True)
+    say = subparsers.add_parser('say', help='append FROM TEXT to the floor bus')
+    say.set_defaults(handler=floor_say)
+    say.add_argument('sender', metavar='FROM')
+    say.add_argument('text', nargs='+', metavar='TEXT')
+    say.add_argument('--to', default='all', metavar='NAME', help='recipient, or all (the default)')
+    hear = subparsers.add_parser('hear', help='read messages addressed to ME')
+    hear.set_defaults(handler=floor_hear)
+    hear.add_argument('reader', metavar='ME')
+    hear.add_argument('--since', type=int, metavar='ID', help='read after ID, without regressing the saved cursor')
+    hear.add_argument('--follow', action='store_true', help='keep watching until Ctrl+C')
+    args = parser.parse_args(argv)
+    if args.command == 'say':
+        return floor_say(['--to', args.to, args.sender, *args.text])
+    return floor_hear(([args.reader] + (['--since', str(args.since)] if args.since is not None else [])
+                       + (['--follow'] if args.follow else [])))
 
 
 class ProtocolViolation(FolderLocked):
@@ -3800,7 +3982,7 @@ def gaffer(argv):
 COMMANDS = {'start': start, 'status': status, 'down': down, 'spawn': spawn, 'loop': loop, 'resume': resume,
             'land': land,
             'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack,
-            'build': build, 'log': log_command, 'cleaner': cleaner, 'warden': warden, 'gaffer': gaffer}
+            'build': build, 'log': log_command, 'floor': floor, 'cleaner': cleaner, 'warden': warden, 'gaffer': gaffer}
 
 
 def main():
@@ -3835,7 +4017,9 @@ def main():
                "  build SHIFT [--cwd DIR] [--cmd 'COMMAND'] [--timeout MIN]\n"
                '                                              run a build one at a time per folder; evidence in builds/<n>.json\n'
                '  build --cancel SHIFT N                      kill build N and mark it cancelled\n'
-               '  log SHIFT [--follow] [--since N] [--json]   print the shift bus (bus.jsonl): messages, acks, start..down')
+               '  log SHIFT [--follow] [--since N] [--json]   print the shift bus (bus.jsonl): messages, acks, start..down\n'
+               '  floor say FROM TEXT [--to NAME]             append a message to the machine floor bus\n'
+               '  floor hear ME [--since ID] [--follow]       read floor messages addressed to ME or all')
     parser.add_argument('--pane', help=argparse.SUPPRESS)
     parser.add_argument('--state-dir', help=argparse.SUPPRESS)
     parser.add_argument('--start', action='store_true', help=argparse.SUPPRESS)
