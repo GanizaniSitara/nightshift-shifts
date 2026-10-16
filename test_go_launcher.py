@@ -393,6 +393,28 @@ def test_start_dry_run_every_crew_manifest(start_world, python_launcher, crew, w
     assert plan['dry_run'] is True and plan.get('crew', 'default') == crew
 
 
+def test_start_dry_run_work_crew_through_native_binary(start_world):
+    """Native start dry-run of the work crew exposes copilot coder and reserved advisor without writing state."""
+    args = ['start', '--dry-run', '--crew', 'work', '--cwd', str(start_world['repo']), 'dry']
+    env = start_world['env']
+    before = state_snapshot(env)
+    proc = run(args, env, native=True)
+    if unported(proc):
+        pytest.skip('native binary has not ported start yet')
+    assert proc.returncode == 0, proc.stderr
+    assert state_snapshot(env) == before
+    plan = json.loads(proc.stdout)
+    assert plan['crew'] == 'work'
+    assert plan['max_credits'] == 30
+    roles = plan['roles']
+    assert roles['Advisor']['status'] == 'not_started' and roles['Advisor']['reserved_slot'] == 2
+    assert roles['Coder']['tool'] == 'copilot' and roles['Coder']['model'] == 'gemini-3.8-flash'
+    cmd = roles['Coder']['command']
+    idx = cmd.index('--max-ai-credits')
+    assert cmd[idx + 1] == '30'
+    assert 'tool' not in roles['Foreman'] and 'tool' not in roles['Tester']
+
+
 def test_start_dry_run_launcher_normalisation_is_the_only_argv_difference(start_world, python_launcher):
     """Guard the normaliser itself: the oracle's wt_argv really holds the pair, and it collapses to one token."""
     args = START_CASES['default-git-worktree'](start_world)
