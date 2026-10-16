@@ -31,7 +31,7 @@ type queueItem struct {
 	Ended  string `json:"ended,omitempty"`
 }
 
-const addUsage = `usage: nightshift add [--shift SHIFT] [--from NAME] TASK...
+const addUsage = `usage: nightshift add [--shift SHIFT] [--from NAME] (TASK... | TICKET [TICKET ...])
 
 Queue a ticket ID or a task for the live shift of the repository you are in (or --shift, or NIGHTSHIFT_SHIFT),
 and wake its Foreman.`
@@ -152,13 +152,26 @@ func addCommand(argv []string) int {
 		errLine(err.Error())
 		return 1
 	}
-	_, added, err := queueAdd(dir, text, flags["--from"])
-	if err != nil {
-		errLine(err.Error())
-		return 1
+	// Several ticket IDs (nightshift add LAP-050 LAP-045 ...) queue one item each, in order.
+	texts := []string{text}
+	if len(rest) > 1 {
+		all := true
+		for _, r := range rest {
+			all = all && ticketFull.MatchString(r)
+		}
+		if all {
+			texts = rest
+		}
 	}
-	line, _ := json.Marshal(added)
-	out(string(line) + "\n")
+	for _, t := range texts {
+		_, added, err := queueAdd(dir, t, flags["--from"])
+		if err != nil {
+			errLine(err.Error())
+			return 1
+		}
+		line, _ := json.Marshal(added)
+		out(string(line) + "\n")
+	}
 	return 0
 }
 
