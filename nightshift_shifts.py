@@ -478,6 +478,10 @@ def crew_env(environ, tool='claude', account=None, role=None):
         env.pop('TERM', None)   # native Windows cmd.exe: TERM can make Codex stop for confirmation
         if account == 2:
             env['CODEX_HOME'] = str(Path.home() / '.codex-second')
+    if tool == 'claude':
+        # Prompt suggestions pre-type a guessed next message into the composer; in a crew pane that
+        # reads as an owner instruction nobody gave. Set after the CLAUDE* scrub so it survives.
+        env['CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION'] = 'false'
     if tool == 'copilot':
         # Copilot retitles the pane after the session ("<task> - GitHub Copilot"), which beats
         # --suppressApplicationTitle; this documented opt-out keeps the '<ticket> shift' title (NGH-039).

@@ -916,6 +916,15 @@ def test_crew_env_sets_copilot_title_and_setup_opt_outs_only_for_copilot():
         assert 'COPILOT_SETUP_TERMINAL' not in env
 
 
+def test_crew_env_disables_claude_prompt_suggestions_only_for_claude():
+    """A pre-typed guessed prompt in a crew pane reads as an owner instruction; Claude panes opt out."""
+    base = {'PATH': 'p', 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION': 'true'}
+    assert launcher.crew_env(dict(base))['CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION'] == 'false'
+    assert launcher.crew_env(dict(base), tool='claude', role='Coder')['CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION'] == 'false'
+    for tool in ('codex', 'copilot', 'agy'):
+        assert 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION' not in launcher.crew_env(dict(base), tool=tool)
+
+
 # ── ticket -> prompt + folder ─────────────────────────────────────────────────
 
 def _fake_run(outputs):
