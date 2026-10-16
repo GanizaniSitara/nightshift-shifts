@@ -325,13 +325,14 @@ def test_go_build_records_logs_config_and_locks(tmp_path, scenario):
     parity(tmp_path, prepare, commands, [exit_code])
 
 
+@pytest.mark.xdist_group('serial')   # 18 native writers on a 5 s claims-lock wait; parallel workers starved it (builds/15)
 def test_go_concurrent_writers_preserve_all_rows_and_bus_sequences(tmp_path):
     env = clean_world(tmp_path)
     d = shift(env)
     def write_one(i):
         # Native writers contend on the same named mutex and bus/claims locks (the oracle is frozen).
         return run_cli(send('QA', 'Boss', 'note', f'concurrent-{i}'), env, go=True, timeout=40)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         runs = list(pool.map(write_one, range(18)))
     assert all(p.returncode == 0 and not p.stderr for p in runs), [(p.returncode, p.stderr) for p in runs]
     ids = [int(re.search(rb'msg:(\d+)', p.stdout)[1]) for p in runs]
@@ -368,11 +369,12 @@ def test_go_write_waits_for_existing_python_lock(tmp_path, kind, through_junctio
     assert proc.returncode == 0 and not proc.stderr, (proc.stdout, proc.stderr)
 
 
+@pytest.mark.xdist_group('serial')   # 18 native claim writers on a 5 s lock wait; parallel workers starved it (builds/15)
 def test_go_concurrent_claims_have_no_lost_updates(tmp_path):
     env = clean_world(tmp_path)
     def claim_one(i):
         return run_cli(['claim', 'alpha', 'QA', str(tmp_path / f'file {i}.py')], env, go=True)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         runs = list(pool.map(claim_one, range(18)))
     assert all(p.returncode == 0 and not p.stderr for p in runs)
     claims = json.loads((shift(env) / 'claims.json').read_bytes())

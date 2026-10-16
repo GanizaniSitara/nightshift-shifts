@@ -774,7 +774,7 @@ def owned_fixture_process(base):
                                 env=env, stdout=out, stderr=err,
                                 creationflags=subprocess.CREATE_NO_WINDOW)
         try:
-            deadline = time.monotonic() + 15
+            deadline = time.monotonic() + 45   # 15 s was starved under -n auto load (builds/17)
             while time.monotonic() < deadline and proc.poll() is None:
                 p = d / 'builds' / '1.json'
                 try:
