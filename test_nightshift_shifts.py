@@ -3690,11 +3690,11 @@ def test_codex_and_codex_copilot_manifests_parse_five_roles_in_2x4():
     assert [(r['role'], r['tool'], r['model'], r.get('reasoning')) for r in codex['roles']] == [
         ('Foreman', 'codex', 'gpt-6.1-sol', 'high'),
         ('Advisor', 'codex', 'gpt-6-astra', 'high'),
-        ('Coder', 'codex', 'gpt-6-astra', 'high'),
-        ('Tester', 'codex', 'gpt-6-astra', 'high'),
-        ('Apprentice', 'codex', 'gpt-5.6-luna', 'high')]   # only Foreman on Sol (owner, 16 Oct)
+        ('Coder', 'codex', 'gpt-5.6-terra', 'high'),
+        ('Tester', 'codex', 'gpt-5.6-terra', 'high'),
+        ('Apprentice', 'codex', 'gpt-5.6-luna', 'xhigh')]   # tiers stepped down (owner, 16 Oct)
     copilot = launcher.load_crew('codex-copilot')
-    for crew, coder_model in ((codex, 'gpt-6-astra'), (copilot, 'gpt-6.1-sol')):
+    for crew, coder_model in ((codex, 'gpt-5.6-terra'), (copilot, 'gpt-6.1-sol')):
         advisor = next(r for r in crew['roles'] if r['role'] == 'Advisor')
         coder = next(r for r in crew['roles'] if r['role'] == 'Coder')
         assert (advisor['model'], advisor['reasoning'], coder['model']) == ('gpt-6-astra', 'high', coder_model)
@@ -4254,7 +4254,7 @@ def test_spawn_crew_reasoning_comes_from_the_named_manifest(tmp_path, injected, 
     d = _container(tmp_path)
     launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'codex'])
     member = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
-    assert (member['tool'], member['model'], member['reasoning']) == ('codex', 'gpt-5.6-luna', 'high')
+    assert (member['tool'], member['model'], member['reasoning']) == ('codex', 'gpt-5.6-luna', 'xhigh')
 
 
 @pytest.mark.usefixtures('_container_isolated')
