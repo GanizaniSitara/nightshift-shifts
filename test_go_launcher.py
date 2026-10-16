@@ -1,4 +1,5 @@
 """Launcher parity (NGH-052): start/spawn/warden/gaffer/resume dry runs and every -h, oracle vs native.
+The oracle side is a recorded golden (NGH-055): only testdata/record_goldens.py runs the Python oracle.
 
 Run with NIGHTSHIFT_GO_EXE pointing at the built executable (default build/nightshift.exe). Every
 case runs in disposable state roots, a disposable HOME and disposable Git repos. Nothing here
@@ -27,7 +28,7 @@ import time
 
 import pytest
 
-from test_go_readonly import ORACLE_BOOT, REPO, oracle, write_json
+from test_go_readonly import ORACLE_BOOT, RECORD, REPO, frozen, oracle, require_recording, write_json
 
 
 # argparse's top-level prog is basename(argv[0]); the oracle gets the native executable's name so the
@@ -217,6 +218,7 @@ def run(args, env, native, timeout=60, stdin=None):
             pytest.fail(f'standalone executable missing: {exe_path()}; build it before parity verification')
         command = [str(exe_path()), *args]
     else:
+        require_recording()
         command = [sys.executable, '-c', BOOT, *args]
     return subprocess.run(command, cwd=REPO, env=env, capture_output=True, timeout=timeout,
                           **({'input': stdin} if stdin is not None else {'stdin': subprocess.DEVNULL}),
@@ -364,28 +366,46 @@ def ngh056_expected(data):
 def test_ngh056_help_deltas_hit_the_oracle_text(tmp_path):
     """Guard the exception itself: every delta matches the oracle exactly once per help it belongs to."""
     env = base_env(tmp_path / 'help space', None)
-    start_help = run(['start', '-h'], env, native=False).stdout
-    top_help = run(['-h'], env, native=False).stdout
+    start_help = frozen(lambda: run(['start', '-h'], env, native=False).stdout, tmp_path)
+    top_help = frozen(lambda: run(['-h'], env, native=False).stdout, tmp_path)
     assert ngh056_expected(start_help)[1] == 2 and ngh056_expected(top_help)[1] == 2
     for old, _ in NGH056_HELP_DELTAS:
         assert sum(normalise(h).count(old[0]) for h in (start_help, top_help)) == 1, old[0]
 
 
+def volatile(env):
+    """Live values a world wrote into its fixtures (sleeper PID and start epoch, a real Terminal HWND)."""
+    return json.loads(env.get('GOLDEN_VOLATILE', '{}'))
+
+
+def world_root(env):
+    return Path(env['NIGHTSHIFT_HOME']).parent
+
+
+def oracle_expected(args, env, launcher, before):
+    """The oracle's run as the native side must reproduce it: launcher pair, NGH-056 deltas and the reserved
+    Coder applied. Frozen (NGH-055), so only recording runs the oracle."""
+    def compute():
+        expected = run(args, env, native=False)
+        assert state_snapshot(env) == before, f'Python oracle wrote state for dry-run/usage case {args}'
+        return (ngh056_expected(normalise(oracle_with_reserved_coder(args, expected.stdout), launcher, False))[0],
+                ngh056_expected(normalise(expected.stderr, launcher, False))[0], expected.returncode)
+    stdout, stderr, code = frozen(compute, world_root(env), volatile(env))
+    return subprocess.CompletedProcess(args, code, stdout, stderr)
+
+
 def parity(args, env, launcher=None, expect_exit=None):
-    """Oracle then native on the same world; both must leave the state roots untouched."""
+    """Frozen oracle then native on the same world; both must leave the state roots untouched."""
     before = state_snapshot(env)
-    expected = run(args, env, native=False)
-    assert state_snapshot(env) == before, f'Python oracle wrote state for dry-run/usage case {args}'
+    expected = oracle_expected(args, env, launcher, before)
     if expect_exit is not None:
         assert expected.returncode == expect_exit, (expected.stdout, expected.stderr)
     actual = run(args, env, native=True)
     if unported(actual):
         pytest.skip(f'native binary has not ported {args[0]} yet: {actual.stderr[:80]!r}')
     assert state_snapshot(env) == before, f'native binary wrote state for dry-run/usage case {args}'
-    for label, a, e in (('stdout', actual.stdout, oracle_with_reserved_coder(args, expected.stdout)),
-                        ('stderr', actual.stderr, expected.stderr)):
-        assert_equal_bytes(normalise(a, launcher, True), ngh056_expected(normalise(e, launcher, False))[0],
-                           f'{args} {label}')
+    for label, a, e in (('stdout', actual.stdout, expected.stdout), ('stderr', actual.stderr, expected.stderr)):
+        assert_equal_bytes(normalise(a, launcher, True), e, f'{args} {label}')
     assert actual.returncode == expected.returncode, (args, actual.stderr)
     return expected
 
@@ -482,14 +502,17 @@ def test_start_missing_prompt_file_reports_the_oracle_error_line(start_world):
     print exactly the traceback's final message line, exit like it and print nothing on stdout."""
     args = ['start', '--dry-run', '--prompt-file', str(start_world['base'] / 'none.txt')]
     env = start_world['env']
-    expected = run(args, env, native=False)
-    assert expected.returncode == 1 and expected.stderr.startswith(b'Traceback')
-    last = expected.stderr.rstrip().splitlines()[-1]
+
+    def oracle_side():
+        expected = run(args, env, native=False)
+        assert expected.returncode == 1 and expected.stderr.startswith(b'Traceback')
+        return expected.stdout, expected.returncode, expected.stderr.rstrip().splitlines()[-1]
+    stdout, code, last = frozen(oracle_side, world_root(env))
     assert last.startswith(b'FileNotFoundError: ')
     actual = run(args, env, native=True)
     if unported(actual):
         pytest.skip('native binary has not ported start yet')
-    assert (actual.stdout, actual.returncode) == (expected.stdout, expected.returncode)
+    assert (actual.stdout, actual.returncode) == (stdout, code)
     assert actual.stderr.rstrip(b'\r\n') == last.removeprefix(b'FileNotFoundError: ')
 
 
@@ -527,7 +550,8 @@ def test_start_dry_run_work_crew_through_native_binary(start_world):
 def test_start_dry_run_launcher_normalisation_is_the_only_argv_difference(start_world, python_launcher):
     """Guard the normaliser itself: the oracle's wt_argv really holds the pair, and it collapses to one token."""
     args = START_CASES['default-git-worktree'](start_world)
-    out = run(args, start_world['env'], native=False).stdout
+    out = frozen(lambda: run(args, start_world['env'], native=False).stdout, world_root(start_world['env']),
+                 roots={'PYTHON': Path(python_launcher[0])})
     argv = json.loads(out)['wt_argv']
     pairs = [i for i in range(len(argv) - 1) if (argv[i], argv[i + 1]) == python_launcher]
     assert pairs, 'oracle wt_argv lost the python/script pair; the normaliser would hide nothing'
@@ -547,15 +571,17 @@ def test_native_copy_without_crews_beside_it_uses_embedded_assets(start_world, p
     for args in (['start', '--dry-run', '--cwd', str(start_world['plain']), 'Embedded assets'],
                  ['start', '--dry-run', '--cwd', str(start_world['plain']), '--crew', 'codex', 'Embedded'],
                  ['start', '--dry-run', '--cwd', str(start_world['configured']), 'Repo layer beside embed']):
-        expected = run(args, env, native=False)
+        def oracle_side():
+            expected = run(args, env, native=False)
+            return (normalise(oracle_with_reserved_coder(args, expected.stdout), python_launcher, False),
+                    expected.returncode)
+        stdout, code = frozen(oracle_side, tmp_path)
         actual = subprocess.run([str(copied), *args], cwd=lonely, env=env, capture_output=True, timeout=60,
                                 stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
         if unported(actual):
             pytest.skip('native binary has not ported start yet')
-        assert actual.returncode == expected.returncode == 0, actual.stderr
-        assert_equal_bytes(normalise(actual.stdout, python_launcher, True, exe=copied),
-                           normalise(oracle_with_reserved_coder(args, expected.stdout), python_launcher, False),
-                           f'embedded {args}')
+        assert actual.returncode == code == 0, actual.stderr
+        assert_equal_bytes(normalise(actual.stdout, python_launcher, True, exe=copied), stdout, f'embedded {args}')
     assert sorted(p.name for p in lonely.iterdir()) == ['nightshift.exe'], 'embedded assets must not be unpacked'
 
 
@@ -659,6 +685,7 @@ def spawn_world(tmp_path, sleeper):
     # Deterministic mtimes keep "latest" and unique-suffix resolution independent of creation timing.
     for i, d in enumerate(sorted(shifts.iterdir())):
         os.utime(d, (1700000000 + i, 1700000000 + i))
+    env['GOLDEN_VOLATILE'] = json.dumps({'SLEEPER_PID': pid, 'SLEEPER_STARTED': started, 'TERMINAL_HWND': hwnd})
     return env
 
 
@@ -717,7 +744,7 @@ def test_spawn_dry_run_matches_oracle(spawn_world, name):
 def test_spawn_dry_run_oracle_cases_reach_the_intended_branch(spawn_world):
     """The fixture must actually exercise slot reuse and the budget split, not fail early on both sides."""
     def plan(name):
-        out = run(['spawn', *SPAWN_CASES[name], '--dry-run'], spawn_world, native=False)
+        out = run(['spawn', *SPAWN_CASES[name], '--dry-run'], spawn_world, native=True)
         assert out.returncode == 0, out.stderr
         return json.loads(out.stdout)
     assert plan('dead-member-own-slot')['slot'] == 2
@@ -726,13 +753,13 @@ def test_spawn_dry_run_oracle_cases_reach_the_intended_branch(spawn_world):
     assert plan('explicit-free-slot')['slot'] == 4
     assert plan('copilot-budget-share-new')['member']['max_credits'] == 30
     assert plan('crew-apprentice-codex')['tool'] == 'codex'
-    exhausted = run(['spawn', *SPAWN_CASES['copilot-budget-exhausted'], '--dry-run'], spawn_world, native=False)
+    exhausted = run(['spawn', *SPAWN_CASES['copilot-budget-exhausted'], '--dry-run'], spawn_world, native=True)
     assert exhausted.returncode == 1 and b'no budget share left' in exhausted.stderr
     assert plan('others-skip-advisor-slot')['slot'] == 3 and plan('advisor-with-consult')['slot'] == 2
     for name, text in [('advisor-slot-refused-to-others', b'Advisor slot 2 is reserved until consultation'),
                        ('advisor-other-slot-refused', b'Advisor is reserved for slot 2'),
                        ('advisor-without-consult', b'use consult to start the Advisor')]:
-        refused = run(['spawn', *SPAWN_CASES[name], '--dry-run'], spawn_world, native=False)
+        refused = run(['spawn', *SPAWN_CASES[name], '--dry-run'], spawn_world, native=True)
         assert refused.returncode == 1 and text in refused.stderr, name
 
 
@@ -839,6 +866,7 @@ def floor_world(tmp_path, sleeper):
         if (d / 'ticket.txt').exists():
             os.utime(d / 'ticket.txt', (1700000000 + i, 1700000000 + i))
     os.utime(shifts / 'Nightshift-shift-olderfix' / 'ticket.txt', (1600000000, 1600000000))
+    env['GOLDEN_VOLATILE'] = json.dumps({'SLEEPER_PID': pid, 'SLEEPER_STARTED': started})
     return env
 
 
@@ -881,7 +909,7 @@ def test_gaffer_floor_variants_match_oracle(floor_world, floor):
 
 def test_floor_oracle_cases_reach_the_intended_branch(floor_world):
     def report(args):
-        out = run(args, floor_world, native=False)
+        out = run(args, floor_world, native=True)
         assert out.returncode == 0, out.stderr
         return json.loads(out.stdout)
     patrol = report(['warden', '--dry-run'])['shifts']
@@ -909,9 +937,9 @@ def test_warden_delivery_attempt_keys_match_python_float_repr(tmp_path, fake_bin
     recipient's current incarnation>, and only rows for the current incarnation are attempted."""
     pid, created = sleeper
     incarnations = {'Tester': created, 'Coder': created + 1 / 3}   # 'x.0' and a long shortest-repr float
-    observed = []
     base = tmp_path / 'delivery space'
-    for native in (False, True):
+
+    def observe(native):
         if base.exists():
             shutil.rmtree(base)
         env = base_env(base, fake_bin)
@@ -941,8 +969,12 @@ def test_warden_delivery_attempt_keys_match_python_float_repr(tmp_path, fake_bin
         finally:
             conn.close()
         calls = [c['argv'][0] for c in map(json.loads, (base / 'calls.jsonl').read_text().splitlines())]
-        observed.append((proc.returncode, normalise(proc.stdout), proc.stderr, attempts, states,
-                         calls.count('send')))
+        return (proc.returncode, normalise(proc.stdout), proc.stderr, attempts, states,
+                calls.count('send'))
+    observed = [frozen(lambda: observe(False), tmp_path,
+                       {'SLEEPER_PID': pid, 'SLEEPER_STARTED': created, 'CODER_INCARNATION': incarnations['Coder'],
+                        'STALE_INCARNATION': created - 50.0})]
+    observed.append(observe(True))
     assert observed[0][3] == {f'1:{incarnations["Tester"]!r}': {}, f'2:{incarnations["Coder"]!r}': {}}
     assert observed[0][4] == [(1, 'stored'), (2, 'stored'), (3, 'stored')], 'failed sends must not mark sent'
     assert observed[0][5] == 2, 'exactly the two current-incarnation rows are attempted'
@@ -954,8 +986,7 @@ def test_warden_delivery_attempt_keys_match_python_float_repr(tmp_path, fake_bin
 
 def test_hidden_slot_entry_point_records_parent_shell(tmp_path):
     """`--slot N --state-dir D` (what an empty container cell runs) writes the same slot record."""
-    observed = []
-    for native in (False, True):
+    def observe(native):
         base = tmp_path / ('native' if native else 'oracle')
         env = base_env(base, None)
         d = Path(env['NIGHTSHIFT_STATE_ROOT']) / 'shifts' / 'Nightshift-shift-slotfix'
@@ -966,8 +997,10 @@ def test_hidden_slot_entry_point_records_parent_shell(tmp_path):
             pytest.skip('native binary has not ported the hidden --slot entry point yet')
         record = (d / 'slots' / '3.json').read_bytes()
         record = re.sub(rb'"started": [0-9.e+]+', b'"started": <wall-clock>', record)
-        observed.append((proc.stdout, proc.stderr, proc.returncode, record,
-                         sorted(p.name for p in (d / 'slots').iterdir())))
+        return (proc.stdout, proc.stderr, proc.returncode, record,
+                sorted(p.name for p in (d / 'slots').iterdir()))
+    observed = [frozen(lambda: observe(False), tmp_path, {'PYTEST_PID': os.getpid()})]
+    observed.append(observe(True))
     assert json.loads(re.sub(rb'<wall-clock>', b'0', observed[0][3]))['cmd_pid'] == os.getpid()
     assert observed[1] == observed[0]
 
@@ -998,15 +1031,71 @@ def state_files(env):
 
 
 def live_floor_snapshot():
-    return {str(p): p.stat().st_mtime_ns for p in LIVE_FLOOR.rglob('*')} if LIVE_FLOOR.exists() else {}
+    bus = LIVE_FLOOR / 'bus.jsonl'
+    cursors = LIVE_FLOOR / 'cursors'
+    return (bus.stat().st_size if bus.exists() else 0,
+            {p.name: p.stat().st_mtime_ns for p in cursors.iterdir()} if cursors.exists() else {})
+
+
+def assert_live_floor_untouched(before, env):
+    """Live crews say and hear on the live floor at any time, so only this fixture's own writes count: no new
+    live bus line carries a message the fixture floor received, and no fixture reader's cursor appeared or moved."""
+    floor = Path(env['NIGHTSHIFT_STATE_ROOT']) / 'floor'
+    size, cursors = before
+    fixture_bus = floor / 'bus.jsonl'
+    said = set()
+    if fixture_bus.exists():
+        for line in fixture_bus.read_bytes().splitlines():
+            row = json.loads(line)
+            said.add((row.get('from'), row.get('to'), row.get('text')))
+    live_bus = LIVE_FLOOR / 'bus.jsonl'
+    if said and live_bus.exists():
+        data = live_bus.read_bytes()
+        for line in (data[size:] if len(data) >= size else data).splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            assert (row.get('from'), row.get('to'), row.get('text')) not in said, \
+                f'a fixture floor message reached the LIVE floor bus: {line!r}'
+    live_now = live_floor_snapshot()[1]
+    for p in (floor / 'cursors').glob('*') if (floor / 'cursors').exists() else ():
+        assert live_now.get(p.name) == cursors.get(p.name), f'a fixture reader cursor moved on the LIVE floor: {p.name}'
+
+
+def test_live_floor_guard_ignores_live_traffic_but_catches_fixture_writes(tmp_path, monkeypatch):
+    """Guard the guard on a stand-in live floor: other crews' lines and cursors pass, the fixture's do not."""
+    live = tmp_path / 'live floor'
+    (live / 'cursors').mkdir(parents=True)
+    (live / 'bus.jsonl').write_bytes(b'{"from": "launcher", "to": "all", "text": "old", "id": 1}\n')
+    write_json(live / 'cursors' / 'other.json', {'id': 1})
+    monkeypatch.setattr(sys.modules[__name__], 'LIVE_FLOOR', live)
+    env = base_env(tmp_path / 'fixture', None)
+    fixture = Path(env['NIGHTSHIFT_STATE_ROOT']) / 'floor'
+    (fixture / 'cursors').mkdir(parents=True)
+    (fixture / 'bus.jsonl').write_bytes(b'{"ts": "x", "from": "Boss", "to": "QA", "text": "hello", "id": 1}\n')
+    write_json(fixture / 'cursors' / 'qa.json', {'id': 1})
+    before = live_floor_snapshot()
+    with (live / 'bus.jsonl').open('ab') as f:
+        f.write(b'{"from": "launcher", "to": "all", "text": "started shift", "id": 2}\n')
+    write_json(live / 'cursors' / 'other.json', {'id': 2})
+    assert_live_floor_untouched(before, env)
+    with (live / 'bus.jsonl').open('ab') as f:
+        f.write(b'{"ts": "y", "from": "Boss", "to": "QA", "text": "hello", "id": 3}\n')
+    with pytest.raises(AssertionError, match='reached the LIVE floor bus'):
+        assert_live_floor_untouched(before, env)
+    before = live_floor_snapshot()
+    write_json(live / 'cursors' / 'qa.json', {'id': 3})
+    with pytest.raises(AssertionError, match='cursor moved'):
+        assert_live_floor_untouched(before, env)
 
 
 def twin(tmp_path, build, steps, stdin=None):
     """Each side in a freshly built identical world at the same path: CLI bytes and state files must match."""
     base = tmp_path / 'twin space'
-    live_before = live_floor_snapshot()
-    observed = []
-    for native in (False, True):
+
+    def observe(native):
+        live_before = live_floor_snapshot()
         if base.exists():
             assert base.resolve().is_relative_to(tmp_path.resolve())
             shutil.rmtree(base, onexc=lambda fn, p, _: (os.chmod(p, 0o700), fn(p)))
@@ -1017,8 +1106,10 @@ def twin(tmp_path, build, steps, stdin=None):
             if native and unported(proc):
                 pytest.skip(f'native binary has not ported {args[0]} yet')
             outputs.append((stable_ts(normalise(proc.stdout)), stable_ts(proc.stderr), proc.returncode))
-        observed.append((outputs, state_files(env)))
-    assert live_floor_snapshot() == live_before, 'a command wrote to the LIVE floor bus under C:/nightshift/floor'
+        assert_live_floor_untouched(live_before, env)
+        return outputs, state_files(env)
+    observed = [frozen(lambda: observe(False), tmp_path, {'PYTEST_PID': os.getpid()})]
+    observed.append(observe(True))
     for i, (actual, expected) in enumerate(zip(observed[1][0], observed[0][0])):
         for label, a, e in zip(('stdout', 'stderr', 'exit'), actual, expected):
             if label == 'exit':
@@ -1133,7 +1224,7 @@ def test_floor_bus_matches_oracle_in_disposable_root(tmp_path, name):
 def test_agy_statusline_matches_oracle(tmp_path, env_extra, stdin):
     env = {**{k: v for k, v in base_env(tmp_path / 'line', None).items()
               if k not in ('NIGHTSHIFT_ROLE', 'NIGHTSHIFT_IDENTITY', 'NIGHTSHIFT_ROLE_COLOUR')}, **env_extra}
-    expected = run(['statusline'], env, native=False, stdin=stdin)
+    expected = frozen(lambda: run(['statusline'], env, native=False, stdin=stdin), tmp_path)
     actual = run(['statusline'], env, native=True, stdin=stdin)
     if unported(actual):
         pytest.skip('native binary has not ported statusline yet')
@@ -1197,6 +1288,7 @@ def pane_world(base, fake_bin, sleeper):
     # An earlier Coder incarnation: the wrapper must carry it into history.
     write_json(d / 'Coder.json', {'pid': DEAD_PID, 'wrapper_pid': DEAD_PID, 'role': 'Coder', 'started': 1000.5,
                                   'name': 'old', 'history': [{'pid': 1, 'started': 10.0}]})
+    env['GOLDEN_VOLATILE'] = json.dumps({'SLEEPER_PID': pid})
     return env, d, repo, record
 
 
@@ -1218,17 +1310,15 @@ def pane_observation(env, d, record, label, slot):
 @pytest.mark.parametrize('label,slot', [('Apprentice', 5), ('Coder', 3), ('Tester-2', 4)])
 def test_hidden_pane_start_runs_same_stub_argv_and_records(tmp_path, fake_bin, sleeper, python_launcher,
                                                            label, slot):
-    observed = []
     base = tmp_path / 'pane space'   # the same paths for both runs, so nothing path-shaped needs normalising
-    for native in (False, True):
+
+    def observe(native):
         if base.exists():
             assert base.resolve().is_relative_to(tmp_path.resolve())
             # Git writes its objects read-only; clear the bit and retry, inside tmp_path only.
             shutil.rmtree(base, onexc=lambda fn, p, _: (os.chmod(p, 0o700), fn(p)))
         env, d, repo, record = pane_world(base, fake_bin, sleeper)
         args = ['--pane', label, '--state-dir', str(d), '--start', '--cwd', str(repo), '--slot', str(slot)]
-        if native and not observed[0][3]:
-            pytest.fail('oracle did not run the stub; refusing to run the native pane (could reach a real CLI)')
         proc = run(args, env, native, timeout=120)
         if native and unported(proc):
             pytest.skip('native binary has not ported --pane yet')
@@ -1236,16 +1326,22 @@ def test_hidden_pane_start_runs_same_stub_argv_and_records(tmp_path, fake_bin, s
         info, slot_record, calls = pane_observation(env, d, record, label, slot)
         text = json.dumps([proc.stdout.decode(), proc.stderr.decode(), info, slot_record, calls],
                           ensure_ascii=False, indent=1)
-        observed.append((text, info, slot_record, calls))
+        return text, info, slot_record, calls
+
+    def oracle_side():
+        text, info, slot_record, calls = observe(False)
+        return normalise(text.encode(), python_launcher, False), info, slot_record, calls
+    observed = [frozen(oracle_side, tmp_path, {'SLEEPER_PID': sleeper[0]})]
+    if not observed[0][3]:
+        pytest.fail('oracle did not run the stub; refusing to run the native pane (could reach a real CLI)')
+    observed.append(observe(True))
     assert [c['exe'] for c in observed[0][3]][:1] in (['agy'], ['codex'], ['copilot'])
     assert observed[0][1]['tool'] == observed[0][3][0]['exe']
     if label == 'Coder':
         assert observed[0][1]['history'][-1]['started'] == 1000.5
         assert observed[0][3][0]['env'].get('CODEX_HOME', '').endswith('.codex-second')
     assert 'CLAUDECODE' not in observed[0][3][0]['env'] and observed[0][3][0]['env']['CLAUDE_AFK_TIMEOUT_MS'] == '9'
-    expected, actual = observed[0][0].encode(), observed[1][0].encode()
-    assert_equal_bytes(normalise(actual, python_launcher, True), normalise(expected, python_launcher, False),
-                       f'--pane {label}')
+    assert_equal_bytes(normalise(observed[1][0].encode(), python_launcher, True), observed[0][0], f'--pane {label}')
 
 
 def test_hidden_pane_start_rejects_label_outside_crew(tmp_path, fake_bin, sleeper):

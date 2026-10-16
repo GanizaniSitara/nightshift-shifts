@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -193,8 +194,96 @@ func landCommand(argv []string) int {
 		if err != nil {
 			return err
 		}
-		_, ancestry, err := lifecycleGit(cwd, "merge-base", "--is-ancestor", targetHead, head)
+		checkTargetBranch := func() error {
+			current, err := lifecycleGitText(repo, "symbolic-ref", "--short", "HEAD")
+			if err != nil {
+				return err
+			}
+			if current != target {
+				return fail("canonical repository must have the target branch checked out")
+			}
+			return nil
+		}
+		checkLocalOverlap := func(changedPaths []string) error {
+			dirtyPaths := map[string]bool{}
+			for _, diffArgs := range [][]string{{"diff", "--name-only", "-z"}, {"diff", "--cached", "--name-only", "-z"}, {"ls-files", "--others", "-z"}} {
+				paths, _, err := lifecycleGit(repo, diffArgs...)
+				if err != nil {
+					return err
+				}
+				for _, p := range strings.Split(paths, "\x00") {
+					if p != "" {
+						dirtyPaths[p] = true
+					}
+				}
+			}
+			overlap := []string{}
+			for _, p := range changedPaths {
+				if p == "" {
+					continue
+				}
+				for d := range dirtyPaths {
+					if p == d || strings.HasPrefix(p, d+"/") || strings.HasPrefix(d, p+"/") {
+						overlap = append(overlap, p)
+						break
+					}
+				}
+			}
+			if len(overlap) > 0 {
+				return fail("landing overlaps local changes: " + strings.Join(overlap, ", "))
+			}
+			return nil
+		}
+		_, ancestry, ancestryErr := lifecycleGit(cwd, "merge-base", "--is-ancestor", targetHead, head)
 		if ancestry == 1 {
+			mergeBase, err := lifecycleGitText(cwd, "merge-base", targetHead, head)
+			if err != nil {
+				return err
+			}
+			shiftDiff, _, err := lifecycleGit(cwd, "diff", "--name-only", "--no-renames", "-z", mergeBase, head)
+			if err != nil {
+				return err
+			}
+			mainDiff, _, err := lifecycleGit(cwd, "diff", "--name-only", "--no-renames", "-z", mergeBase, targetHead)
+			if err != nil {
+				return err
+			}
+			parseFileList := func(s string) []string {
+				list := []string{}
+				for _, p := range strings.Split(s, "\x00") {
+					if p != "" {
+						list = append(list, p)
+					}
+				}
+				sort.Strings(list)
+				return list
+			}
+			shiftFiles := parseFileList(shiftDiff)
+			mainFiles := parseFileList(mainDiff)
+			shiftSet := make(map[string]bool, len(shiftFiles))
+			for _, f := range shiftFiles {
+				shiftSet[f] = true
+			}
+			rebaseOverlap := []string{}
+			for _, f := range mainFiles {
+				if shiftSet[f] {
+					rebaseOverlap = append(rebaseOverlap, f)
+				}
+			}
+			sort.Strings(rebaseOverlap)
+			if rebaseOverlap == nil {
+				rebaseOverlap = []string{}
+			}
+
+			if len(rebaseOverlap) == 0 {
+				if err := checkTargetBranch(); err != nil {
+					return err
+				}
+				if err := checkLocalOverlap(shiftFiles); err != nil {
+					return err
+				}
+			}
+
 			_, rebaseCode, rebaseErr := lifecycleGit(cwd, "rebase", targetHead)
 			if rebaseCode < 0 {
 				return rebaseErr
@@ -215,60 +304,49 @@ func landCommand(argv []string) int {
 				}
 				result = object{{"status", "conflict"}, {"target_head", targetHead}, {"files", stringsToAny(paths)}}
 				code = 4
-			} else {
-				info = setValue(info, "base_sha", targetHead)
-				if err := writeJSONFile(filepath.Join(dir, "worktree.json"), info); err != nil {
-					return err
-				}
-				newHead, err := lifecycleGitText(cwd, "rev-parse", "HEAD")
-				if err != nil {
-					return err
-				}
+				return nil
+			}
+
+			info = setValue(info, "base_sha", targetHead)
+			if err := writeJSONFile(filepath.Join(dir, "worktree.json"), info); err != nil {
+				return err
+			}
+			newHead, err := lifecycleGitText(cwd, "rev-parse", "HEAD")
+			if err != nil {
+				return err
+			}
+			decision := "build_carried"
+			if len(rebaseOverlap) > 0 {
+				decision = "build_required"
+			}
+			busAppend(dir, "land_rebase", object{
+				{"decision", decision},
+				{"old_head", head},
+				{"new_head", newHead},
+				{"target_head", targetHead},
+				{"merge_base", mergeBase},
+				{"shift_files", stringsToAny(shiftFiles)},
+				{"main_files", stringsToAny(mainFiles)},
+				{"overlap", stringsToAny(rebaseOverlap)},
+			})
+			if len(rebaseOverlap) > 0 {
 				result = object{{"status", "rebased_needs_test"}, {"new_base", targetHead}, {"head", newHead}}
 				code = 2
+				return nil
 			}
-			return nil
-		}
-		if err != nil {
+			head = newHead
+		} else if ancestryErr != nil {
 			return errors.New("cannot determine landing ancestry")
 		}
-		current, err := lifecycleGitText(repo, "symbolic-ref", "--short", "HEAD")
-		if err != nil {
+		if err := checkTargetBranch(); err != nil {
 			return err
-		}
-		if current != target {
-			return fail("canonical repository must have the target branch checked out")
 		}
 		changed, _, err := lifecycleGit(repo, "diff", "--name-only", "--no-renames", "-z", targetHead, head)
 		if err != nil {
 			return err
 		}
-		dirtyPaths := map[string]bool{}
-		for _, diffArgs := range [][]string{{"diff", "--name-only", "-z"}, {"diff", "--cached", "--name-only", "-z"}, {"ls-files", "--others", "-z"}} {
-			paths, _, err := lifecycleGit(repo, diffArgs...)
-			if err != nil {
-				return err
-			}
-			for _, p := range strings.Split(paths, "\x00") {
-				if p != "" {
-					dirtyPaths[p] = true
-				}
-			}
-		}
-		overlap := []string{}
-		for _, p := range strings.Split(changed, "\x00") {
-			if p == "" {
-				continue
-			}
-			for d := range dirtyPaths {
-				if p == d || strings.HasPrefix(p, d+"/") || strings.HasPrefix(d, p+"/") {
-					overlap = append(overlap, p)
-					break
-				}
-			}
-		}
-		if len(overlap) > 0 {
-			return fail("landing overlaps local changes: " + strings.Join(overlap, ", "))
+		if err := checkLocalOverlap(strings.Split(changed, "\x00")); err != nil {
+			return err
 		}
 		if _, err = lifecycleGitText(repo, "read-tree", "-m", "-u", targetHead, head); err != nil {
 			return err

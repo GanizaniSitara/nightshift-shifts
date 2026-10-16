@@ -1,0 +1,595 @@
+{
+ "test_go_shift_resolution_errors_and_ambiguity[latest]#0": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       ""
+      ],
+      [
+       "stderr",
+       "no shifts found under <TMP:raw::0>\\not present\\shifts\r\n"
+      ],
+      [
+       "exit",
+       1
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_shift_resolution_errors_and_ambiguity[same]#0": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       ""
+      ],
+      [
+       "stderr",
+       "shift 'same' matches 2 shifts; give the full name\r\n"
+      ],
+      [
+       "exit",
+       1
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_shift_resolution_errors_and_ambiguity[absent]#0": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       ""
+      ],
+      [
+       "stderr",
+       "shift 'absent' matches 0 shifts; give the full name\r\n"
+      ],
+      [
+       "exit",
+       1
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_reads_committed_wal_without_mutating_source#0": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 3,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"TESTED-FAIL first\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 5,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-b\",\r\n      \"body\": \"TESTED-FAIL second\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 11,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 199.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"old-code\",\r\n      \"body\": \"done\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:14 kind:note asg:-\",\r\n      \"to\": \"mesh-junior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": true\r\n    },\r\n    {\r\n      \"id\": 13,\r\n      \"kind\": \"uplift\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": 12,\r\n      \"reason\": \"needs-senior\",\r\n      \"evidence\": \"[{\\\"id\\\": 12}]\",\r\n      \"stale\": true\r\n    }\r\n  ],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"golden\",\r\n    \"total\": 1,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 1,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": []\r\n}\r\n"
+      ],
+      [
+       "stderr",
+       ""
+      ],
+      [
+       "exit",
+       0
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_reads_committed_wal_without_mutating_source#1": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       "[\r\n  {\r\n    \"shift\": \"Nightshift-shift-alpha\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\",\r\n    \"roles\": {\r\n      \"Boss\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-boss\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Junior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-junior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Senior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-senior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"QA\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-qa\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      }\r\n    },\r\n    \"task\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"quote\\\" \\\\path\",\r\n    \"alive\": false,\r\n    \"slots\": [\r\n      {\r\n        \"slot\": 1,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 2,\r\n        \"role\": \"Junior\",\r\n        \"state\": \"starting\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 3,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      }\r\n    ],\r\n    \"stage\": \"tested\",\r\n    \"result\": \"short\",\r\n    \"requires\": \"deployed\",\r\n    \"messages\": {\r\n      \"unsent\": 3,\r\n      \"unacked\": 13\r\n    },\r\n    \"holds\": \"C:\\\\locked folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-beta\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\legacy space\\\\shifts\\\\Nightshift-shift-beta\",\r\n    \"roles\": {},\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"stage\": null,\r\n    \"result\": \"invalid\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 0,\r\n      \"unacked\": 0\r\n    },\r\n    \"holds\": \"C:\\\\old folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-empty\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\state space\\\\shifts\\\\Nightshift-shift-empty\",\r\n    \"roles\": {\r\n      \"Boss\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-boss\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      }\r\n    },\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"slots\": [\r\n      {\r\n        \"slot\": 1,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 2,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 3,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      }\r\n    ],\r\n    \"stage\": null,\r\n    \"result\": \"none\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 3,\r\n      \"unacked\": 13\r\n    },\r\n    \"holds\": null\r\n  }\r\n]\r\n"
+      ],
+      [
+       "stderr",
+       ""
+      ],
+      [
+       "exit",
+       0
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_follow_reads_appended_complete_lines_and_stops_at_down[False]#0": {
+  "dict": [
+   [
+    "value",
+    {
+     "tuple": [
+      {
+       "bytes": "#1  msg None->None None asg:- msg:None  partial\r\n#2  down stopped:- lock_released:-\r\n"
+      },
+      {
+       "bytes": "no bus yet: <TMP:raw::0>\\state space\\shifts\\Nightshift-shift-empty\\bus.jsonl\r\n"
+      },
+      0
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_follow_reads_appended_complete_lines_and_stops_at_down[True]#0": {
+  "dict": [
+   [
+    "value",
+    {
+     "tuple": [
+      {
+       "bytes": "{\"seq\":1,\"event\":\"msg\",\"body\":\"partial\"}\r\n{\"seq\":2,\"event\":\"down\"}\r\n"
+      },
+      {
+       "bytes": "no bus yet: <TMP:raw::0>\\state space\\shifts\\Nightshift-shift-empty\\bus.jsonl\r\n"
+      },
+      0
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_standalone_from_foreign_cwd_without_python_on_path#0": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       "{\r\n  \"C:\\\\z path\\\\\\u03a9.py\": {\r\n    \"role\": \"Junior\",\r\n    \"time\": \"first\"\r\n  },\r\n  \"C:\\\\a\\\\\\\".py\": {\r\n    \"role\": \"QA\",\r\n    \"time\": \"second\"\r\n  }\r\n}\r\n"
+      ],
+      [
+       "stderr",
+       ""
+      ],
+      [
+       "exit",
+       0
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_standalone_from_foreign_cwd_without_python_on_path#1": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 3,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"TESTED-FAIL first\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 5,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-b\",\r\n      \"body\": \"TESTED-FAIL second\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 11,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 199.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"old-code\",\r\n      \"body\": \"done\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:14 kind:note asg:-\",\r\n      \"to\": \"session-junior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    },\r\n    {\r\n      \"id\": 13,\r\n      \"kind\": \"uplift\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": 12,\r\n      \"reason\": \"needs-senior\",\r\n      \"evidence\": \"[{\\\"id\\\": 12}]\",\r\n      \"stale\": false\r\n    }\r\n  ],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"golden\",\r\n    \"total\": 1,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 1,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": [\r\n    {\r\n      \"asg\": \"code-a\",\r\n      \"source_dispatch_id\": 1,\r\n      \"reasons\": [\r\n        \"needs-senior\",\r\n        \"tester-failed-twice\",\r\n        \"timeout\"\r\n      ]\r\n    }\r\n  ]\r\n}\r\n"
+      ],
+      [
+       "stderr",
+       ""
+      ],
+      [
+       "exit",
+       0
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_standalone_from_foreign_cwd_without_python_on_path#2": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       "{\"seq\": 1, \"ts\": \"2026-10-16T01:02:03\", \"event\": \"start\", \"ticket\": null, \"crew\": \"golden\", \"members\": [\"Boss\", \"QA\"], \"cwd\": \"C:\\\\a b\"}\r\n{\"seq\": 2, \"ts\": \"2026-10-16T01:02:04\", \"event\": \"msg\", \"id\": 8, \"sender\": \"Boss\", \"recipient\": \"Junior\", \"kind\": \"assignment\", \"asg\": null, \"body\": \"Café 🚀\\n tab\\t spaced words \\\" \\\\ end\"}\r\n{\"seq\": 3, \"ts\": \"2026-10-16T01:02:05\", \"event\": \"ack\", \"id\": 8, \"by\": \"QA\", \"outcome\": \"bad\", \"reason\": \"why Ω\"}\r\n{\"seq\": 4, \"ts\": \"2026-10-16T01:02:06\", \"event\": \"sent\", \"id\": 8}\r\n{\"seq\": 5, \"ts\": \"2026-10-16T01:02:07\", \"event\": \"spawn\", \"role\": \"QA\", \"slot\": 2, \"tool\": \"codex\", \"identity\": \"mesh-qa\"}\r\n{\"seq\": 6, \"ts\": \"2026-10-16T01:02:08\", \"event\": \"custom\", \"z\": {\"snow\": \"雪\", \"ok\": true}, \"a\": [null, 1.0, \"<>&\"]}\r\n{\"seq\": 7, \"ts\": \"2026-10-16T01:02:09\", \"event\": \"down\", \"stopped\": [\"Junior\"], \"lock_released\": []}\r\nnot-json\r\n[]\r\n{}\r\n�\r\n"
+      ],
+      [
+       "stderr",
+       ""
+      ],
+      [
+       "exit",
+       0
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_standalone_from_foreign_cwd_without_python_on_path#3": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       "[\r\n  {\r\n    \"shift\": \"Nightshift-shift-alpha\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\",\r\n    \"roles\": {\r\n      \"Boss\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-boss\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Junior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-junior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Senior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-senior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"QA\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-qa\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      }\r\n    },\r\n    \"task\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"quote\\\" \\\\path\",\r\n    \"alive\": false,\r\n    \"slots\": [\r\n      {\r\n        \"slot\": 1,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 2,\r\n        \"role\": \"Junior\",\r\n        \"state\": \"starting\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 3,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      }\r\n    ],\r\n    \"stage\": \"tested\",\r\n    \"result\": \"short\",\r\n    \"requires\": \"deployed\",\r\n    \"messages\": {\r\n      \"unsent\": 3,\r\n      \"unacked\": 13\r\n    },\r\n    \"holds\": \"C:\\\\locked folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-beta\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\legacy space\\\\shifts\\\\Nightshift-shift-beta\",\r\n    \"roles\": {},\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"stage\": null,\r\n    \"result\": \"invalid\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 0,\r\n      \"unacked\": 0\r\n    },\r\n    \"holds\": \"C:\\\\old folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-empty\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\state space\\\\shifts\\\\Nightshift-shift-empty\",\r\n    \"roles\": {},\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"stage\": null,\r\n    \"result\": \"none\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 0,\r\n      \"unacked\": 0\r\n    },\r\n    \"holds\": null\r\n  }\r\n]\r\n"
+      ],
+      [
+       "stderr",
+       ""
+      ],
+      [
+       "exit",
+       0
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_log_respects_python_console_encoding_replacement#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "hex": "23312030313a30323a3033207374617274207469636b65743a2d20637265773a676f6c64656e206d656d626572733a426f73732c5141206377643a433a5c6120620d0a23322030313a30323a3034206d736720426f73732d3e4a756e696f722061737369676e6d656e74206173673a2d206d73673a382020436166e9203f207461622073706163656420776f7264732022205c20656e640d0a23332030313a30323a30352061636b206d73673a382062792051413a206261642028776879203f290d0a23342030313a30323a30362073656e74206d73673a380d0a23352030313a30323a303720737061776e20514120736c6f743a3220746f6f6c3a636f646578206d6573682d71610d0a23362030313a30323a303820637573746f6d207b227a223a207b22736e6f77223a20223f222c20226f6b223a20747275657d2c202261223a205b6e756c6c2c20312e302c20223c3e26225d7d0d0a23372030313a30323a303920646f776e2073746f707065643a4a756e696f72206c6f636b5f72656c65617365643a2d0d0a3f206e6f742d6a736f6e0d0a3f205b5d0d0a3f207b7d0d0a3f203f0d0a"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_mailbox_waits_for_python_mutex_before_copying_live_wal[False]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 3,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"committed while mutex held\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 5,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-b\",\r\n      \"body\": \"TESTED-FAIL second\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 11,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 199.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"old-code\",\r\n      \"body\": \"done\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:14 kind:note asg:-\",\r\n      \"to\": \"mesh-junior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": true\r\n    },\r\n    {\r\n      \"id\": 13,\r\n      \"kind\": \"uplift\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": 12,\r\n      \"reason\": \"needs-senior\",\r\n      \"evidence\": \"[{\\\"id\\\": 12}]\",\r\n      \"stale\": true\r\n    }\r\n  ],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"golden\",\r\n    \"total\": 1,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 1,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": []\r\n}\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_mailbox_waits_for_python_mutex_before_copying_live_wal[True]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 3,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"committed while mutex held\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 5,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-b\",\r\n      \"body\": \"TESTED-FAIL second\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 11,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 199.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"old-code\",\r\n      \"body\": \"done\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:14 kind:note asg:-\",\r\n      \"to\": \"mesh-junior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": true\r\n    },\r\n    {\r\n      \"id\": 13,\r\n      \"kind\": \"uplift\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": 12,\r\n      \"reason\": \"needs-senior\",\r\n      \"evidence\": \"[{\\\"id\\\": 12}]\",\r\n      \"stale\": true\r\n    }\r\n  ],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"golden\",\r\n    \"total\": 1,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 1,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": []\r\n}\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_status_rejects_python_image_and_recognizes_live_cmd_slots#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "[\r\n  {\r\n    \"shift\": \"Nightshift-shift-alpha\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\",\r\n    \"roles\": {\r\n      \"Boss\": {\r\n        \"pid\": <PYTEST_PID>,\r\n        \"wrapper_pid\": null,\r\n        \"name\": null,\r\n        \"cwd\": null,\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Junior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-junior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Senior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-senior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"QA\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-qa\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      }\r\n    },\r\n    \"task\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"quote\\\" \\\\path\",\r\n    \"alive\": false,\r\n    \"slots\": [\r\n      {\r\n        \"slot\": 1,\r\n        \"role\": null,\r\n        \"state\": \"empty\",\r\n        \"reusable\": true\r\n      },\r\n      {\r\n        \"slot\": 2,\r\n        \"role\": \"Junior\",\r\n        \"state\": \"dead\",\r\n        \"reusable\": true\r\n      },\r\n      {\r\n        \"slot\": 3,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      }\r\n    ],\r\n    \"stage\": \"tested\",\r\n    \"result\": \"short\",\r\n    \"requires\": \"deployed\",\r\n    \"messages\": {\r\n      \"unsent\": 3,\r\n      \"unacked\": 13\r\n    },\r\n    \"holds\": \"C:\\\\locked folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-beta\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\legacy space\\\\shifts\\\\Nightshift-shift-beta\",\r\n    \"roles\": {},\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"stage\": null,\r\n    \"result\": \"invalid\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 0,\r\n      \"unacked\": 0\r\n    },\r\n    \"holds\": \"C:\\\\old folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-empty\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\state space\\\\shifts\\\\Nightshift-shift-empty\",\r\n    \"roles\": {},\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"stage\": null,\r\n    \"result\": \"none\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 0,\r\n      \"unacked\": 0\r\n    },\r\n    \"holds\": null\r\n  }\r\n]\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_status_rejects_existing_codex_with_stale_start_epoch#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "[\r\n  {\r\n    \"shift\": \"Nightshift-shift-alpha\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\",\r\n    \"roles\": {\r\n      \"Boss\": {\r\n        \"pid\": <CODEX_PID>,\r\n        \"wrapper_pid\": null,\r\n        \"name\": null,\r\n        \"cwd\": null,\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Junior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-junior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Senior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-senior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"QA\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-qa\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      }\r\n    },\r\n    \"task\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"quote\\\" \\\\path\",\r\n    \"alive\": false,\r\n    \"slots\": [\r\n      {\r\n        \"slot\": 1,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 2,\r\n        \"role\": \"Junior\",\r\n        \"state\": \"starting\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 3,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      }\r\n    ],\r\n    \"stage\": \"tested\",\r\n    \"result\": \"short\",\r\n    \"requires\": \"deployed\",\r\n    \"messages\": {\r\n      \"unsent\": 3,\r\n      \"unacked\": 13\r\n    },\r\n    \"holds\": \"C:\\\\locked folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-beta\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\legacy space\\\\shifts\\\\Nightshift-shift-beta\",\r\n    \"roles\": {},\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"stage\": null,\r\n    \"result\": \"invalid\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 0,\r\n      \"unacked\": 0\r\n    },\r\n    \"holds\": \"C:\\\\old folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-empty\",\r\n    \"state_dir\": \"<TMP:raw::1>\\\\state space\\\\shifts\\\\Nightshift-shift-empty\",\r\n    \"roles\": {},\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"stage\": null,\r\n    \"result\": \"none\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 0,\r\n      \"unacked\": 0\r\n    },\r\n    \"holds\": null\r\n  }\r\n]\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_uplift_failures_obey_ownership_and_distinct_verification_boundaries[same-owner-retry-reasons0]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 3,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"TESTED-FAIL first\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 5,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-b\",\r\n      \"body\": \"TESTED-FAIL second\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 11,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 199.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"old-code\",\r\n      \"body\": \"done\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:14 kind:note asg:-\",\r\n      \"to\": \"session-junior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 15,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"retry\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    },\r\n    {\r\n      \"id\": 13,\r\n      \"kind\": \"uplift\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": 12,\r\n      \"reason\": \"needs-senior\",\r\n      \"evidence\": \"[{\\\"id\\\": 12}]\",\r\n      \"stale\": false\r\n    }\r\n  ],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"golden\",\r\n    \"total\": 1,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 1,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": [\r\n    {\r\n      \"asg\": \"code-a\",\r\n      \"source_dispatch_id\": 15,\r\n      \"reasons\": [\r\n        \"tester-failed-twice\"\r\n      ]\r\n    }\r\n  ]\r\n}\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_uplift_failures_obey_ownership_and_distinct_verification_boundaries[handback-reasons1]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 3,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"TESTED-FAIL first\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 5,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-b\",\r\n      \"body\": \"TESTED-FAIL second\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 11,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 199.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"old-code\",\r\n      \"body\": \"done\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:14 kind:note asg:-\",\r\n      \"to\": \"session-junior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 16,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"retry\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    },\r\n    {\r\n      \"id\": 13,\r\n      \"kind\": \"uplift\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": 12,\r\n      \"reason\": \"needs-senior\",\r\n      \"evidence\": \"[{\\\"id\\\": 12}]\",\r\n      \"stale\": false\r\n    }\r\n  ],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"golden\",\r\n    \"total\": 1,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 1,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": []\r\n}\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_uplift_failures_obey_ownership_and_distinct_verification_boundaries[new-incarnation-reasons2]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 3,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"TESTED-FAIL first\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 5,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-b\",\r\n      \"body\": \"TESTED-FAIL second\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 11,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 199.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"old-code\",\r\n      \"body\": \"done\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:14 kind:note asg:-\",\r\n      \"to\": \"session-junior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 15,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 201.0,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"retry\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    },\r\n    {\r\n      \"id\": 13,\r\n      \"kind\": \"uplift\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": 12,\r\n      \"reason\": \"needs-senior\",\r\n      \"evidence\": \"[{\\\"id\\\": 12}]\",\r\n      \"stale\": false\r\n    }\r\n  ],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"golden\",\r\n    \"total\": 1,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 1,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": []\r\n}\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_uplift_failures_obey_ownership_and_distinct_verification_boundaries[duplicate-verdict-reasons3]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 3,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"TESTED-FAIL first\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 5,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"TESTED-FAIL second\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 11,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 199.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"old-code\",\r\n      \"body\": \"done\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:14 kind:note asg:-\",\r\n      \"to\": \"session-junior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 15,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"retry\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    },\r\n    {\r\n      \"id\": 4,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"QA\",\r\n      \"recipient_incarnation\": 400.0,\r\n      \"asg\": \"verify-b\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": \"code-a\",\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    },\r\n    {\r\n      \"id\": 13,\r\n      \"kind\": \"uplift\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": 12,\r\n      \"reason\": \"needs-senior\",\r\n      \"evidence\": \"[{\\\"id\\\": 12}]\",\r\n      \"stale\": false\r\n    }\r\n  ],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"golden\",\r\n    \"total\": 1,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 1,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": []\r\n}\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_sqlite_read_errors_cannot_be_silent_empty_mailboxes[args0-not-sqlite]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": ""
+     },
+     {
+      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4116, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3201, in inbox\r\n    print(json.dumps(inbox_view(state_dir, resolve_role(state_dir, args.role)), indent=2))\r\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3163, in inbox_view\r\n    dict(r) for r in conn.execute(\r\n                     ^^^^^^^^^^^^^\r\nsqlite3.DatabaseError: file is not a database\r\n"
+     },
+     1
+    ]
+   ]
+  ]
+ },
+ "test_go_sqlite_read_errors_cannot_be_silent_empty_mailboxes[args0-missing-messages-table]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": ""
+     },
+     {
+      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4116, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3201, in inbox\r\n    print(json.dumps(inbox_view(state_dir, resolve_role(state_dir, args.role)), indent=2))\r\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3163, in inbox_view\r\n    dict(r) for r in conn.execute(\r\n                     ^^^^^^^^^^^^^\r\nsqlite3.OperationalError: no such table: messages\r\n"
+     },
+     1
+    ]
+   ]
+  ]
+ },
+ "test_go_sqlite_read_errors_cannot_be_silent_empty_mailboxes[args1-not-sqlite]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": ""
+     },
+     {
+      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4116, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1915, in status\r\n    records = [shift_record(d) for d in shift_dirs()]\r\n               ^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1874, in shift_record\r\n    pending = unacked_messages(state_dir)\r\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3249, in unacked_messages\r\n    return [dict(r) for r in conn.execute(\"SELECT * FROM messages WHERE state IN ('stored', 'sent') ORDER BY id\")]\r\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\nsqlite3.DatabaseError: file is not a database\r\n"
+     },
+     1
+    ]
+   ]
+  ]
+ },
+ "test_go_sqlite_read_errors_cannot_be_silent_empty_mailboxes[args1-missing-messages-table]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": ""
+     },
+     {
+      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4116, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1915, in status\r\n    records = [shift_record(d) for d in shift_dirs()]\r\n               ^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1874, in shift_record\r\n    pending = unacked_messages(state_dir)\r\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3249, in unacked_messages\r\n    return [dict(r) for r in conn.execute(\"SELECT * FROM messages WHERE state IN ('stored', 'sent') ORDER BY id\")]\r\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\nsqlite3.OperationalError: no such table: messages\r\n"
+     },
+     1
+    ]
+   ]
+  ]
+ },
+ "test_go_cli_parser_matches_required_arguments_terminator_and_abbreviations[args0]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": ""
+     },
+     {
+      "bytes": "usage: nightshift inbox [-h] shift role\r\nnightshift inbox: error: the following arguments are required: shift, role\r\n"
+     },
+     2
+    ]
+   ]
+  ]
+ },
+ "test_go_cli_parser_matches_required_arguments_terminator_and_abbreviations[args1]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "{\r\n  \"C:\\\\z path\\\\\\u03a9.py\": {\r\n    \"role\": \"Junior\",\r\n    \"time\": \"first\"\r\n  },\r\n  \"C:\\\\a\\\\\\\".py\": {\r\n    \"role\": \"QA\",\r\n    \"time\": \"second\"\r\n  }\r\n}\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_cli_parser_matches_required_arguments_terminator_and_abbreviations[args2]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": ""
+     },
+     {
+      "bytes": "usage: nightshift inbox [-h] shift role\r\nnightshift inbox: error: the following arguments are required: role\r\n"
+     },
+     2
+    ]
+   ]
+  ]
+ },
+ "test_go_cli_parser_matches_required_arguments_terminator_and_abbreviations[args3]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "#4 01:02:06 sent msg:8\r\n#5 01:02:07 spawn QA slot:2 tool:codex mesh-qa\r\n#6 01:02:08 custom {\"z\": {\"snow\": \"雪\", \"ok\": true}, \"a\": [null, 1.0, \"<>&\"]}\r\n#7 01:02:09 down stopped:Junior lock_released:-\r\n? not-json\r\n? []\r\n? {}\r\n? �\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_log_since_matches_python_integer_type_filter[2.5]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": "{\"seq\":2.5,\"event\":\"custom\"}\r\n"
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_log_since_matches_python_integer_type_filter[true]#0": {
+  "dict": [
+   [
+    "run",
+    [
+     {
+      "bytes": ""
+     },
+     {
+      "bytes": ""
+     },
+     0
+    ]
+   ]
+  ]
+ },
+ "test_go_claims_matches_python_duplicate_keys_and_float_serialization[{\"duplicate\":{\"role\":\"old\"},\"duplicate\":{\"role\":\"new\"}}]#0": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       "{\r\n  \"duplicate\": {\r\n    \"role\": \"new\"\r\n  }\r\n}\r\n"
+      ],
+      [
+       "stderr",
+       ""
+      ],
+      [
+       "exit",
+       0
+      ]
+     ]
+    }
+   ]
+  ]
+ },
+ "test_go_claims_matches_python_duplicate_keys_and_float_serialization[{\"exponent\":1e0}]#0": {
+  "dict": [
+   [
+    "value",
+    {
+     "dict": [
+      [
+       "stdout",
+       "{\r\n  \"exponent\": 1.0\r\n}\r\n"
+      ],
+      [
+       "stderr",
+       ""
+      ],
+      [
+       "exit",
+       0
+      ]
+     ]
+    }
+   ]
+  ]
+ }
+}

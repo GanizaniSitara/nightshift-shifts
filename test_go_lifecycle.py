@@ -1,6 +1,7 @@
-"""Lifecycle parity against Python, confined to disposable roots and Git repos.
+"""Lifecycle parity against the frozen Python oracle, confined to disposable roots and Git repos.
 
-The oracle and native binary receive the SAME restored paths and deterministic
+The oracle's outputs are recorded goldens (testdata/record_goldens.py, NGH-055); while recording, the
+oracle and native binary receive the SAME restored paths and deterministic
 Git identities/dates. Compare CLI bytes, state-file bytes, and logical Git state;
 only freshly generated wall-clock timestamps are normalized. Never put a real
 crew PID or terminal HWND in a teardown fixture. The codex.exe fixture below is
@@ -23,7 +24,7 @@ import time
 
 import pytest
 
-from test_go_readonly import ORACLE_BOOT, REPO, oracle, snapshot, write_json
+from test_go_readonly import ORACLE_BOOT, REPO, frozen, oracle, require_recording, snapshot, write_json
 from test_go_write_commands import stable_bytes, world_state
 
 
@@ -32,7 +33,6 @@ DEAD_PID = 2147483000
 INVALID_HWND = 0x7FFFFFFF
 BOOT = ORACLE_BOOT.replace('n.main()', "n.FLOOR_FILE = n.SOLID_DIR / 'floor.json'\nn.main()")
 NOW = re.compile(rb'202[0-9]-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(?::[0-9]{2})?')
-ORACLE_ONLY = os.environ.get('NIGHTSHIFT_LIFECYCLE_ORACLE_ONLY') == '1'
 
 
 def stable(data):
@@ -47,6 +47,8 @@ def exe_path():
 
 
 def cli(args, env, native, timeout=45):
+    if not native:
+        require_recording()
     command = [str(exe_path()), *args] if native else [sys.executable, '-c', BOOT, *args]
     assert not native or exe_path().is_file(), 'compile native binary before lifecycle verification'
     return subprocess.run(command, cwd=REPO, env={**os.environ, **env},
@@ -152,9 +154,10 @@ def observed_state(base, env, repo, work):
 
 
 def parity(tmp_path, prepare, commands, codes, inspect=None, worktree=True):
+    """The same restored fixture path for both sides; the oracle side is a frozen golden (NGH-055)."""
     base = tmp_path / 'private lifecycle fixture'
-    observed = []
-    for native in ([False] if ORACLE_ONLY else [False, True]):
+
+    def observe(native):
         if base.exists():
             assert base.resolve().is_relative_to(tmp_path.resolve())
             remove_fixture(base, tmp_path)
@@ -168,19 +171,21 @@ def parity(tmp_path, prepare, commands, codes, inspect=None, worktree=True):
         assert [p[2] for p in actual] == codes, actual
         if inspect:
             inspect(env, d, repo, work, info, actual)
-        observed.append((actual, observed_state(base, env, repo, work)))
-    if not ORACLE_ONLY:
-        for i, (actual, expected) in enumerate(zip(observed[1][0], observed[0][0])):
-            for label, a, e in zip(('stdout', 'stderr', 'exit'), actual, expected):
-                assert_equal_bytes(a, e, f'command {i} {label}')
-        for root in observed[0][1][0]:
-            actual_files, actual_rows = observed[1][1][0][root]
-            expected_files, expected_rows = observed[0][1][0][root]
-            assert actual_files.keys() == expected_files.keys()
-            for name in expected_files:
-                assert_equal_bytes(actual_files[name], expected_files[name], f'{root}/{name}')
-            assert actual_rows == expected_rows
-        assert observed[1][1][1] == observed[0][1][1]
+        return actual, observed_state(base, env, repo, work)
+
+    observed = [frozen(lambda: observe(False), tmp_path, {'PYTEST_PID': os.getpid()})]
+    observed.append(observe(True))
+    for i, (actual, expected) in enumerate(zip(observed[1][0], observed[0][0])):
+        for label, a, e in zip(('stdout', 'stderr', 'exit'), actual, expected):
+            assert_equal_bytes(a, e, f'command {i} {label}')
+    for root in observed[0][1][0]:
+        actual_files, actual_rows = observed[1][1][0][root]
+        expected_files, expected_rows = observed[0][1][0][root]
+        assert actual_files.keys() == expected_files.keys()
+        for name in expected_files:
+            assert_equal_bytes(actual_files[name], expected_files[name], f'{root}/{name}')
+        assert actual_rows == expected_rows
+    assert observed[1][1][1] == observed[0][1][1]
     return observed[0]
 
 
@@ -216,15 +221,14 @@ def remove_fixture(path, root):
     ['cleaner', '--help'], ['cleaner', '--bogus'], ['cleaner', 'fixture'],
 ])
 def test_go_lifecycle_parser_bytes(tmp_path, command):
-    # Codes as well as diagnostic/help bytes are taken from the unchanged oracle.
+    # Codes as well as diagnostic/help bytes are taken from the frozen oracle.
     base = tmp_path / 'parser'
     env, d, repo, work, info = world(base, False)
-    expected = cli(command, env, False)
+    expected = frozen(lambda: cli(command, env, False), tmp_path)
     before = snapshot(base)
-    if not ORACLE_ONLY:
-        actual = cli(command, env, True)
-        assert (actual.stdout, actual.stderr, actual.returncode) == (
-            expected.stdout, expected.stderr, expected.returncode)
+    actual = cli(command, env, True)
+    assert (actual.stdout, actual.stderr, actual.returncode) == (
+        expected.stdout, expected.stderr, expected.returncode)
     assert snapshot(base) == before
 
 
@@ -348,19 +352,165 @@ def test_go_land_conflict_abort_or_keep(tmp_path, keep):
     parity(tmp_path, prepare, [['land', 'fixture', *(['--keep-conflicts'] if keep else [])]], [4], inspect)
 
 
-def test_go_land_rebase_requires_new_build_then_lands(tmp_path):
-    def prepare(env, d, repo, work, info):
-        commit(work, 'shared.txt', 'crew rebase\n')
-        commit(repo, 'canonical.txt', 'advanced target\n')
-        evidence(d, work)
-    def commands(env, d, repo, work, info):
-        return [['land', 'fixture'], ['land', 'fixture'],
-                ['build', 'fixture', '--cmd', 'echo retested'], ['land', 'fixture']]
-    def inspect(env, d, repo, work, info, actual):
-        assert json.loads(actual[0][0])['status'] == 'rebased_needs_test'
-        assert b'passed nightshift build' in actual[1][1]
-        assert json.loads(actual[3][0])['status'] == 'landed'
-    parity(tmp_path, prepare, commands, [2, 2, 0, 0], inspect)
+# NGH-055 land rule (Go only, no oracle): a clean rebase onto a moved target carries the passed build
+# when main's new commits touch no file the shift changed, and demands a fresh build when they overlap.
+LAND_REBASE_KEYS = ['decision', 'old_head', 'new_head', 'target_head', 'merge_base',
+                    'shift_files', 'main_files', 'overlap']
+
+
+def bus_events(d):
+    return [json.loads(line) for line in (d / 'bus.jsonl').read_bytes().splitlines()]
+
+
+def land_rebase_payload(event):
+    assert list(event)[:3] == ['seq', 'ts', 'event'] and event['event'] == 'land_rebase', event
+    payload = {k: v for k, v in event.items() if k not in ('seq', 'ts', 'event')}
+    assert list(payload) == LAND_REBASE_KEYS, 'land_rebase keys and their order are the contract'
+    return payload
+
+
+def test_go_land_disjoint_rebase_carries_the_build_and_lands_in_one_call(tmp_path):
+    env, d, repo, work, info = world(tmp_path)
+    commit(work, 'shared.txt', 'crew rebase\n')
+    old_head = commit(work, 'zeta new.txt', 'crew only\n')
+    commit(repo, 'canonical.txt', 'advanced target\n')
+    target_head = commit(repo, 'alpha.txt', 'main only\n')
+    evidence(d, work)
+    proc = cli(['land', 'fixture'], env, True)
+    assert proc.returncode == 0 and not proc.stderr, (proc.stdout, proc.stderr)
+    new_head = git(work, 'rev-parse', 'HEAD')
+    assert new_head != old_head and git(work, 'rev-parse', 'HEAD~2') == target_head
+    assert json.loads(proc.stdout) == {'status': 'landed', 'sha': new_head}
+    assert git(repo, 'rev-parse', 'main') == new_head
+    assert git(repo, 'status', '--porcelain=v1', '--untracked-files=all') == ''
+    for name, content in [('shared.txt', b'crew rebase\n'), ('zeta new.txt', b'crew only\n'),
+                          ('canonical.txt', b'advanced target\n'), ('alpha.txt', b'main only\n')]:
+        assert (repo / name).read_bytes() == content, name
+    landed = json.loads((d / 'landed.json').read_bytes())
+    assert list(landed) == ['repo_root', 'target_branch', 'base_sha', 'landed_sha', 'landed_at']
+    assert (landed['landed_sha'], landed['base_sha'], landed['target_branch']) == (new_head, target_head, 'main')
+    assert json.loads((d / 'worktree.json').read_bytes())['base_sha'] == target_head
+    events = bus_events(d)
+    assert [e['event'] for e in events] == ['land_rebase', 'land']
+    assert land_rebase_payload(events[0]) == {
+        'decision': 'build_carried', 'old_head': old_head, 'new_head': new_head, 'target_head': target_head,
+        'merge_base': info['base_sha'], 'shift_files': ['shared.txt', 'zeta new.txt'],
+        'main_files': ['alpha.txt', 'canonical.txt'], 'overlap': []}
+    assert events[1]['landed_sha'] == new_head
+    assert not repo_lock(env, repo).exists()
+
+
+def test_go_land_overlapping_clean_rebase_requires_a_fresh_build_then_lands(tmp_path):
+    env, d, repo, work, info = world(tmp_path)
+    # Both sides edit one file in different hunks: the rebase is clean, but the paths overlap.
+    lines = [f'line {i}\n' for i in range(1, 11)]
+    merge_base = commit(work, 'multi.txt', ''.join(lines), 'multi-line base')
+    git(repo, 'merge', '-q', '--ff-only', merge_base)
+    commit(work, 'multi.txt', ''.join(['crew first\n'] + lines[1:]))
+    old_head = commit(work, 'zeta.txt', 'crew only\n')
+    commit(repo, 'multi.txt', ''.join(lines[:-1] + ['main last\n']))
+    target_head = commit(repo, 'alpha.txt', 'main only\n')
+    evidence(d, work)
+    first = cli(['land', 'fixture'], env, True)
+    assert first.returncode == 2, (first.stdout, first.stderr)
+    new_head = git(work, 'rev-parse', 'HEAD')
+    assert new_head != old_head and git(work, 'rev-parse', 'HEAD~2') == target_head
+    assert json.loads(first.stdout) == {'status': 'rebased_needs_test', 'new_base': target_head, 'head': new_head}
+    assert git(repo, 'rev-parse', 'main') == target_head and not (d / 'landed.json').exists()
+    assert (work / 'multi.txt').read_bytes() == ''.join(['crew first\n'] + lines[1:-1] + ['main last\n']).encode()
+    events = bus_events(d)
+    assert [e['event'] for e in events] == ['land_rebase']
+    assert land_rebase_payload(events[0]) == {
+        'decision': 'build_required', 'old_head': old_head, 'new_head': new_head, 'target_head': target_head,
+        'merge_base': merge_base, 'shift_files': ['multi.txt', 'zeta.txt'],
+        'main_files': ['alpha.txt', 'multi.txt'], 'overlap': ['multi.txt']}
+    assert not repo_lock(env, repo).exists()
+    # The pre-rebase build no longer counts; a build of the rebased head lands without another rebase.
+    second = cli(['land', 'fixture'], env, True)
+    assert second.returncode == 2 and b'passed nightshift build' in second.stderr, (second.stdout, second.stderr)
+    built = cli(['build', 'fixture', '--cmd', 'echo retested'], env, True)
+    assert built.returncode == 0 and json.loads(built.stdout)['head'] == new_head, (built.stdout, built.stderr)
+    third = cli(['land', 'fixture'], env, True)
+    assert third.returncode == 0 and not third.stderr, (third.stdout, third.stderr)
+    assert json.loads(third.stdout) == {'status': 'landed', 'sha': new_head}
+    assert git(repo, 'rev-parse', 'main') == new_head
+    assert [e['event'] for e in bus_events(d)] == ['land_rebase', 'land']
+
+
+@pytest.mark.parametrize('brief,tick', [('tester.md', ''), ('tester-cli.md', '`')])
+def test_tester_briefs_run_targeted_tests_while_working_and_one_full_build_on_the_final_commit(brief, tick):
+    """NGH-055: the briefs embedded in the binary say targeted tests while working, one full build at the end."""
+    text = ' '.join((REPO / 'briefs' / brief).read_text(encoding='utf-8').split())
+    for phrase in ['While work is in progress, run only the tests for the changed area',
+                   f'(named test functions or {tick}-k{tick} expressions)',
+                   'say in the report which tests were run',
+                   'run the full configured build (`{nightshift} build {shift} --cwd <repo>` '
+                   f'with no {tick}--cmd{tick}) once, on the final clean commit before land',
+                   f'a fresh full build is needed only when land reports {tick}build_required{tick}',
+                   'which tests were run; the test counts']:
+        assert phrase in text, (brief, phrase)
+    # The old rule (the whole suite on every verification) must be gone, not merely outvoted.
+    assert 'then run the test suite through' not in text
+
+
+def test_go_land_disjoint_rebase_refuses_before_rebasing_when_target_is_not_checked_out(tmp_path):
+    env, d, repo, work, info = world(tmp_path)
+    commit(work, 'shared.txt', 'crew rebase\n')
+    old_head = git(work, 'rev-parse', 'HEAD')
+    target_head = commit(repo, 'canonical.txt', 'advanced target\n')
+    git(repo, 'checkout', '-qb', 'elsewhere')
+    evidence(d, work)
+    worktree_before = (d / 'worktree.json').read_bytes()
+    proc = cli(['land', 'fixture'], env, True)
+    assert proc.returncode == 2 and proc.stdout == b'', (proc.stdout, proc.stderr)
+    assert b'canonical repository must have the target branch checked out' in proc.stderr
+    # Refused before the rebase: the shift branch and its build evidence still match.
+    assert git(work, 'rev-parse', 'HEAD') == old_head
+    assert git(work, 'rev-parse', 'shift/lifecycle') == old_head
+    assert git(repo, 'rev-parse', 'main') == target_head
+    assert (d / 'worktree.json').read_bytes() == worktree_before
+    assert not (d / 'landed.json').exists() and not repo_lock(env, repo).exists()
+    assert not (d / 'bus.jsonl').exists() or 'land_rebase' not in [e['event'] for e in bus_events(d)]
+    # Once the target is checked out again the same build still carries: one call lands.
+    git(repo, 'checkout', '-q', 'main')
+    proc = cli(['land', 'fixture'], env, True)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert [e['event'] for e in bus_events(d)] == ['land_rebase', 'land']
+
+
+@pytest.mark.parametrize('name', ['new file.txt', 'café Ω.txt'])
+def test_go_land_disjoint_rebase_refuses_local_overlap_before_rebasing(tmp_path, name):
+    """A canonical-repo local file colliding with a shift path refuses the land; it must do so before the
+    rebase, or the carried build is orphaned and the next land demands a fresh build for a disjoint rebase.
+    The non-ASCII name guards against Git's quoted path output (core.quotePath) hiding the collision."""
+    env, d, repo, work, info = world(tmp_path)
+    old_head = commit(work, name, 'crew\n')
+    commit(repo, 'canonical.txt', 'advanced target\n')
+    evidence(d, work)
+    (repo / name).write_bytes(b'local untracked collision\n')
+    proc = cli(['land', 'fixture'], env, True)
+    assert proc.returncode == 2 and f'landing overlaps local changes: {name}'.encode() in proc.stderr, (
+        proc.stdout, proc.stderr)
+    assert git(work, 'rev-parse', 'HEAD') == old_head, 'refused land left the shift branch rebased'
+    assert not (d / 'bus.jsonl').exists() or 'land_rebase' not in [e['event'] for e in bus_events(d)]
+    (repo / name).unlink()
+    proc = cli(['land', 'fixture'], env, True)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    events = bus_events(d)
+    assert [e['event'] for e in events] == ['land_rebase', 'land']
+    assert events[0]['shift_files'] == [name], 'land_rebase must list real paths, not Git-quoted ones'
+
+
+def test_go_land_rebase_conflict_is_unchanged_and_records_no_rebase_decision(tmp_path):
+    env, d, repo, work, info = world(tmp_path)
+    old_head = commit(work, 'shared.txt', 'crew conflict\n')
+    target_head = commit(repo, 'shared.txt', 'canonical conflict\n')
+    evidence(d, work)
+    proc = cli(['land', 'fixture'], env, True)
+    assert proc.returncode == 4, (proc.stdout, proc.stderr)
+    assert json.loads(proc.stdout) == {'status': 'conflict', 'target_head': target_head, 'files': ['shared.txt']}
+    assert git(work, 'rev-parse', 'HEAD') == old_head and git(repo, 'rev-parse', 'main') == target_head
+    assert not (d / 'bus.jsonl').exists() or 'land_rebase' not in [e['event'] for e in bus_events(d)]
 
 
 @pytest.mark.parametrize('holder', ['dead-landing', 'reused-pid', 'dead-shift', 'live-landing', 'live-old', 'empty'])
@@ -395,8 +545,6 @@ def test_go_land_waits_for_shared_python_named_mutex(tmp_path):
     env, d, repo, work, info = world(tmp_path)
     commit(work, 'shared.txt', 'mutex check\n')
     evidence(d, work)
-    if ORACLE_ONLY:
-        return
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         with oracle.mailbox_guard(repo_lock(env, repo), timeout_ms=5000):
             pending = pool.submit(cli, ['land', 'fixture'], env, True)
@@ -407,16 +555,13 @@ def test_go_land_waits_for_shared_python_named_mutex(tmp_path):
     assert (d / 'landed.json').exists()
 
 
-@pytest.mark.parametrize('native', [False, True])
-def test_go_land_shared_named_mutex_timeout_has_exit_three_and_empty_stderr(tmp_path, native):
-    if native and ORACLE_ONLY:
-        pytest.skip('native binary pending review')
+def test_go_land_shared_named_mutex_timeout_has_exit_three_and_empty_stderr(tmp_path):
     env, d, repo, work, info = world(tmp_path)
     evidence(d, work)
     before = observed_state(tmp_path, env, repo, work)
     with oracle.mailbox_guard(repo_lock(env, repo), timeout_ms=5000):
         started = time.monotonic()
-        proc = cli(['land', 'fixture'], env, native, timeout=15)
+        proc = cli(['land', 'fixture'], env, True, timeout=15)
         assert time.monotonic() - started >= 4.5
     assert proc.returncode == 3 and proc.stdout == proc.stderr == b''
     assert observed_state(tmp_path, env, repo, work) == before
@@ -614,8 +759,6 @@ def test_go_cleaner_preserves_dirty_worktree_and_recovery_floor(tmp_path):
 @contextlib.contextmanager
 def owned_fixture_process(base):
     """Only our copied CLI, hidden, on its own root; no agent/console is started."""
-    if ORACLE_ONLY:
-        pytest.skip('requires compiled native CLI as the harmless process fixture')
     base.mkdir()
     copied = base / 'codex.exe'
     shutil.copyfile(exe_path(), copied)
@@ -659,8 +802,7 @@ def owned_fixture_process(base):
 ])
 @pytest.mark.parametrize('dry', [False, True])
 def test_go_cleaner_protects_live_active_and_short_shifts(tmp_path, result, stage, reap, dry):
-    observed = []
-    for native in ([False] if ORACLE_ONLY else [False, True]):
+    def observe(native):
         base = tmp_path / str(native)
         env, d, repo, work, info = world(base, False)
         with owned_fixture_process(base / 'owned process') as holder:
@@ -679,14 +821,13 @@ def test_go_cleaner_protects_live_active_and_short_shifts(tmp_path, result, stag
                 assert (d / 'handover.md').exists()
             # Paths differ between the two independent live-process fixtures;
             # compare the receipt fields after asserting actual state above.
-            observed.append(([x['result'] for x in report['reaped']], report['dry_run']))
-    assert observed[0] == observed[-1]
+            return [x['result'] for x in report['reaped']], report['dry_run']
+    expected = frozen(lambda: observe(False), tmp_path)
+    assert observe(True) == expected
 
 
-@pytest.mark.parametrize('native', [False, True])
-def test_go_down_own_ancestor_receipt_bus_recovery_and_release_precede_kill(tmp_path, native):
-    if ORACLE_ONLY:
-        pytest.skip('requires compiled native CLI as the harmless ancestor fixture')
+def test_go_down_own_ancestor_receipt_bus_recovery_and_release_precede_kill(tmp_path):
+    native = True   # the oracle variant ran the Python down; it is frozen (NGH-055)
     env, d, repo, work, info = world(tmp_path)
     (work / 'shared.txt').write_bytes(b'ancestry recovery survives\n')
     lock = repo_lock(env, repo)
@@ -774,8 +915,6 @@ func main() {
 
 @pytest.fixture(scope='module')
 def lifecycle_helper(tmp_path_factory):
-    if ORACLE_ONLY:
-        pytest.skip('helper parity requires native compilation after Foreman review')
     root = tmp_path_factory.mktemp('lifecycle-helper-source')
     source = root / 'cmd' / 'nightshift'
     source.mkdir(parents=True)
@@ -802,6 +941,7 @@ def lifecycle_helper(tmp_path_factory):
         shutil.rmtree(source)
 
 
+@pytest.mark.xdist_group('lifecycle-helper')   # one worker compiles the helper binary once
 @pytest.mark.parametrize('existing', ['missing', 'invalid', 'wrong-type', 'existing'])
 def test_go_record_denials_deduplicates_trimmed_role_line_and_preserves_first_time(tmp_path, lifecycle_helper, existing):
     base = tmp_path / 'denials'
@@ -811,8 +951,7 @@ def test_go_record_denials_deduplicates_trimmed_role_line_and_preserves_first_ti
                    'Bash denied by auto mode classifier'], 'Tester': ['Bash denied by auto mode classifier']},
         {'Coder': ['Bash denied by auto mode classifier', '\tPermission DENIED: café\t', 'new denied']},
     ]
-    observed = []
-    for native in (False, True):
+    def observe(native):
         if base.exists():
             remove_fixture(base, tmp_path)
         base.mkdir()
@@ -832,16 +971,19 @@ def test_go_record_denials_deduplicates_trimmed_role_line_and_preserves_first_ti
                 assert proc.returncode == 0 and not proc.stderr
                 rows = json.loads(proc.stdout)
             else:
+                require_recording()
                 rows = oracle.record_denials(base, tails)
             outputs.append(stable(json.dumps(rows, ensure_ascii=True).encode()))
         rows = json.loads(p.read_bytes())
         assert len(rows) == 4 and len({(r['role'], r['line']) for r in rows}) == 4
         if existing == 'existing':
             assert rows[0]['time'] == 'first-time'
-        observed.append((outputs, stable(p.read_bytes())))
-    assert observed[1] == observed[0]
+        return outputs, stable(p.read_bytes())
+    expected = frozen(lambda: observe(False), tmp_path)
+    assert observe(True) == expected
 
 
+@pytest.mark.xdist_group('lifecycle-helper')   # one worker compiles the helper binary once
 @pytest.mark.parametrize('lines', [0, 1, 2, 40])
 @pytest.mark.parametrize('payload', ['valid', 'invalid'])
 def test_go_pane_tail_filters_blank_lines_and_limits_visible_tail(tmp_path, lifecycle_helper, monkeypatch, lines, payload):
@@ -850,7 +992,7 @@ def test_go_pane_tail_filters_blank_lines_and_limits_visible_tail(tmp_path, life
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('NIGHTSHIFT_FIXTURE_PEEK', json.dumps({'lines': ['first', ' ', '', ' café ', 'last']})
                        if payload == 'valid' else 'not-json')
-    expected = oracle.pane_tail(DEAD_PID, lines)
+    expected = frozen(lambda: (require_recording(), oracle.pane_tail(DEAD_PID, lines))[1], tmp_path)
     visible = ['first', ' café ', 'last']
     assert expected == (visible[-lines:] if payload == 'valid' else [])
     proc = subprocess.run([str(lifecycle_helper), 'fixture-pane', str(DEAD_PID), str(lines)],
@@ -859,8 +1001,9 @@ def test_go_pane_tail_filters_blank_lines_and_limits_visible_tail(tmp_path, life
     assert json.loads(proc.stdout) == expected
 
 
-@pytest.mark.parametrize('native', [False, True])
-def test_go_down_captures_live_tail_denials_and_retains_handover_after_hold(tmp_path, lifecycle_helper, monkeypatch, native):
+@pytest.mark.xdist_group('lifecycle-helper')   # one worker compiles the helper binary once
+def test_go_down_captures_live_tail_denials_and_retains_handover_after_hold(tmp_path, lifecycle_helper, monkeypatch):
+    native = True   # the oracle variant ran the Python down; it is frozen (NGH-055)
     env, d, repo, work, info = world(tmp_path, False)
     fakebin = tmp_path / 'fake tools'
     fakebin.mkdir()
@@ -954,8 +1097,6 @@ def test_go_down_handover_renders_absent_and_partial_advisor_without_pid(tmp_pat
 
 
 def test_go_lifecycle_runs_standalone_from_foreign_cwd_without_python(tmp_path):
-    if ORACLE_ONLY:
-        pytest.skip('native standalone verification pending review')
     env, d, repo, work, info = world(tmp_path)
     head = commit(work, 'shared.txt', 'standalone landed\n')
     evidence(d, work)
@@ -976,9 +1117,3 @@ def test_go_lifecycle_runs_standalone_from_foreign_cwd_without_python(tmp_path):
     assert json.loads((d / 'recovery.json').read_bytes())['disposition'] == 'landed'
     assert json.loads((Path(env['NIGHTSHIFT_STATE_ROOT']) / 'floor.json').read_bytes())['reaped'][0]['shift'] == d.name
 
-
-if __name__ == '__main__':
-    if sys.argv[1:] != ['--oracle-only']:
-        raise SystemExit('usage: test_go_lifecycle.py --oracle-only (fixture preparation, not native verification)')
-    os.environ['NIGHTSHIFT_LIFECYCLE_ORACLE_ONLY'] = '1'
-    raise SystemExit(pytest.main([__file__, '-q', '--tb=short']))

@@ -1,4 +1,5 @@
-"""Independent native-write parity: unchanged Python CLI is the executable oracle.
+"""Independent native-write parity against the frozen Python CLI oracle (recorded goldens, NGH-055;
+re-record with testdata/record_goldens.py).
 
 Both implementations operate on the SAME restored fixture path. Output and text
 files are compared byte for byte after validating and replacing only wall-clock
@@ -20,7 +21,7 @@ import time
 
 import pytest
 
-from test_go_readonly import (REPO, ORACLE_BOOT, existing_pid, make_world,
+from test_go_readonly import (REPO, ORACLE_BOOT, existing_pid, frozen, make_world,
                               junction_alias, oracle, run_cli, write_json)
 
 
@@ -86,11 +87,11 @@ def clean_world(base):
     return env
 
 
-def parity(tmp_path, prepare, commands, expected_codes=None):
-    """Restore only the verified private fixture, keeping absolute path bytes equal."""
+def parity(tmp_path, prepare, commands, expected_codes=None, extra=None):
+    """Restore only the verified private fixture, keeping absolute path bytes equal; the oracle side is frozen."""
     base = tmp_path / 'private write fixture'
-    observed = []
-    for go in (False, True):
+
+    def observe(go):
         if base.exists():
             assert base.resolve().is_relative_to(tmp_path.resolve())
             shutil.rmtree(base)
@@ -103,9 +104,11 @@ def parity(tmp_path, prepare, commands, expected_codes=None):
             outputs.append((stable_bytes(proc.stdout), stable_bytes(proc.stderr), proc.returncode))
         if expected_codes is not None:
             assert [o[2] for o in outputs] == expected_codes, outputs
-        observed.append((outputs, world_state(base)))
-    assert observed[1] == observed[0]
-    return observed[0]
+        return outputs, world_state(base)
+
+    expected = frozen(lambda: observe(False), tmp_path, {'PYTEST_PID': os.getpid(), **(extra or {})})
+    assert observe(True) == expected
+    return expected
 
 
 def noop(env, base):
@@ -144,10 +147,11 @@ def test_go_claim_release_persisted_byte_parity(tmp_path, scenario):
 
 @pytest.mark.parametrize('isolated', [False, True, 'empty-object'])
 def test_go_claim_cross_shift_live_conflict_and_worktree_isolation(tmp_path, isolated):
+    crew_pid = existing_pid('codex.exe')
+    assert crew_pid, 'requires existing Codex; never launch a crew for a test'
+
     def prepare(env, base):
         other = shift(env, 'empty')
-        crew_pid = existing_pid('codex.exe')
-        assert crew_pid, 'requires existing Codex; never launch a crew for a test'
         write_json(other / 'Foreman.json', {'pid': crew_pid})
         write_json(other / 'claims.json', {oracle.normalise_path(base / 'shared.py'):
                                           {'role': 'other-role', 'time': 'held'}})
@@ -157,7 +161,7 @@ def test_go_claim_cross_shift_live_conflict_and_worktree_isolation(tmp_path, iso
 
     parity(tmp_path, prepare,
            lambda env, base: [['claim', 'alpha', 'QA', str(base / 'fresh'), str(base / 'shared.py')]],
-           [0 if isolated is True else 4])
+           [0 if isolated is True else 4], {'CODEX_PID': crew_pid})
 
 
 def test_go_claim_raw_roles_use_python_unicode_lower_semantics(tmp_path):
@@ -321,14 +325,12 @@ def test_go_build_records_logs_config_and_locks(tmp_path, scenario):
     parity(tmp_path, prepare, commands, [exit_code])
 
 
-@pytest.mark.parametrize('go', [False, True])
-def test_go_mixed_concurrent_writers_preserve_all_rows_and_bus_sequences(tmp_path, go):
+def test_go_concurrent_writers_preserve_all_rows_and_bus_sequences(tmp_path):
     env = clean_world(tmp_path)
     d = shift(env)
     def write_one(i):
-        # Native and Python contend on the same named mutex and bus/claims locks.
-        return run_cli(send('QA', 'Boss', 'note', f'concurrent-{i}'), env,
-                       go=go and i % 2 == 0, timeout=40)
+        # Native writers contend on the same named mutex and bus/claims locks (the oracle is frozen).
+        return run_cli(send('QA', 'Boss', 'note', f'concurrent-{i}'), env, go=True, timeout=40)
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
         runs = list(pool.map(write_one, range(18)))
     assert all(p.returncode == 0 and not p.stderr for p in runs), [(p.returncode, p.stderr) for p in runs]
@@ -369,8 +371,7 @@ def test_go_write_waits_for_existing_python_lock(tmp_path, kind, through_junctio
 def test_go_concurrent_claims_have_no_lost_updates(tmp_path):
     env = clean_world(tmp_path)
     def claim_one(i):
-        return run_cli(['claim', 'alpha', 'QA', str(tmp_path / f'file {i}.py')],
-                       env, go=i % 2 == 0)
+        return run_cli(['claim', 'alpha', 'QA', str(tmp_path / f'file {i}.py')], env, go=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
         runs = list(pool.map(claim_one, range(18)))
     assert all(p.returncode == 0 and not p.stderr for p in runs)
@@ -380,7 +381,7 @@ def test_go_concurrent_claims_have_no_lost_updates(tmp_path):
     assert not list(shift(env).glob('*.lock')) and not list(shift(env).glob('*.tmp'))
 
 
-def test_go_and_python_builds_serialize_same_folder_and_reserve_distinct_records(tmp_path):
+def test_go_builds_serialize_same_folder_and_reserve_distinct_records(tmp_path):
     env = clean_world(tmp_path)
     cwd = tmp_path / 'build folder with spaces'
     cwd.mkdir()
@@ -390,7 +391,7 @@ def test_go_and_python_builds_serialize_same_folder_and_reserve_distinct_records
     command = f'{sys.executable} -c "{code}"'
     args = ['build', 'alpha', '--cwd', str(cwd), '--cmd', command]
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        runs = list(pool.map(lambda native: run_cli(args, env, go=native), [False, True]))
+        runs = list(pool.map(lambda native: run_cli(args, env, go=native), [True, True]))
     assert all(p.returncode == 0 and not p.stderr for p in runs), [(p.stdout, p.stderr) for p in runs]
     records = [json.loads(p.stdout) for p in runs]
     assert {r['n'] for r in records} == {1, 2}
@@ -449,7 +450,8 @@ def test_go_build_records_actual_git_head_and_dirty_tree(tmp_path, dirty):
         crew = json.loads((shift(env) / 'crew.json').read_bytes())
         crew['cwd'] = str(repo)
         write_json(shift(env) / 'crew.json', crew)
-    outputs, _ = parity(tmp_path, prepare, [['build', 'alpha', '--cmd', 'cd']], [0])
+    # The fixture commit takes the wall-clock date, so its SHA is a volatile value of this run.
+    outputs, _ = parity(tmp_path, prepare, [['build', 'alpha', '--cmd', 'cd']], [0], {'GIT_HEAD': head})
     # Normalized bytes are deliberately not parsed: inspect the persisted native record.
     record = json.loads((tmp_path / 'private write fixture' / 'state space' / 'shifts' /
                          'Nightshift-shift-alpha' / 'builds' / '1.json').read_bytes())
@@ -474,7 +476,7 @@ def test_go_build_uses_canonical_repo_config_and_explicit_overrides(tmp_path, ov
 
 
 def test_go_build_explicit_timeout_overrides_zero_second_config_under_contention(tmp_path):
-    for native in (False, True):
+    for native in (True,):
         base = tmp_path / str(native)
         env = clean_world(base)
         cwd = base / 'build cwd'

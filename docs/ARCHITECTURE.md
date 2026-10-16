@@ -643,12 +643,17 @@ This ticket changes architecture only; saved fixtures and runtime verification b
    write the command for the human); claim files before editing (`claims.json`, exit 4 on
    conflict); record messages in the mailbox before sending them (NGH-019).
 4. Tester first passes the reviewed revision; Foreman commits it, then Tester reports `TESTED-PASS` for the
-   exact unchanged HEAD of that clean commit. Foreman runs `nightshift land <shift>` before writing
-   `result.json`; landing refuses dirty or untested changes and does not create the commit. Exit `0`
-   records `landed.json`; exit `2` means a clean rebase and requires one Tester pass on the rebased
-   HEAD before Foreman reruns `land`; exit `4` means a rebase conflict and requires the shift's Coder
-   to resolve it, followed by a Tester pass, Foreman's commit, clean-commit verification and another `land`. A non-git or
-   `--no-worktree` shift cannot land and follows the direct-checkout result path.
+   exact unchanged HEAD of that clean commit. While work is in progress, Tester runs targeted tests for the changed
+   area with `nightshift build --cmd`; the full configured build (`.\verify.cmd`: Go build, go test, Go golden comparisons
+   under xdist; Python suite no longer in it, Python launcher frozen) runs once, on the final clean commit before land.
+   Foreman runs `nightshift land <shift>` before writing `result.json`; landing refuses dirty or untested changes and
+   does not create the commit. Exit `0` records `landed.json`. If `main` moved ahead, `land` rebases: a disjoint clean
+   rebase carries over the passed build and lands in the same call (`decision: "build_carried"` in the `land_rebase`
+   bus event, exit `0`); an overlapping clean rebase records `decision: "build_required"` on the bus and returns exit `2`
+   (`rebased_needs_test`), requiring one Tester full build pass on the rebased HEAD before Foreman reruns `land`;
+   exit `4` means a rebase conflict and requires the shift's Coder to resolve it, followed by a Tester pass, Foreman's
+   commit, clean-commit verification and another `land`. A non-git or `--no-worktree` shift cannot land and follows the
+   direct-checkout result path.
 5. Foreman then runs `nightshift down --close` itself: it captures the last lines of each pane, writes
    `handover.md` (result, commits since start, test outcome, denials, claims, pane tails), kills the
    crew processes (Foreman's own tree last), releases the applicable lock, and closes only that
@@ -1037,6 +1042,10 @@ with **Foreman-driven landing (`nightshift land`)**:
 2. **Foreman-driven landing (`nightshift land <shift>`).** `Tester` first passes the reviewed revision;
    `Foreman` commits exactly that revision, then `Tester` reports `TESTED-PASS` on its clean `HEAD`, and
    `Foreman` runs `nightshift land <shift>` before writing `result.json` and calling `nightshift down`.
+   While work is in progress, Tester runs targeted tests for the changed area with `nightshift build --cmd`
+   (reporting which tests were run); the full configured build (`.\verify.cmd`: Go build, go test, Go golden
+   comparisons under xdist; Python suite no longer in it, Python launcher frozen) runs once on the final clean
+   commit before land.
    `land` refuses a dirty worktree, an untested `HEAD` or a `HEAD` changed since the Tester evidence;
    it never creates the commit. `nightshift land` acquires the short-lived repository landing lock
    (`C:\nightshift\locks\<repo>.json`) only for the landing operation and handles three cases:
@@ -1046,12 +1055,20 @@ with **Foreman-driven landing (`nightshift land`)**:
      (`{repo_root, target_branch, base_sha, landed_sha, landed_at}`), appends a `land` event to
      `bus.jsonl`, releases the repo lock, and returns `{"status": "landed", "sha": "<landed_sha>"}`
      (exit `0`).
-   - **Case 2 — Clean rebase (`main` moved ahead, `git rebase main` succeeds cleanly):** Rebases the
-     worktree branch onto the new `main` `HEAD`, releases the repo lock, and returns
-     `{"status": "rebased_needs_test", "new_base": "<sha>", "head": "<rebased_sha>"}` (exit `2`).
-     `Foreman` must not write `result.json` or tear down yet: it dispatches one verification pass to
-     `Tester` (`nightshift build`) on the rebased tree, then re-runs `nightshift land <shift>` only
-     after a clean TESTED-PASS (which now fast-forwards under Case 1).
+   - **Case 2 — Clean rebase (`main` moved ahead, `git rebase main` succeeds cleanly):** Before rebasing,
+     `land` computes `mergeBase = git merge-base targetHead head`, `shiftFiles = git diff --name-only --no-renames mergeBase head`,
+     `mainFiles = git diff --name-only --no-renames mergeBase targetHead`, and `overlap` as their sorted exact-path intersection.
+     On a clean rebase, `land` appends a `land_rebase` bus event with keys: `decision` (`"build_carried"` or `"build_required"`),
+     `old_head`, `new_head`, `target_head`, `merge_base`, `shift_files`, `main_files`, and `overlap` (empty list `[]` when disjoint).
+     - **Disjoint clean rebase (`overlap` empty):** The passed build of the pre-rebase `HEAD` carries over (`decision: "build_carried"`).
+       Both pre-rebase checks (target checkout and local-changes overlap) run before the rebase in the disjoint case (so a refused land never leaves the shift branch rebased with its build evidence orphaned).
+       `land` updates `worktree.json` `base_sha`, sets `head` to the rebased `HEAD`, and continues in the same invocation into the
+       fast-forward landing path (Case 1), writing `landed.json`, appending the `land` event, releasing the repo lock, and returning
+       `{"status": "landed", "sha": "<landed_sha>"}` (exit `0`) in a single call.
+     - **Overlapping clean rebase (`overlap` non-empty):** Requires a fresh test pass (`decision: "build_required"`). `land` updates
+       `worktree.json` `base_sha`, releases the repo lock, and returns `{"status": "rebased_needs_test", "new_base": "<sha>", "head": "<rebased_sha>"}`
+       (exit `2`). `Foreman` must not write `result.json` or tear down yet: it dispatches one verification pass to `Tester` (`nightshift build`)
+       on the rebased tree, then re-runs `nightshift land <shift>` only after a clean TESTED-PASS (which now fast-forwards under Case 1).
    - **Case 3 — Rebase conflict (`git rebase main` reports conflicts):** Aborts the rebase by default
      (`--keep-conflicts` leaves it in progress) and releases
      the repo landing lock immediately so other shifts are never held up, returning
@@ -1177,9 +1194,12 @@ for the Foreman's verbatim human task. Standard placeholders (`{shift}`, `{ident
 `{state_dir}`, `{nightshift}`, `{cwd}`) are expanded in repository instructions. The repository
 section is omitted when no repository config or markdown instructions exist.
 
-This repository self-hosts the layer with `target_branch: main` and the default build command
-`C:/miniconda3/envs/python312/python.exe -m pytest test_nightshift_shifts.py -q`. Its shared
-architecture rule lives in `.nightshift/instructions.md`; Foreman-specific pytest and exact-clean-
+This repository self-hosts the layer with `target_branch: main` and configured build command
+`.\verify.cmd` (building `build\nightshift.exe` via `build-nightshift-go.cmd`, running `go test ./...`,
+and running Go golden comparisons under pytest xdist: `test_go_readonly.py`, `test_go_write_commands.py`,
+`test_go_lifecycle.py`, `test_go_launcher.py`, `test_go_crews.py`, `test_go_telemetry.py`; `test_nightshift_shifts.py`
+is no longer in the configured build and the Python launcher is frozen). Its shared
+architecture rule lives in `.nightshift/instructions.md`; Foreman-specific build and exact-clean-
 commit conventions live in `.nightshift/foreman.md`, so other repositories do not inherit them.
 
 ## Go parity checklist (NGH-052)

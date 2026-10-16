@@ -7550,15 +7550,29 @@ def test_repo043_foreman_self_host_rules_are_repository_scoped(monkeypatch, tmp_
     # review without discovering the outer shift's canonical base checkout.
     monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'isolated-shifts')
     generic = (launcher.BRIEFS_DIR / brief_file).read_text(encoding='utf-8')
-    for rule in ('test_nightshift_shifts.py', 'docs/ARCHITECTURE.md', 'C:/git/nightshift-shifts',
+    for rule in ('test_nightshift_shifts.py', 'verify.cmd', 'docs/ARCHITECTURE.md', 'C:/git/nightshift-shifts',
                  'no task IDs in commit messages'):
         assert rule not in generic
     other = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', brief=brief_file, cwd=tmp_path)
-    assert 'test_nightshift_shifts.py' not in other and 'docs/ARCHITECTURE.md' not in other
+    assert 'verify.cmd' not in other and 'docs/ARCHITECTURE.md' not in other
     self_host = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', brief=brief_file,
                                     cwd=Path(__file__).resolve().parent)
-    assert self_host.index('# Repository') < self_host.index('test_nightshift_shifts.py') < self_host.index('# Task')
+    # NGH-055: the self-host Foreman rule names the full configured build (verify.cmd), not the Python suite.
+    assert self_host.index('# Repository') < self_host.index('verify.cmd') < self_host.index('# Task')
+    repository = self_host[self_host.index('# Repository'):self_host.index('# Task')]
+    assert 'full configured build' in repository and 'targeted tests while working' in repository
+    assert 'test_nightshift_shifts.py' not in repository
     assert 'docs/ARCHITECTURE.md' in self_host
+
+
+def test_repo043_self_host_configured_build_is_verify_cmd():
+    # NGH-055: Go build, go test and the Go golden comparisons; '.\' because crew panes run cmd.exe with
+    # NoDefaultCurrentDirectoryInExePath=1, which stops a bare 'verify.cmd' resolving from the build cwd.
+    repo = Path(__file__).resolve().parent
+    config = launcher.load_repo_config(repo)
+    assert config['build']['cmd'] == '.\\verify.cmd'
+    assert config['target_branch'] == 'main'
+    assert (repo / 'verify.cmd').is_file()
 
 
 @pytest.mark.parametrize('explicit_timeout,expected_minutes', [(None, 1.5), ('2.5', 2.5)])
