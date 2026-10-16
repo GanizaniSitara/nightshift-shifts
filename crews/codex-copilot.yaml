@@ -1,0 +1,11 @@
+# Five-role Codex + Copilot crew in the 2x4 container (slots 1..5 crew, slots 6..8 empty for `nightshift spawn`):
+# Foreman/Advisor/Coder/Tester on Codex, Apprentice on GitHub Copilot CLI (Gemini 3.8 Flash).
+name: codex-copilot
+model: gpt-6.1-sol
+layout: 2x4
+roles:
+  - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: codex, model: gpt-6.1-sol}
+  - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: codex, model: gpt-6.1-sol, reasoning: xhigh}
+  - {role: Coder, brief: coder-cli.md, colour: green, tool: codex, model: gpt-6-astra}
+  - {role: Tester, brief: tester-cli.md, colour: blue, tool: codex, model: gpt-6.1-sol}
+  - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: copilot, model: gemini-3.8-flash-high}

@@ -347,8 +347,8 @@ def test_manifest_tool_defaults_to_claude_and_roles_take_their_own_model(monkeyp
 
 def test_manifest_rejects_an_unknown_tool_naming_the_allowed_ones(monkeypatch, tmp_path):
     _crew_file(monkeypatch, tmp_path, 'bad', 'roles:\n  - {role: Foreman, brief: foreman.md, human_contact: true}\n'
-                                             '  - {role: Coder, brief: coder.md, tool: codex}\n')
-    with pytest.raises(SystemExit, match="tool 'codex' for Coder is not supported; use one of: claude, agy"):
+                                             '  - {role: Coder, brief: coder.md, tool: opencode}\n')
+    with pytest.raises(SystemExit, match="tool 'opencode' for Coder is not supported; use one of: claude, agy, codex, copilot"):
         launcher.load_crew('bad')
 
 
@@ -2522,7 +2522,7 @@ def test_spawn_gemini_runs_agy(tmp_path, injected, capsys):
 
 
 @pytest.mark.usefixtures('_container_isolated')
-@pytest.mark.parametrize('cli', ['codex', 'copilot', 'opencode'])
+@pytest.mark.parametrize('cli', ['opencode'])
 def test_spawn_refuses_unwired_clis(tmp_path, injected, cli):
     d = _container(tmp_path)
     before = (d / 'crew.json').read_text(encoding='utf-8')
@@ -3083,4 +3083,43 @@ def test_inbox_excludes_stale_messages_from_an_earlier_incarnation(monkeypatch, 
     launcher.inbox([d.name, 'Coder'])
     view = json.loads(capsys.readouterr().out)
     assert [m['asg'] for m in view['inbound_unacked']] == ['asg-new']
+
+
+# ── Codex & Copilot crews (Foreman, Advisor, Coder, Tester, Apprentice in 2x4) ──
+
+def test_codex_and_codex_copilot_manifests_parse_five_roles_in_2x4():
+    codex = launcher.load_crew('codex')
+    assert codex['layout'] == '2x4' and codex['slots'] == 8 and codex['model'] == 'gpt-6.1-sol'
+    assert [(r['role'], r['tool'], r['model'], r.get('reasoning')) for r in codex['roles']] == [
+        ('Foreman', 'codex', 'gpt-6.1-sol', None),
+        ('Advisor', 'codex', 'gpt-6.1-sol', 'xhigh'),
+        ('Coder', 'codex', 'gpt-6-astra', None),
+        ('Tester', 'codex', 'gpt-6.1-sol', None),
+        ('Apprentice', 'codex', 'gpt-5.6-luna', 'xhigh')]
+    copilot = launcher.load_crew('codex-copilot')
+    assert copilot['roles'][-1]['tool'] == 'copilot' and copilot['roles'][-1]['model'] == 'gemini-3.8-flash-high'
+
+
+def test_codex_and_copilot_commands_and_account_env():
+    cmd = launcher.codex_command('gpt-5.6-luna', 'BRIEF', 'FIRST', reasoning='xhigh')
+    assert cmd == [str(launcher.CODEX_EXE), '--dangerously-bypass-approvals-and-sandbox', '--no-daemon',
+                   '-c', 'tui.terminal_title=[]', '--model', 'gpt-5.6-luna',
+                   '-c', 'model_reasoning_effort=xhigh', 'BRIEF\n\nFIRST']
+    cop = launcher.copilot_command('gemini-3.8-flash-high', 'BRIEF', 'FIRST')
+    assert cop == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash-high',
+                   '-i', 'BRIEF\n\nFIRST']
+    env = launcher.crew_env({'PATH': 'x', 'TERM': 'dumb'}, tool='codex', account=2)
+    assert 'TERM' not in env and env['CODEX_HOME'].endswith('.codex-second')
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_codex_and_copilot_use_their_default_models(tmp_path, injected, capsys):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--cli', 'codex'])
+    assert json.loads(capsys.readouterr().out)['tool'] == 'codex'
+    launcher.spawn([CONT_SHIFT, '--role', 'Helper', '--cli', 'copilot'])
+    assert json.loads(capsys.readouterr().out)['tool'] == 'copilot'
+    members = {m['label']: m for m in json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members']}
+    assert (members['Apprentice']['tool'], members['Apprentice']['model']) == ('codex', 'gpt-6.1-sol')
+    assert (members['Helper']['tool'], members['Helper']['model']) == ('copilot', 'gemini-3.8-flash-high')
 

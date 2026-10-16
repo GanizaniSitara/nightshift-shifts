@@ -72,17 +72,26 @@ ADVISOR = 'Advisor'   # the crew label only the human contact may message, and t
 MAILKEEP = 'C:/Tools/mailkeep/Mailkeep.Cli.exe'
 NOTIFY_IDENTITY = 'owner_id'                # Mailkeep identity for owner@example.com
 NOTIFY_TO = 'owner@example.com'        # `loop` emails the owner here when it halts or finishes
-TOOLS = ('claude', 'agy')              # the CLI a crew role runs (manifest `tool:`); claude is the default
+TOOLS = ('claude', 'agy', 'codex', 'copilot')   # the CLI a crew role runs (manifest `tool:`); claude is the default
 # Antigravity's agy (Gemini) as installed by winget; it has no --name or system-prompt flag (NGH-012).
 AGY_EXE = Path(os.environ.get('LOCALAPPDATA', '')) / 'Microsoft' / 'WinGet' / 'Links' / 'agy.exe'
+CODEX_EXE = (Path(os.environ.get('APPDATA', '')) / 'npm' / 'node_modules' / '@openai' / 'codex' / 'node_modules'
+             / '@openai' / 'codex-win32-x64' / 'vendor' / 'x86_64-pc-windows-msvc' / 'bin' / 'codex.exe')
+COPILOT_EXE = (Path(os.environ.get('APPDATA', '')) / 'npm' / 'node_modules' / '@github' / 'copilot' / 'node_modules'
+               / '@github' / 'copilot-win32-x64' / 'copilot.exe')
+TOOL_EXES = {'agy': AGY_EXE, 'codex': CODEX_EXE, 'copilot': COPILOT_EXE}
 DEFAULT_LABELS = ('Foreman', 'Coder')   # panes of the trial modes and of shifts started before crew.json existed
 STAGES = ('implemented', 'tested', 'deployed', 'validated')   # the result ladder, lowest rung first
 DEFAULT_REQUIRES = 'tested'
 # Crew layouts and their slot counts: 'split' sizes the tab to the crew (no slots); '1x4' (4 slots) and '2x4'
 # (8 slots, 2 rows x 4 columns) are containers (NGH-025): the crew fills the first slots and plain cmd shells fill the rest.
 LAYOUT_SLOTS = {'split': None, '1x4': 4, '2x4': 8}
-SPAWN_CLIS = {'claude': 'claude', 'gemini': 'agy', 'codex': None, 'copilot': None, 'opencode': None}   # None: not wired
+SPAWN_CLIS = {'claude': 'claude', 'gemini': 'agy', 'codex': 'codex', 'copilot': 'copilot', 'opencode': None}
 AGY_MODEL = 'gemini-3.8-flash-high'      # model for a spawned agy role when no crew member names one
+CODEX_MODEL = 'gpt-6.1-sol'              # default model for a spawned codex role
+COPILOT_MODEL = 'gemini-3.8-flash-high'  # default model for a spawned copilot role
+DEFAULT_TOOL_MODELS = {'agy': AGY_MODEL, 'codex': CODEX_MODEL, 'copilot': COPILOT_MODEL}
+REASONING_LEVELS = ('low', 'medium', 'high', 'xhigh')
 
 
 def stage_rank(stage):
@@ -149,9 +158,20 @@ def load_crew(name='default'):
         tool = str(entry.get('tool') or 'claude')
         if tool not in TOOLS:
             raise SystemExit(f'crew {name}: tool {tool!r} for {role} is not supported; use one of: {", ".join(TOOLS)}')
-        checked.append({'role': role, 'brief': brief, 'count': count, 'human_contact': human,
-                        'colour': str(entry.get('colour') or ('red' if human else 'green')),
-                        'tool': tool, 'model': str(entry.get('model') or '')})
+        role_dict = {'role': role, 'brief': brief, 'count': count, 'human_contact': human,
+                     'colour': str(entry.get('colour') or ('red' if human else 'green')),
+                     'tool': tool, 'model': str(entry.get('model') or '')}
+        if entry.get('reasoning') is not None:
+            reasoning = str(entry['reasoning'])
+            if reasoning not in REASONING_LEVELS:
+                raise SystemExit(f"crew {name}: reasoning {reasoning!r} for {role} must be one of: "
+                                 f"{', '.join(REASONING_LEVELS)}")
+            role_dict['reasoning'] = reasoning
+        if entry.get('account') is not None:
+            if entry['account'] not in (1, 2):
+                raise SystemExit(f"crew {name}: account for {role} must be 1 or 2, not {entry['account']!r}")
+            role_dict['account'] = entry['account']
+        checked.append(role_dict)
     humans = [r['role'] for r in checked if r['human_contact']]
     if len(humans) != 1:
         raise SystemExit(f'crew {name}: exactly one role needs human_contact: true, found {len(humans)}')
@@ -184,10 +204,14 @@ def crew_members(crew, shift):
     for r in crew['roles']:
         for n in range(1, r['count'] + 1):
             suffix = f'-{n}' if r['count'] > 1 else ''
-            members.append({'role': r['role'], 'label': r['role'] + suffix,
-                            'identity': f"{shift}-{r['role'].lower()}{suffix}", 'brief': r['brief'],
-                            'colour': r['colour'], 'human_contact': r['human_contact'],
-                            'tool': r['tool'], 'model': r['model']})
+            member = {'role': r['role'], 'label': r['role'] + suffix,
+                      'identity': f"{shift}-{r['role'].lower()}{suffix}", 'brief': r['brief'],
+                      'colour': r['colour'], 'human_contact': r['human_contact'],
+                      'tool': r['tool'], 'model': r['model']}
+            for opt in ('reasoning', 'account'):
+                if opt in r:
+                    member[opt] = r[opt]
+            members.append(member)
     lead = next(m for m in members if m['human_contact'])
     for m in members:
         m['peer'] = ', '.join(o['identity'] for o in members if o is not m) if m is lead else lead['identity']
@@ -223,8 +247,8 @@ def role_brief(role, identity, peer_name, state_dir='', brief=None):
     return text
 
 
-def crew_env(environ):
-    """Environment for a crew member's claude.exe.
+def crew_env(environ, tool='claude', account=None):
+    """Environment for a crew member's CLI process.
 
     Drops inherited Claude Code markers: when start is run from inside a Claude session the crew
     would otherwise become child sessions of it (name inherited, transcript saving off, no mesh
@@ -235,12 +259,31 @@ def crew_env(environ):
            if not k.upper().startswith('CLAUDE') or k.upper().startswith('CLAUDE_AFK_')}
     env.pop('NO_COLOR', None)
     env.update(TERM='xterm-256color', COLORTERM='truecolor', FORCE_COLOR='3')
+    if tool == 'codex':
+        env.pop('TERM', None)   # native Windows cmd.exe: TERM can make Codex stop for confirmation
+        if account == 2:
+            env['CODEX_HOME'] = str(Path.home() / '.codex-second')
     return env
 
 
 def agy_command(model, brief, first_message):
     """argv for an agy (Gemini) crew member: agy has no --name or system-prompt flag, so the brief is the prompt."""
     return [str(AGY_EXE), '--model', model, '--mode', 'auto', '-i', brief + '\n\n' + first_message]
+
+
+def codex_command(model, brief, first_message, reasoning=None):
+    """argv for a Codex crew member: full-auto bypass, no daemon, static terminal title, optional reasoning."""
+    cmd = [str(CODEX_EXE), '--dangerously-bypass-approvals-and-sandbox', '--no-daemon',
+           '-c', 'tui.terminal_title=[]', '--model', model]
+    if reasoning:
+        cmd += ['-c', f'model_reasoning_effort={reasoning}']
+    return cmd + [brief + '\n\n' + first_message]
+
+
+def copilot_command(model, brief, first_message):
+    """argv for a Copilot CLI crew member: allow-all tools, no auto-update, interactive initial prompt."""
+    return [str(COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', model,
+            '-i', brief + '\n\n' + first_message]
 
 
 def register_name(pid, identity):
@@ -389,6 +432,7 @@ def slot_state(state_dir, slot):
 def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/nightshift', crew=None, slot=None):
     if live or start:
         model, permission_mode, tool = MODEL, START_PERMISSION_MODE, 'claude'
+        reasoning, account = None, None
         colour = 'red' if role == 'Foreman' else 'green'
         shift = Path(state_dir).name
         peer = 'Coder' if role == 'Foreman' else 'Foreman'
@@ -432,6 +476,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                 raise SystemExit(f'pane {role} is not a member of crew {crew_name}')
             identity, peer_name, colour = member['identity'], member['peer'], member['colour']
             model, tool = member['model'], member['tool']
+            reasoning, account = member.get('reasoning'), member.get('account')
             permission_mode = permission_mode or START_PERMISSION_MODE
             first_message = opening_message(member)
             brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'])
@@ -439,11 +484,19 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                 brief += Path(state_dir, 'prompt.txt').read_text(encoding='utf-8')
         if tool == 'agy':
             command = agy_command(model, brief, first_message)
+        elif tool == 'codex':
+            command = codex_command(model, brief, first_message, reasoning=reasoning)
+        elif tool == 'copilot':
+            command = copilot_command(model, brief, first_message)
         else:
             exe = Path('C:/nvm4w/nodejs/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
             command = [str(exe), '--name', identity, '--model', model,
-                       '--permission-mode', permission_mode, '--append-system-prompt', brief, first_message]
-        child = subprocess.Popen(command, cwd=cwd, env=crew_env(os.environ))
+                       '--permission-mode', permission_mode, '--append-system-prompt', brief]
+            if reasoning:
+                command += ['--effort', reasoning]
+            command.append(first_message)
+        env = crew_env(os.environ) if tool == 'claude' and not account else crew_env(os.environ, tool=tool, account=account)
+        child = subprocess.Popen(command, cwd=cwd, env=env)
         record = {'pid': child.pid, 'wrapper_pid': os.getpid(), 'role': role, 'started': time.time(),
                   'name': identity, 'peer': peer_name, 'model': model, 'cwd': cwd}
         if start:
@@ -457,7 +510,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             # keep what is already there (a spawned slot's cmd_pid) and add who runs in it
             kept = {k: v for k, v in (read_slot(state_dir, slot) or {}).items() if k != 'slot'}
             write_slot(state_dir, slot, **{**kept, 'role': role, 'identity': identity, 'wrapper_pid': os.getpid()})
-        if tool == 'agy':
+        if tool != 'claude':
             register_name(child.pid, identity)   # the trust dialog and /color are Claude-only
         else:
             accept_trust_prompt(child)
@@ -834,9 +887,11 @@ def start(argv):
                                    'receives_prompt': m['human_contact'], 'first_message': opening_message(m),
                                    # Claude roles on the crew model keep the pre-manifest shape; a Claude role on
                                    # another model (the Fable Advisor) shows it; other tools show what will run
-                                   **({'tool': m['tool'], 'model': m['model'], 'exe': str(AGY_EXE)}
+                                   **({'tool': m['tool'], 'model': m['model'], 'exe': str(TOOL_EXES[m['tool']])}
                                       if m['tool'] != 'claude' else
-                                      {'model': m['model']} if m['model'] != crew['model'] else {})}
+                                      {'model': m['model']} if m['model'] != crew['model'] else {}),
+                                   **({'reasoning': m['reasoning']} if 'reasoning' in m else {}),
+                                   **({'account': m['account']} if 'account' in m else {})}
                       for m in members}}
         if crew['slots']:
             # The container (NGH-025): which slot holds which crew pane, and the empty ones `spawn` can fill.
@@ -883,8 +938,8 @@ def process_start_epoch(pid):
 
 
 def pid_alive(pid, started=None):
-    """True if this PID is a crew CLI process (claude.exe, node.exe or agy.exe) started when the crew member
-    was (CSV PID field compared whole).
+    """True if this PID is a crew CLI process (claude.exe, node.exe, agy.exe, codex.exe or copilot.exe)
+    started when the crew member was (CSV PID field compared whole).
 
     Windows reuses PIDs, so a dead crew member's PID can turn up on another process - even another
     Claude session - and make a finished shift look alive; the start time settles it.
@@ -894,7 +949,8 @@ def pid_alive(pid, started=None):
     for line in out.splitlines():
         if line.startswith('"'):
             fields = line.strip('"').split('","')
-            if fields[1:2] == [str(pid)] and fields[0].lower() in ('claude.exe', 'node.exe', 'agy.exe'):
+            if fields[1:2] == [str(pid)] and fields[0].lower() in ('claude.exe', 'node.exe', 'agy.exe',
+                                                                   'codex.exe', 'copilot.exe'):
                 if started is None:
                     return True
                 created = process_start_epoch(pid)
@@ -1250,7 +1306,7 @@ def spawn(argv):
     if same_tool:
         model = same_tool['model']
     else:
-        model = (saved.get('model') or MODEL) if tool == 'claude' else AGY_MODEL
+        model = (saved.get('model') or MODEL) if tool == 'claude' else DEFAULT_TOOL_MODELS[tool]
     member = {'role': same_role['role'] if same_role else role, 'label': role, 'identity': f'{shift}-{role.lower()}',
               'brief': f'{role.lower()}.md' if (BRIEFS_DIR / f'{role.lower()}.md').is_file() else 'coder.md',
               'colour': same_role['colour'] if same_role else 'yellow', 'human_contact': False, 'tool': tool,
@@ -1268,6 +1324,9 @@ def spawn(argv):
                           colour=manifest_role['colour'])
             if manifest_role['tool'] == tool:
                 member['model'] = manifest_role['model']
+                for opt in ('reasoning', 'account'):
+                    if opt in manifest_role:
+                        member[opt] = manifest_role[opt]
     if existing:
         # a gone member is restarted with its own role, label, identity, brief, colour and (on the same tool) model
         member.update(role=existing.get('role', existing['label']), label=existing['label'],
@@ -1275,6 +1334,9 @@ def spawn(argv):
                       brief=existing.get('brief', member['brief']), colour=existing.get('colour', member['colour']))
         if tool == existing.get('tool', 'claude') and existing.get('model'):
             member['model'] = existing['model']
+            for opt in ('reasoning', 'account'):
+                if opt in existing:
+                    member[opt] = existing[opt]
     updated = [m for m in members if m is not existing] + [member]
     cwd = saved.get('cwd') or member_info(state_dir, lead['label']).get('cwd') or os.getcwd()
     crew_file = state_dir / 'crew.json'

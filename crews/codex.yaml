@@ -1,0 +1,11 @@
+# Five-role Codex crew in the 2x4 container (slots 1..5 crew, slots 6..8 empty for `nightshift spawn`):
+# Foreman (Sol 6.1), Advisor (Sol 6.1 xhigh, dormant), Coder (Astra 6), Tester (Sol 6.1), Apprentice (Luna 5.6 xhigh).
+name: codex
+model: gpt-6.1-sol
+layout: 2x4
+roles:
+  - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: codex, model: gpt-6.1-sol}
+  - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: codex, model: gpt-6.1-sol, reasoning: xhigh}
+  - {role: Coder, brief: coder-cli.md, colour: green, tool: codex, model: gpt-6-astra}
+  - {role: Tester, brief: tester-cli.md, colour: blue, tool: codex, model: gpt-6.1-sol}
+  - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: codex, model: gpt-5.6-luna, reasoning: xhigh}

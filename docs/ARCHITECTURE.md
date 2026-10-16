@@ -56,8 +56,9 @@ As built (NGH-025):
   the shift's window (`launch.json` hwnd) is gone, when no slot is free or the requested one is taken,
   or when the role is already live (or still starting in a slot). Slot choice: a dead role being
   respawned goes back into its own slot; otherwise the lowest free slot, dead or empty alike (a dead
-  slot 2 beats an empty slot 4); `--slot N` accepts a dead slot too. `--cli gemini` runs agy; codex,
-  copilot and opencode are refused as not yet wired (NGH-022). It appends the member to `crew.json`
+  slot 2 beats an empty slot 4); `--slot N` accepts a dead slot too. `--cli gemini` runs agy, `--cli codex`
+  runs Codex (`codex.exe`), and `--cli copilot` runs GitHub Copilot CLI (`copilot.exe`); `opencode` is
+  refused as not yet wired (NGH-022). It appends the member to `crew.json`
   (identity `<shift>-<role>`, brief `<role>.md` if it exists else `coder.md`, the colour of a member
   with the same role else yellow, peer = the human contact; Foreman's own peer list is not rewritten),
   preserving a dead member's `role`, `label`, `identity`, `brief`, `colour`, `tool` and `model` when
@@ -78,7 +79,8 @@ As built (NGH-025):
 The top row of the 2x4 container holds four fixed identities, one per column: **Foreman** (runs the
 ticket's goal statement, sole human contact), **Advisor** (NGH-027), **Coder**, **Tester** (NGH-024);
 all four are built, see "The default crew" below, with the bottom four slots (5..8) open for
-`nightshift spawn` and additional identities such as the **Apprentice** (NGH-029). The
+`nightshift spawn` and additional identities such as the **Apprentice** (NGH-029, slot 5 in
+`crews/codex.yaml` and `crews/codex-copilot.yaml`). The
 Advisor is a dormant session on a frontier model (Fable, Astra, Mistral Large 4 or Gemini's top
 model, whichever the manifest names): it gets no instructions beyond its identity and does
 nothing until Foreman is stuck on something it cannot resolve. Then, instead of asking the human,
@@ -124,8 +126,8 @@ As built (NGH-027):
 | Piece | Role | Where |
 |---|---|---|
 | `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--hold`/`--close`), `spawn` (NGH-025), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020) | this repo |
-| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (claude or agy) and `model`, pane layout | this repo |
-| `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
+| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`) and `account` (`1`\|`2`), pane layout | this repo |
+| `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | `C:\Tools\tasks-cli.exe` |
 | agents-cli | universal console driver for any agent TUI: peek a pane, inject a line, press a key, name/wait on a session | `C:\Tools\agents-cli` |
