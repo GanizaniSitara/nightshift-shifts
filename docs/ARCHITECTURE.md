@@ -7,7 +7,8 @@ plain files, and the CLIs already on the machine.
 
 The design this grew from is in `portable-shifts-design.md` and its three reviews
 (`*-fable-critique.md`, `*-mistral-critique.md`, `*-argon-gaps.md`). This file describes what
-exists; where the two differ, this file wins.
+exists; where the two differ, this file wins. Sections explicitly marked **proposed / unbuilt**
+are review designs, not descriptions of running behaviour.
 
 ## State roots and floor roles (NGH-035)
 
@@ -216,6 +217,217 @@ As built (NGH-027):
   `model:`/`tool:` lines in the manifest plus the agents-cli transport the Gemini Coder already uses
   (NGH-012); the mailbox guard and briefs do not change.
 
+## Accountant (NGH-034) — proposed / unbuilt, owner review required
+
+This section is the design deliverable only. No Accountant, accounting adapter, accounting
+manifest validation, hold command or budget enforcement exists yet. `load_crew` currently
+discards unknown accounting keys. Approval precedes a separate implementation ticket; this
+document does not make unattended Copilot crews budget-safe.
+
+### Role, placement and brief
+
+Add **Accountant** as the sixth manifest member in slot 6 of a 2x4 container, leaving slots 7–8
+free. Preserve each crew's existing first five members and order (the work crew orders its
+Apprentice differently). Give it `count: 1`, its own brief (`accountant.md`, plus the non-Claude
+protocol variant where needed), colour, tool and model. Colour is proposed as cyan; adding a
+terminal scheme is follow-up work. Foreman remains the sole human contact and the Accountant's
+only messaging peer. Accountant reads the whole shift's roster, member/incarnation history and
+bus, but neither assigns coding work nor edits the repository nor launches sessions.
+
+Its brief must specify: reconcile usage on startup and periodically while the crew works;
+include itself, dormant Advisor, spawned helpers and dead incarnations; append observations and
+decisions to the accounting log and bus; send warnings/requests to Foreman via the mailbox;
+enforce the configured budget stop without waiting for Foreman. Source locations and credentials
+are resolved from private configuration, never copied into the brief. Accountant starts observing
+immediately rather than waiting for an implementation assignment.
+
+At work, `crews/claude-work.yaml` is all Claude **Opus 5.5**, including the proposed Accountant;
+there is no Fable there. `crews/copilot.yaml` is all Copilot **Gemini 3.8 Flash**, including the
+proposed Accountant. A cheap observer elsewhere does not override those owner decisions.
+
+### Sources and normalized contract
+
+Manifest-selected adapters produce the same versioned observations:
+
+| Adapter | Input and attribution |
+|---|---|
+| `copilot_tail` | `agents-cli tail` for each shift member running Copilot; parse the current status `Session: N AIC used`, bound to its identity, PID/start identity and provider session when available. |
+| `cloud_spend` | Work cloud CLI's structured spend output; member/session attribution only when explicitly supplied. Otherwise report billing-account period usage separately. |
+| `usage_http` | An externally provided usage feed; the private manifest holds only its address (`ip:port`), endpoint, version and field mapping. No feed implementation, home tool name, real address or credential belongs in this repo. |
+
+The proposed HTTP boundary is a read-only `GET /v1/usage?shift_id=<id>` returning a versioned JSON
+envelope `{schema, observations}`; this is a requested contract, not an existing endpoint claim.
+A private manifest may map a different endpoint/field layout to it. CLI adapters normalize locally
+to that envelope. Public manifests reference a private `source_ref`; neither that reference nor
+accounting events expose the resolved address, command credentials or raw provider payload.
+
+`schema: nightshift.accounting.observation/v1` requires these fields on each observation:
+
+| Fields | Meaning |
+|---|---|
+| `source_ref`, `adapter`, `contract_version`, `series_id` | Opaque source reference and stable billing-series identity; aliases/adapters exposing the same charge share dedup ownership. |
+| `shift_id`, `scope`, `member_id`, `incarnation_id` | Scope is `member_session`, `shift` or `account_period`. Member scope requires identity and incarnation; other scopes use null member fields. Account scope is never attributed to this shift implicitly. |
+| `period_id`, `period_start`, `period_end` | Provider period identity and RFC3339 UTC bounds for period usage; null for a session-only metric. Daily policies explicitly supply their timezone. |
+| `captured_at`, `observed_at`, `sample_id`, `counter_epoch` | RFC3339 UTC collection time, provider observation time (nullable), provider ordering/dedup key (nullable), and confirmed counter generation. |
+| `dimension`, `value`, `unit`, `currency`, `counter_kind` | Valid value is a nonnegative finite decimal string with declared source precision; null when no usable reading exists. Dimensions are `credits`/`AIC`, `tokens`/declared token category, or `money`/currency code. Currency is required for money and null otherwise. Counter kind is `cumulative` or `delta`; delta requires a stable dedup sample ID. |
+| `status`, `freshness`, `error`, `evidence` | Status `valid`, `missing`, `stale`, `parse_error`, `unavailable` or `not_applicable`; freshness `confirmed`, `stale` or `unknown`; nullable error code and redacted match/digest/reference. |
+
+Select **one authoritative source per billing series and metric**. A second source is corroboration,
+not extra spend. Unresolved overlap or missing attribution degrades coverage. Sum whole-shift usage
+across all tools only within compatible dimension/unit/currency groups; keep AIC, token categories
+and each currency separate. Account-wide cloud spend can enforce an account-period limit but is
+never multiplied by panes or labelled a shift total. An all-tools shift total is complete only when
+every charge-bearing member has attributable coverage; unavailable cost for a tool stays unknown.
+
+For Copilot, accept one unambiguous current status value using source-declared numeric precision,
+not an integer-only assumption. Reject negative, NaN, infinite, malformed, ambiguous or unsupported
+formatting as degraded readings. Explicit reported zero is valid; missing text is not zero. Preserve
+only the matched status line, collection provenance and digest, not unrelated pane conversation.
+
+`captured_at` is not provider freshness. Copilot's status line has no timestamp: even a successful
+live tail with an unchanged value cannot prove when the provider refreshed it. Record source age
+as unknown unless independently evidenced; repeated polls cannot refresh known stale data. The
+manifest declares poll interval, collection timeout, freshness evidence/max age and the policy for
+unknown/stale coverage. Those values need owner review before unattended use.
+
+### Accrual, restarts and accounting records
+
+A fresh session's counter starts at zero at creation. Its **first observed value counts in full**,
+including spend before the first poll; do not subtract the first reading. Sum each Copilot session's
+accrued value across every member, including Accountant. Later cumulative samples add only increases
+over that series' persisted high-water; repeated samples add nothing. For example, first readings
+17 and 3 AIC total 20, not zero; rereading them still totals 20. Never sum successive snapshots.
+
+Keep previous incarnations' accrued spend when a role respawns and add the fresh incarnation's first
+value in full. A lower reading alone is not a reset: 17, delayed 14, then 20 in one session accrues
+20. Use source sample ordering when available and retain the high-water. Start a new counter epoch
+only on confirmed reset/session identity evidence; its first fresh value counts in full, retaining
+the old epoch. Otherwise record degraded uncertainty, preserve accrued spend and apply the configured
+unknown-data policy. Reused/resumed sessions need provable pre-shift history for any baseline
+subtraction, with attribution evidence logged; no free reset or guessed baseline is allowed.
+
+Proposed shift-local records (under the shift's existing state directory, including legacy roots):
+
+- `accounting.jsonl`: append-only versioned snapshots and decisions, one complete JSON object per
+  line. A snapshot has `schema: nightshift.accounting.snapshot/v1`, `snapshot_id`, `shift_id`,
+  `captured_at`, `observer_incarnation`,
+  `observations` (the contract above), `totals` grouped by scope/period/dimension/unit/currency,
+  `quality` (`complete`, `degraded`, `unknown`), missing coverage and evaluated budget IDs.
+  Totals distinguish a retained **known subtotal** from a complete current reading.
+- `accounting-state.json`: atomic checkpoint of replay position, per-series high-water/epoch and
+  sample ordering, source ownership, accrued totals, warning/action latches and budget-period IDs.
+  Snapshot IDs combine unique observer incarnation and sequence; restarting Accountant restores
+  the checkpoint and replays unprocessed ledger entries idempotently, never resets the budget.
+  Partial trailing log records are detected, not treated as valid zero usage.
+- `budget-stop.json`: durable terminal decision/evidence, described below; survives teardown.
+
+Accountant is the single accounting writer. Flush the ledger record before its checkpoint advances;
+recovery applies each identified record once. Decisions cite a snapshot ID, budget ID, threshold,
+known subtotal, quality/unknown members and reason. Mirror snapshots and transitions onto `bus.jsonl`
+as proposed `accounting_snapshot`, `accounting_warning`, `accounting_hold`, `accounting_release`,
+`accounting_rejig`, `accounting_stop` and `accounting_error` events carrying the same IDs and compact
+redacted fields. The accounting log is the durable accounting evidence: current `bus_append` is
+best effort. Record a failed mirror for later reconciliation; missing bus delivery must not prevent
+a budget stop. This is a log-first design, with no dashboard.
+
+### Budgets and levels of action
+
+Proposed manifest shape (not accepted by the current loader; numbers are examples, not defaults):
+
+```yaml
+accounting:
+  level: 3
+  sources:
+    - {source_ref: work_copilot, adapter: copilot_tail, contract_version: v1}
+  budgets:
+    - {id: shift-aic, scope: shift, dimension: credits, unit: AIC,
+       limit: "100", warn_at: "80", action: down}
+    - {id: period-aic, scope: period, source_ref: work_account,
+       dimension: credits, unit: AIC, limit: "500", warn_at: "400",
+       period: provider_billing_period, action: hold}
+```
+
+The work-account source in that illustration must be separately configured with real account-period
+coverage; summing this shift's session lines cannot reveal monthly account spend. Private configuration
+also supplies polling/freshness/unknown-data policies. Validate positive limits, `0 < warn_at < limit`,
+source coverage, units, period definition/timezone and authority before enabling enforcement. **100 AIC
+is the owner's example, never a shipped default.** Budgets are per crew, persisted in effective shift
+configuration; work values are set at work. Shift budgets run across period boundaries and respawns.
+Period budgets use provider period IDs/reset boundaries (or an explicit daily timezone), not a reset
+inferred from a lower value; source-wide period totals include other shifts without reattribution.
+
+| Level | Authority and routing |
+|---|---|
+| 1 — observe | Reconcile and log usage/quality; no spend action. |
+| 2 — warn | Level 1 plus a durable warning and mailbox note to Foreman at the lower threshold. Deduplicate per budget/period. |
+| 3 — control | Level 2 plus the mandatory shift-budget `down` rule below. Optional period holds/releases require the agreed mechanism and policy. |
+| 4 — rejig | Level 3 plus propose moving bounded work to Apprentice or changing a slot's tool/model. Foreman owns assignments, claims, handovers and any `spawn`; Accountant never launches a replacement. Direct reassignment authority remains unapproved. |
+
+These levels describe capability, not a way to opt Copilot out of the owner's stop rule. The minimum
+unattended Copilot design requires warn plus enforced termination (level 3) and a per-shift AIC budget.
+All-Copilot model changes remain subject to every role using Gemini 3.8 Flash; all-Claude work roles
+remain Opus 5.5. Rejig cannot silently override either policy.
+
+At **known accrued shift AIC >= limit**, Accountant invokes `nightshift down <this exact shift>`
+itself, without asking Foreman. It must not use `latest` or touch another shift. Unknown members do
+not block termination when the known subtotal already reaches the limit. If the first sample crosses
+both thresholds, persist/emit the warning then stop immediately; do not wait for warning acknowledgement.
+When below the limit but coverage is uncertain, retain prior spend, warn with degraded quality and
+apply the owner's explicit unknown-data policy; never certify the shift under budget from missing data.
+
+Before invoking `down`, persist the final accounting decision and `budget-stop.json` with reason,
+limit/known total/unit, coverage, snapshot/evidence references and time. Record unfinished work as
+`result.json` **blocked**, with reason `budget_exhausted` and only the stage/evidence actually earned;
+never claim `done` because a budget ended the crew. Then attempt the correlated bus/mailbox stop notice
+and run `down` regardless of notification acknowledgement. Current `down` captures handover and emits
+result/down events before killing its caller last, so the stop evidence must already be durable.
+Teardown errors remain a stop failure to inspect; do not assert termination merely from requesting it.
+
+The build ticket must make the stop latch visible to `warden`, `spawn`, `loop`, `resume` and future
+dispatch: no automatic resurrection/retry or new baseline after a budget stop. Current blocked results
+stop the loop and suppress core-slot recovery, but `resume` still selects unfinished tickets. Resumption
+therefore needs an explicit approved budget extension or a permitted new period, linked history and
+retained shift spend; a period rollover alone cannot clear an exhausted per-shift budget.
+
+### Holding, release and enforcement limits
+
+A proposed **cooperative hold** is separate from termination. Only Accountant issues a versioned
+`accounting-hold.json` with hold ID, targets, reason, budget/period, issuing snapshot and release
+condition; Foreman can request it and routes notices. Members check before accepting assignments,
+starting chargeable turns/builds or spawning, stop taking new work and acknowledge the hold ID through
+Foreman. This cannot interrupt an in-flight model turn, already-running build or uncooperative member.
+Accountant keeps observing (its own usage counts). If not acknowledged within the configured grace,
+log/warn; any escalation beyond the mandatory AIC stop needs an approved policy. No hold/release CLI
+exists yet. Existing **`down --hold` kills the crew and only leaves the tab open**; it is never a pause.
+
+At a confirmed period rollover, Accountant can release its hold only after validating fresh allowance,
+all remaining budgets and the configured release condition, recording the hold ID and notifying Foreman.
+Release does not respawn members, erase accrued shift usage, clear a terminal stop latch or reopen
+assignments itself. Whether optional period holds are issued directly or requested through Foreman,
+and whether level 4 permits more than recommendations, remain owner questions; mandatory AIC teardown
+authority is already decided.
+
+This proposal relies on the interactive Accountant's periodic model/tool polling; the launcher exits
+and there is no independent watchdog here. Detection and teardown lag includes polling, tool timeout,
+model scheduling, provider reporting delay and `down` runtime, with additional in-flight spend. A stalled
+or dead Accountant cannot enforce anything; source freshness can be unknown. It is a budget-triggered
+stop, **not an exact billed-spend cap**. If those limits are unacceptable for unattended work, a separately
+approved deterministic enforcement mechanism is needed before such use.
+
+### Review questions and follow-up acceptance
+
+Owner still needs to choose actual shift/period limits, lower warning thresholds, poll/timeout/staleness
+and unknown-data policy (including observer failure), provider period/timezone, optional hold/grace/release
+authority, and whether level 4 may do more than ask Foreman. Work/cloud feed availability, attribution and
+private mappings must be confirmed at work. These questions do **not** reopen warn-then-kill for Copilot.
+
+Implementation acceptance must cover: every member including Accountant/dormant/spawned roles; first
+sample spend; decimal AIC; repeat/delayed samples; confirmed reset vs unexplained decrease; respawn and
+observer restart; duplicate adapters; unknown/stale/malformed values; period rollover with retained shift
+usage; account totals without false shift attribution; known-subtotal stop with missing panes; exact-budget
+stop and first-sample warning+stop; durable evidence before self-teardown; and no automatic restart/reset.
+This ticket changes architecture only; saved fixtures and runtime verification belong to the build ticket.
+
 ## Components
 
 | Piece | Role | Where |
@@ -332,8 +544,8 @@ As built (NGH-027):
   It reaches Copilot as `--context <tier>`, and is carried like `reasoning` through `crew.json`, `spawn`
   and `pane()`. Without `reasoning` or `context`, `copilot_command` builds the same argv as before.
 - `crews/copilot.yaml` is the all-Copilot work crew (2x4, every role `tool: copilot`, `permissions: skip`).
-  Foreman, Advisor and Tester run `grok-4.7` with `reasoning: max`; Coder and Apprentice run
-  `gemini-3.8-flash` with `reasoning: high` and `context: long_context`.
+  Every role runs `gemini-3.8-flash` with `reasoning: high` and `context: long_context` (owner's
+  16 Oct budget decision; NGH-034's proposed Accountant follows the same rule).
 - `crews/gemini-coder.yaml` is the first mixed crew: Claude Foreman (`foreman-agy-coder.md`), agy
   Coder on `gemini-3.8-flash-high` (`coder-agy.md`). The agy Coder cannot use ListAgents/SendMessage:
   it writes reports in its own window, each ending with `CODER-DONE` or `CODER-BLOCKED`. Foreman
@@ -545,15 +757,18 @@ paired with **Foreman-driven landing (`nightshift land`)**:
 | — (not in the design) | loop, result ladder, crew manifest, opt-in Mailkeep notification, denial capture | additions |
 | — (owner, 16 Oct) | container with slot grid (2x4/1x4), `slots/`, `spawn`, Foreman-owned `down --close/--hold` (close default), launcher exits; loop optional | NGH-025, built |
 | — (owner, 16 Oct) | `C:\nightshift\` state root, `floor.json`, and `nightshift cleaner / warden / gaffer` CLI subcommands | NGH-035, built |
+| — (owner, 16 Oct) | Accountant in slot 6: accounting log, source contracts, budgets, warning then shift teardown | NGH-034, proposed / unbuilt; owner review before build |
 | — (owner, 16 Oct) | Per-shift git worktrees (`C:\nightshift\worktrees\<shift>\`) and Foreman-driven `nightshift land` (fast-forward / clean rebase + retest / conflict resolution by shift's own Coder + Tester) | NGH-040, target |
 
 ## Not decided / not built
 
+- Accountant implementation and optional hold/rejig policy: **NGH-034**, proposed above; the mandatory
+  Copilot warning and shift-budget teardown requirement is decided.
 - Per-shift git worktrees and `nightshift land` implementation: specified and queued in **NGH-040**.
 - Personas beyond Foreman + Advisor + Coder + Tester + Apprentice (DevOps, Reviewer, validator council):
   design in NGH-014, to be agreed with the owner before any is added. Roadmap on NGH-001.
 - Which frontier model the Advisor should run long term across all manifests (Claude Fable in `default.yaml`,
-  GPT-6 Astra in `codex.yaml`, Grok 4.7 in `copilot.yaml`).
+  GPT-6 Astra in `codex.yaml`; Copilot's owner-set policy is Gemini 3.8 Flash for every role).
 - Whether to converge all messaging on mailbox + agents-cli, or keep native mesh for Claude.
 - Single binary (NGH-021): PyInstaller bundle vs Go port — owner's call.
 - Parallel shifts across separate worktrees / codebases (NGH-013, NGH-040).
