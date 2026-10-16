@@ -1197,16 +1197,19 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
     place(['new-tab'], 0)
     if n == 2:
         place(['split-pane', '-V', '-s', '0.5'], 1)
-        add(['move-focus', 'left'])
+        add(['focus-pane', '-t', '0'])
         return command
     if n <= 4:
         columns(range(1, n))
     else:
+        # Focus panes by id (creation order: 0 the first pane, 1 the bottom row), not move-focus: move-focus looks
+        # for a neighbour by geometry, and while Terminal is still laying out it finds none, so every later split
+        # lands in the bottom row (seen 16 Oct, TECH-229 work-crew start).
         top = math.ceil(n / 2)
         place(['split-pane', '-H', '-s', '0.5'], top)
-        add(['move-focus', 'up'])
+        add(['focus-pane', '-t', '0'])
         columns(range(1, top))
-        add(['move-focus', 'down'])
+        add(['focus-pane', '-t', '1'])
         columns(range(top + 1, n))
     add(['focus-pane', '-t', '0'])
     return command

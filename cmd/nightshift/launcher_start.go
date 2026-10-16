@@ -774,17 +774,20 @@ func wtCommand(w wtSpec) []string {
 	place([]string{"new-tab"}, 0)
 	if n == 2 {
 		place([]string{"split-pane", "-V", "-s", "0.5"}, 1)
-		add([]string{"move-focus", "left"}, "")
+		add([]string{"focus-pane", "-t", "0"}, "")
 		return command
 	}
 	if n <= 4 {
 		columns(1, n)
 	} else {
+		// Focus panes by id (creation order: 0 the first pane, 1 the bottom row), not move-focus: move-focus
+		// looks for a neighbour by geometry, and while Terminal is still laying out it finds none, so every
+		// later split lands in the bottom row.
 		top := (n + 1) / 2
 		place([]string{"split-pane", "-H", "-s", "0.5"}, top)
-		add([]string{"move-focus", "up"}, "")
+		add([]string{"focus-pane", "-t", "0"}, "")
 		columns(1, top)
-		add([]string{"move-focus", "down"}, "")
+		add([]string{"focus-pane", "-t", "1"}, "")
 		columns(top+1, n)
 	}
 	add([]string{"focus-pane", "-t", "0"}, "")

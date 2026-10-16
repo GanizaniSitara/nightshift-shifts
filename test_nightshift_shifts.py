@@ -267,9 +267,9 @@ def test_wt_command_is_one_tab_two_columns_foreman_left():
                                mode_flag='--start', cwd='C:/git/proj')
     assert argv[:6] == ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized']
     assert argv.count(';') == 2
-    assert 'new-tab' in argv and 'split-pane' in argv and 'move-focus' in argv
+    assert 'new-tab' in argv and 'split-pane' in argv and 'move-focus' not in argv
     assert argv[argv.index('split-pane') + 1:argv.index('split-pane') + 4] == ['-V', '-s', '0.5']
-    assert argv[argv.index('move-focus') + 1] == 'left'
+    assert argv[argv.index('focus-pane') + 1:argv.index('focus-pane') + 3] == ['-t', '0']
     # start mode: short pane titles, crew profile, cwd passed through to the pane
     assert _titles(argv) == ['Nightshift-shift-abc shift', 'Nightshift-shift-abc shift']
     assert argv.count('--profile') == 2 and launcher.PROFILE in argv
@@ -640,15 +640,15 @@ def _titles(argv):
 
 
 @pytest.mark.parametrize('n, expected', [
-    (2, [('new-tab',), ('split-pane', '-V', '0.5'), ('move-focus', 'left')]),
+    (2, [('new-tab',), ('split-pane', '-V', '0.5'), ('focus-pane', '0')]),
     (3, [('new-tab',), ('split-pane', '-V', '0.6667'), ('split-pane', '-V', '0.5'), ('focus-pane', '0')]),
     (4, [('new-tab',), ('split-pane', '-V', '0.75'), ('split-pane', '-V', '0.6667'), ('split-pane', '-V', '0.5'),
          ('focus-pane', '0')]),
-    (6, [('new-tab',), ('split-pane', '-H', '0.5'), ('move-focus', 'up'), ('split-pane', '-V', '0.6667'),
-         ('split-pane', '-V', '0.5'), ('move-focus', 'down'), ('split-pane', '-V', '0.6667'),
+    (6, [('new-tab',), ('split-pane', '-H', '0.5'), ('focus-pane', '0'), ('split-pane', '-V', '0.6667'),
+         ('split-pane', '-V', '0.5'), ('focus-pane', '1'), ('split-pane', '-V', '0.6667'),
          ('split-pane', '-V', '0.5'), ('focus-pane', '0')]),
-    (5, [('new-tab',), ('split-pane', '-H', '0.5'), ('move-focus', 'up'), ('split-pane', '-V', '0.6667'),
-         ('split-pane', '-V', '0.5'), ('move-focus', 'down'), ('split-pane', '-V', '0.5'), ('focus-pane', '0')]),
+    (5, [('new-tab',), ('split-pane', '-H', '0.5'), ('focus-pane', '0'), ('split-pane', '-V', '0.6667'),
+         ('split-pane', '-V', '0.5'), ('focus-pane', '1'), ('split-pane', '-V', '0.5'), ('focus-pane', '0')]),
 ])
 def test_wt_layout_for_n_panes(n, expected):
     labels = [f'P{i}' for i in range(n)]
@@ -1293,11 +1293,11 @@ def test_start_dry_run_default_crew_is_the_five_pane_golden(monkeypatch, tmp_pat
                   {'slot': 8, 'role': None, 'pane_title': f'{shift} shift'}],
         'wt_argv': ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized', 'new-tab', *pane_args('Foreman', 1),
                     ';', 'split-pane', '-H', '-s', '0.5', *pane_args('Apprentice', 5),
-                    ';', 'move-focus', 'up',
+                    ';', 'focus-pane', '-t', '0',
                     ';', 'split-pane', '-V', '-s', '0.75', *empty_args(2),
                     ';', 'split-pane', '-V', '-s', '0.6667', *pane_args('Coder', 3),
                     ';', 'split-pane', '-V', '-s', '0.5', *pane_args('Tester', 4),
-                    ';', 'move-focus', 'down',
+                    ';', 'focus-pane', '-t', '1',
                     ';', 'split-pane', '-V', '-s', '0.75', *empty_args(6),
                     ';', 'split-pane', '-V', '-s', '0.6667', *empty_args(7),
                     ';', 'split-pane', '-V', '-s', '0.5', *empty_args(8),
