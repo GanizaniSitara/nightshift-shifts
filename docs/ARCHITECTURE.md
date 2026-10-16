@@ -23,6 +23,19 @@ optional batch runner and is no longer the default path. Everything under "A shi
 step" that says the loop starts, polls or tears down a shift is superseded by this section
 once NGH-025 lands.
 
+## The four identities (owner, 16 Oct 2026)
+
+The 1x4 container is meant for four fixed identities, one per column: **Foreman** (runs the
+ticket's goal statement, sole human contact), **Advisor**, **Coder**, **Tester** (NGH-024). The
+Advisor is a dormant session on a frontier model (Fable, Astra, Mistral Large 4 or Gemini's top
+model, whichever the manifest names): it gets no instructions beyond its identity and does
+nothing until Foreman is stuck on something it cannot resolve. Then, instead of asking the human,
+Foreman asks the Advisor, and the Advisor is expected to take a sensible decision. Rules that
+keep it bounded: Foreman asks only after it has tried itself; the question and the answer go
+through the mailbox so the human can audit every decision; the Advisor never edits files and
+never talks to Coder or Tester; the human is still asked when the ticket itself is wrong or a
+decision cannot be undone. This is the reviewed design's "bounded consultant" (not a council).
+
 ## Components
 
 | Piece | Role | Where |
