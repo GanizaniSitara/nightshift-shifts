@@ -105,8 +105,9 @@ following. Codex exposes coarse `--sandbox read-only|workspace-write|danger-full
 controls, but no per-tool or path-scoped deny option; read-only would also complicate commits and
 shift-state writes, so it is not a direct equivalent. Copilot exposes coarse `--deny-tool` and
 `--excluded-tools` controls, but its help does not show a Claude-style path-scoped deny; Nightshift's
-current launcher still uses `--allow-all`. agy exposes coarse `--sandbox` and `--mode` controls but
-no per-tool deny option; Nightshift's current launcher uses `--mode auto`. These are facts about the
+current launcher uses `--allow-all` for `permissions: skip|auto`. agy exposes coarse `--sandbox` and `--mode`
+controls but no per-tool deny option and no classifier mode; Nightshift's launcher passes
+`--dangerously-skip-permissions` for `permissions: skip|auto` (see the manifest `permissions:` key). These are facts about the
 capabilities surfaced and wired here, not a claim that Codex, Copilot, or agy can never provide a
 different equivalent. Briefs and prompts remain procedural guidance, not a substitute for a CLI or OS
 permission boundary.
@@ -163,7 +164,7 @@ As built (NGH-027):
 | Piece | Role | Where |
 |---|---|---|
 | `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--hold`/`--close`), `spawn` (NGH-025), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), `log` (the shift bus, NGH-026) | this repo |
-| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`) and `account` (`1`\|`2`), pane layout | this repo |
+| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`), `account` (`1`\|`2`) and `permissions` (`skip`\|`auto`\|`default`), pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | `C:\Tools\tasks-cli.exe` |
@@ -183,7 +184,7 @@ As built (NGH-027):
    if it appears, sets the role colour, and waits for the CLI to exit. `<Role>.json` also records
    the role's `tool` (claude or agy), which `status` reports per role.
 2. Each Claude member starts with `--name <shift>-<role>`, `--permission-mode auto` (owner
-   decision: classifier-guarded, never `manual`, never bypass), and
+   decision: classifier-guarded, never `manual`, never bypass, unless its manifest role sets `permissions:`), and
    `--append-system-prompt` = its brief. The wrapper scrubs inherited `CLAUDE*` env so a crew
    launched from inside a Claude session is not a child session of it. The human's foreground
    window is restored once the crew window exists.
@@ -219,6 +220,11 @@ As built (NGH-027):
   `gpt-5.6-luna`, account 2), `crews/apprentice-copilot.yaml` (copilot, `gemini-3.8-flash-high`). They
   serve both `start --crew NAME` and `spawn --crew NAME`. OpenCode and Qwen have none yet: they are not
   in `TOOLS`, so `load_crew` would refuse the manifest.
+- Apprentice CLI rotation (NGH-029), one live shift per CLI in this order, each recorded on the ticket
+  with what broke and what was fixed: Gemini (agy, `apprentice-gemini`), Codex Luna on account 2
+  (`apprentice-codex`), OpenCode with Mistral and Qwen (both waiting on a `TOOLS` entry), then Copilot
+  CLI (`apprentice-copilot`, once TECH-225 lands). A live round trip is READY, ack of the assignment,
+  the done report and the relayed Tester verdict, all on the shift bus.
 - Handoff is Coder -> Foreman -> Tester. Coder reports an assignment done; Foreman reviews it and
   assigns verification to Tester with its own `--asg` id, saying what changed and what was asked.
   Coder and Tester never talk to each other.
@@ -236,7 +242,18 @@ As built (NGH-027):
 
 - A manifest role may say `tool: claude` (default), `agy`, `codex`, or `copilot`; anything else is
   refused naming the allowed tools. `model:` on a role overrides the crew `model:` for that role only.
-- An agy pane runs `%LOCALAPPDATA%\Microsoft\WinGet\Links\agy.exe --model <model> --mode auto -i
+- Permissions are manifest data (NGH-029): a role may say `permissions: skip | auto | default` (anything
+  else is refused); without it the role takes the crew-level `permission_mode` (default `auto`).
+  `permission_flags(tool, permissions)` is the only place the flags are chosen, when the pane command is
+  built: claude `skip` = `--dangerously-skip-permissions`, `default` = no flag, anything else =
+  `--permission-mode <value>` (so `auto`, or a crew-level `plan`); agy, codex and copilot have no
+  classifier mode, so `skip` and `auto` both mean approve-all (agy `--dangerously-skip-permissions`, as
+  `C:/scripts/launch.ps1` starts agy; codex `--dangerously-bypass-approvals-and-sandbox`; copilot
+  `--allow-all`) and `default` (or any other value) adds nothing. The key travels into `crew.json` and through
+  `spawn` (including `--crew NAME`), and `start --dry-run` shows each pane's resolved `permission_flags`.
+  The Apprentice runs `permissions: skip` in `default.yaml` and the three `apprentice-*` manifests (owner
+  decision, 16 Oct: an agy Apprentice otherwise stops at a shell prompt on every command); Claude roles keep `auto`.
+- An agy pane runs `%LOCALAPPDATA%\Microsoft\WinGet\Links\agy.exe --model <model> <permission flags> -i
   "<brief>\n\n<opening message>"` (`agy_command`). agy has no `--name` or system-prompt flag, so the brief
   is the prompt text. The wrapper scrubs the env the same way (`crew_env`), then names the pane with
   `agents-cli name <pid> <identity>` (`register_name`, failures ignored) so it can be addressed by its

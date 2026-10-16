@@ -41,3 +41,4 @@ roles:
     count: 1
     tool: agy
     model: gemini-3.8-flash-high
+    permissions: skip        # owner decision 16 Oct: agy has no classifier mode; prompts would stall the crew

@@ -156,7 +156,7 @@ def test_default_manifest_is_foreman_advisor_coder_tester_apprentice():
                         {'role': 'Tester', 'brief': 'tester.md', 'count': 1, 'human_contact': False, 'colour': 'blue',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
                         {'role': 'Apprentice', 'brief': 'apprentice.md', 'count': 1, 'human_contact': False,
-                         'colour': 'yellow', 'tool': 'agy', 'model': 'gemini-3.8-flash-high'}]}
+                         'colour': 'yellow', 'tool': 'agy', 'model': 'gemini-3.8-flash-high', 'permissions': 'skip'}]}
     members = launcher.crew_members(crew, 'S')
     assert [(m['label'], m['identity'], m['peer']) for m in members] == [
         ('Foreman', 'S-foreman', 'S-advisor, S-coder, S-tester, S-apprentice'),
@@ -282,7 +282,8 @@ def test_start_dry_run_custom_crew(monkeypatch, tmp_path, capsys):
     assert list(plan['roles']) == ['Foreman', 'Coder-1', 'Coder-2', 'Coder-3']
     assert plan['roles']['Foreman']['peer'] == f'{s}-coder-1, {s}-coder-2, {s}-coder-3'
     assert plan['roles']['Coder-2'] == {'session_name': f'{s}-coder-2', 'pane_title': f'{s} shift', 'peer': f'{s}-foreman',
-                                        'receives_prompt': False, 'first_message': launcher.START_MESSAGES['Coder']}
+                                        'receives_prompt': False, 'first_message': launcher.START_MESSAGES['Coder'],
+                                        'permission_flags': ['--permission-mode', plan['permission_mode']]}
     assert plan['wt_argv'].count('--crew') == 4 and 'focus-pane' in plan['wt_argv']
 
 
@@ -459,9 +460,123 @@ def test_manifest_rejects_an_unknown_tool_naming_the_allowed_ones(monkeypatch, t
         launcher.load_crew('bad')
 
 
+@pytest.mark.parametrize('tool, permissions, flags', [
+    ('claude', 'skip', ['--dangerously-skip-permissions']),
+    ('claude', 'auto', ['--permission-mode', 'auto']),
+    ('claude', 'default', []),
+    ('claude', 'plan', ['--permission-mode', 'plan']),   # a crew-level permission_mode passes through to Claude
+    ('claude', None, ['--permission-mode', 'auto']),
+    ('agy', 'skip', ['--dangerously-skip-permissions']),
+    ('agy', 'auto', ['--dangerously-skip-permissions']),
+    ('agy', 'default', []),
+    ('codex', 'skip', ['--dangerously-bypass-approvals-and-sandbox']),
+    ('codex', 'auto', ['--dangerously-bypass-approvals-and-sandbox']),
+    ('codex', 'default', []),
+    ('copilot', 'skip', ['--allow-all']),
+    ('copilot', 'auto', ['--allow-all']),
+    ('copilot', 'default', []),
+    ('agy', 'plan', [])])
+def test_permission_flags_map_each_value_per_tool(tool, permissions, flags):
+    assert launcher.permission_flags(tool, permissions) == flags
+
+
+def test_cli_commands_take_their_permission_flags_from_the_mapping():
+    agy = launcher.agy_command('m', 'B', 'G', permissions='default')
+    assert '--dangerously-skip-permissions' not in agy and '--mode' not in agy
+    codex = launcher.codex_command('m', 'B', 'G', permissions='default')
+    assert '--dangerously-bypass-approvals-and-sandbox' not in codex and codex[1] == '--no-daemon'
+    copilot = launcher.copilot_command('m', 'B', 'G', permissions='skip')
+    assert copilot[1] == '--allow-all'
+
+
+def test_manifest_permissions_key_is_optional_and_checked(monkeypatch, tmp_path):
+    _crew_file(monkeypatch, tmp_path, 'perm', """\
+name: perm
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true}
+  - {role: Coder, brief: coder.md, tool: agy, permissions: default}
+""")
+    crew = launcher.load_crew('perm')
+    assert 'permissions' not in crew['roles'][0] and crew['permission_mode'] == 'auto'   # defaults to the crew's
+    assert crew['roles'][1]['permissions'] == 'default'
+    assert launcher.crew_members(crew, 'S')[1]['permissions'] == 'default'
+    _crew_file(monkeypatch, tmp_path, 'bad', """\
+name: bad
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true}
+  - {role: Coder, brief: coder.md, permissions: yolo}
+""")
+    with pytest.raises(SystemExit, match="permissions 'yolo' for Coder must be one of: skip, auto, default"):
+        launcher.load_crew('bad')
+
+
+@pytest.mark.parametrize('name', ['default', 'apprentice-gemini', 'apprentice-codex', 'apprentice-copilot'])
+def test_apprentice_runs_with_permissions_skip_and_claude_roles_keep_auto(name):
+    crew = launcher.load_crew(name)
+    roles = {r['role']: r for r in crew['roles']}
+    assert roles['Apprentice']['permissions'] == 'skip'
+    assert crew['permission_mode'] == 'auto'
+    assert all('permissions' not in r for label, r in roles.items() if label != 'Apprentice')
+
+
+def test_dry_run_shows_each_panes_resolved_permission_flags(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    launcher.start(['--dry-run', '--crew', 'apprentice-codex', 'task'])
+    roles = json.loads(capsys.readouterr().out)['roles']
+    assert roles['Apprentice']['permission_flags'] == ['--dangerously-bypass-approvals-and-sandbox']
+    assert roles['Coder']['permission_flags'] == ['--permission-mode', 'auto']
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_crew_carries_permissions_and_pane_uses_them(tmp_path, injected, monkeypatch, capsys):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'apprentice-gemini'])
+    member = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert member['permissions'] == 'skip'
+    seen = {}
+
+    class Child:
+        pid = 42
+
+        def wait(self):
+            return 0
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
+    monkeypatch.setattr(launcher, 'register_name', lambda pid, name: None)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
+    launcher.pane('Apprentice', str(d), start=True, cwd=str(tmp_path), slot=3)
+    assert seen['cmd'][:4] == [str(launcher.AGY_EXE), '--model', 'gemini-3.8-flash-high',
+                               '--dangerously-skip-permissions']
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_pane_claude_role_with_permissions_default_gets_no_permission_flag(tmp_path, monkeypatch):
+    state = tmp_path / CONT_SHIFT
+    state.mkdir()
+    coder = {**_member(CONT_SHIFT, 'Coder'), 'permissions': 'default'}
+    members = [_member(CONT_SHIFT, 'Foreman', human=True, colour='red', peer=f'{CONT_SHIFT}-coder'), coder]
+    (state / 'crew.json').write_text(json.dumps({'crew': 'default', 'members': members, 'slots': 4,
+                                                 'permission_mode': 'auto'}), encoding='utf-8')
+    seen = {}
+
+    class Child:
+        pid = 42
+
+        def wait(self):
+            return 0
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: None)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
+    launcher.pane('Coder', str(state), start=True, cwd=str(tmp_path))
+    assert '--permission-mode' not in seen['cmd'] and '--dangerously-skip-permissions' not in seen['cmd']
+
+
 def test_agy_command_argv_is_exact():
     assert launcher.agy_command('gemini-x', 'BRIEF', 'GO') == [
-        str(launcher.AGY_EXE), '--model', 'gemini-x', '--mode', 'auto', '-i', 'BRIEF\n\nGO']
+        str(launcher.AGY_EXE), '--model', 'gemini-x', '--dangerously-skip-permissions', '-i', 'BRIEF\n\nGO']
     assert launcher.AGY_EXE.parts[-4:] == ('Microsoft', 'WinGet', 'Links', 'agy.exe')
 
 
@@ -677,22 +792,25 @@ def test_start_dry_run_default_crew_is_the_five_pane_golden(monkeypatch, tmp_pat
                         'peer': f'{shift}-advisor, {shift}-coder, {shift}-tester, {shift}-apprentice',
                         'receives_prompt': True,
                         'first_message': 'Begin the assignment: the task text is at the end of your role instructions, '
-                                         'after "The human task for this shift follows, verbatim:".'},
+                                         'after "The human task for this shift follows, verbatim:".',
+                        'permission_flags': ['--permission-mode', 'auto']},
             'Advisor': {'session_name': f'{shift}-advisor', 'pane_title': f'{shift} shift', 'peer': f'{shift}-foreman',
                         'receives_prompt': False, 'first_message': launcher.START_MESSAGES['Advisor'],
-                        'model': 'claude-fable-5-1'},
+                        'model': 'claude-fable-5-1', 'permission_flags': ['--permission-mode', 'auto']},
             'Coder': {'session_name': f'{shift}-coder', 'pane_title': f'{shift} shift', 'peer': f'{shift}-foreman',
                       'receives_prompt': False,
-                      'first_message': 'Begin your Coder role: send READY to Foreman and await assignments.'},
+                      'first_message': 'Begin your Coder role: send READY to Foreman and await assignments.',
+                      'permission_flags': ['--permission-mode', 'auto']},
             'Tester': {'session_name': f'{shift}-tester', 'pane_title': f'{shift} shift', 'peer': f'{shift}-foreman',
                        'receives_prompt': False,
                        'first_message': 'Begin your Tester role: send READY to Foreman and await verification '
-                                        'assignments.'},
+                                        'assignments.', 'permission_flags': ['--permission-mode', 'auto']},
             'Apprentice': {'session_name': f'{shift}-apprentice', 'pane_title': f'{shift} shift',
                            'peer': f'{shift}-foreman', 'receives_prompt': False,
                            'first_message': 'Begin your Apprentice role: send READY to Foreman and await bounded '
                                             'assignments.',
-                           'tool': 'agy', 'model': 'gemini-3.8-flash-high', 'exe': str(launcher.AGY_EXE)}},
+                           'tool': 'agy', 'model': 'gemini-3.8-flash-high', 'exe': str(launcher.AGY_EXE),
+                           'permission_flags': ['--dangerously-skip-permissions']}},
         'slots': [{'slot': 1, 'role': 'Foreman', 'pane_title': f'{shift} shift'},
                   {'slot': 2, 'role': 'Advisor', 'pane_title': f'{shift} shift'},
                   {'slot': 3, 'role': 'Coder', 'pane_title': f'{shift} shift'},
@@ -3392,6 +3510,28 @@ def test_spawn_crew_with_cli_overrides_the_tool_and_falls_back_on_the_model(tmp_
     assert (member['brief'], member['colour'], member['tool'], member['model']) == \
         ('apprentice.md', 'yellow', 'copilot', launcher.COPILOT_MODEL)
     assert 'account' not in member   # account 2 belongs to the manifest's codex Apprentice, not to copilot
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_cli_equals_form_overrides_crew_and_a_gone_members_tool(tmp_path, injected, monkeypatch, capsys):
+    """--cli=copilot counts as an explicit --cli, like '--cli copilot' (asg-2 nit)."""
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'apprentice-codex', '--cli=copilot'])
+    assert json.loads(capsys.readouterr().out)['tool'] == 'copilot'
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: pid != 502)   # the agy-less Coder is gone
+    crew = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    crew['members'][1].update(tool='agy', model='gemini-3.8-flash-high')
+    (d / 'crew.json').write_text(json.dumps(crew), encoding='utf-8')
+    launcher.spawn([CONT_SHIFT, '--role', 'Coder', '--cli=codex'])
+    members = {m['label']: m for m in json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members']}
+    assert members['Apprentice']['tool'] == 'copilot' and members['Coder']['tool'] == 'codex'
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_without_cli_still_defaults_to_claude(tmp_path, injected, capsys):
+    _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Helper'])
+    assert json.loads(capsys.readouterr().out)['tool'] == 'claude'
 
 
 @pytest.mark.usefixtures('_container_isolated')

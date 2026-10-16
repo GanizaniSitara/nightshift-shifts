@@ -95,6 +95,10 @@ CODEX_MODEL = 'gpt-6.1-sol'              # default model for a spawned codex rol
 COPILOT_MODEL = 'gemini-3.8-flash-high'  # default model for a spawned copilot role
 DEFAULT_TOOL_MODELS = {'agy': AGY_MODEL, 'codex': CODEX_MODEL, 'copilot': COPILOT_MODEL}
 REASONING_LEVELS = ('low', 'medium', 'high', 'xhigh')
+PERMISSIONS = ('skip', 'auto', 'default')   # a manifest role's `permissions:`; permission_flags maps them per tool
+APPROVE_ALL_FLAGS = {'agy': ('--dangerously-skip-permissions',),   # as C:/scripts/launch.ps1 starts agy
+                     'codex': ('--dangerously-bypass-approvals-and-sandbox',),
+                     'copilot': ('--allow-all',)}
 
 
 def stage_rank(stage):
@@ -174,6 +178,12 @@ def load_crew(name='default'):
             if entry['account'] not in (1, 2):
                 raise SystemExit(f"crew {name}: account for {role} must be 1 or 2, not {entry['account']!r}")
             role_dict['account'] = entry['account']
+        if entry.get('permissions') is not None:
+            permissions = str(entry['permissions'])
+            if permissions not in PERMISSIONS:
+                raise SystemExit(f"crew {name}: permissions {permissions!r} for {role} must be one of: "
+                                 f"{', '.join(PERMISSIONS)}")
+            role_dict['permissions'] = permissions
         checked.append(role_dict)
     humans = [r['role'] for r in checked if r['human_contact']]
     if len(humans) != 1:
@@ -211,7 +221,7 @@ def crew_members(crew, shift):
                       'identity': f"{shift}-{r['role'].lower()}{suffix}", 'brief': r['brief'],
                       'colour': r['colour'], 'human_contact': r['human_contact'],
                       'tool': r['tool'], 'model': r['model']}
-            for opt in ('reasoning', 'account'):
+            for opt in ('reasoning', 'account', 'permissions'):
                 if opt in r:
                     member[opt] = r[opt]
             members.append(member)
@@ -269,23 +279,39 @@ def crew_env(environ, tool='claude', account=None):
     return env
 
 
-def agy_command(model, brief, first_message):
+def permission_flags(tool, permissions):
+    """The CLI flags for a role's `permissions:` (skip | auto | default) on `tool` - the only place they are set.
+
+    Claude: skip = --dangerously-skip-permissions, default = nothing, anything else = --permission-mode <it>
+    (auto, or a crew-level permission_mode such as plan). The other CLIs have no classifier mode, so auto
+    means approve-all like skip: agy --dangerously-skip-permissions, codex --dangerously-bypass-approvals-and-sandbox,
+    copilot --allow-all; default or any other value adds nothing.
+    """
+    permissions = permissions or START_PERMISSION_MODE
+    if tool == 'claude':
+        if permissions == 'skip':
+            return ['--dangerously-skip-permissions']
+        return [] if permissions == 'default' else ['--permission-mode', permissions]
+    return list(APPROVE_ALL_FLAGS[tool]) if permissions in ('skip', 'auto') else []
+
+
+def agy_command(model, brief, first_message, permissions=None):
     """argv for an agy (Gemini) crew member: agy has no --name or system-prompt flag, so the brief is the prompt."""
-    return [str(AGY_EXE), '--model', model, '--mode', 'auto', '-i', brief + '\n\n' + first_message]
+    return [str(AGY_EXE), '--model', model, *permission_flags('agy', permissions), '-i', brief + '\n\n' + first_message]
 
 
-def codex_command(model, brief, first_message, reasoning=None):
-    """argv for a Codex crew member: full-auto bypass, no daemon, static terminal title, optional reasoning."""
-    cmd = [str(CODEX_EXE), '--dangerously-bypass-approvals-and-sandbox', '--no-daemon',
+def codex_command(model, brief, first_message, reasoning=None, permissions=None):
+    """argv for a Codex crew member: approvals per `permissions`, no daemon, static terminal title, optional reasoning."""
+    cmd = [str(CODEX_EXE), *permission_flags('codex', permissions), '--no-daemon',
            '-c', 'tui.terminal_title=[]', '--model', model]
     if reasoning:
         cmd += ['-c', f'model_reasoning_effort={reasoning}']
     return cmd + [brief + '\n\n' + first_message]
 
 
-def copilot_command(model, brief, first_message):
-    """argv for a Copilot CLI crew member: allow-all tools, no auto-update, interactive initial prompt."""
-    return [str(COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', model,
+def copilot_command(model, brief, first_message, permissions=None):
+    """argv for a Copilot CLI crew member: tools per `permissions`, no auto-update, interactive initial prompt."""
+    return [str(COPILOT_EXE), *permission_flags('copilot', permissions), '--no-auto-update', '--model', model,
             '-i', brief + '\n\n' + first_message]
 
 
@@ -491,21 +517,22 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             identity, peer_name, colour = member['identity'], member['peer'], member['colour']
             model, tool = member['model'], member['tool']
             reasoning, account = member.get('reasoning'), member.get('account')
-            permission_mode = permission_mode or START_PERMISSION_MODE
+            # a role's own permissions: (skip | auto | default) wins over the crew-level permission_mode
+            permission_mode = member.get('permissions') or permission_mode or START_PERMISSION_MODE
             first_message = opening_message(member)
             brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'])
             if member['human_contact']:
                 brief += Path(state_dir, 'prompt.txt').read_text(encoding='utf-8')
         if tool == 'agy':
-            command = agy_command(model, brief, first_message)
+            command = agy_command(model, brief, first_message, permissions=permission_mode)
         elif tool == 'codex':
-            command = codex_command(model, brief, first_message, reasoning=reasoning)
+            command = codex_command(model, brief, first_message, reasoning=reasoning, permissions=permission_mode)
         elif tool == 'copilot':
-            command = copilot_command(model, brief, first_message)
+            command = copilot_command(model, brief, first_message, permissions=permission_mode)
         else:
             exe = Path('C:/nvm4w/nodejs/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
             command = [str(exe), '--name', identity, '--model', model,
-                       '--permission-mode', permission_mode, '--append-system-prompt', brief]
+                       *permission_flags('claude', permission_mode), '--append-system-prompt', brief]
             if start and member['role'].lower() == 'foreman':
                 command += ['--settings', json.dumps(foreman_claude_settings(cwd))]
             if reasoning:
@@ -907,7 +934,9 @@ def start(argv):
                                       if m['tool'] != 'claude' else
                                       {'model': m['model']} if m['model'] != crew['model'] else {}),
                                    **({'reasoning': m['reasoning']} if 'reasoning' in m else {}),
-                                   **({'account': m['account']} if 'account' in m else {})}
+                                   **({'account': m['account']} if 'account' in m else {}),
+                                   'permission_flags': permission_flags(
+                                       m['tool'], m.get('permissions') or crew['permission_mode'])}
                       for m in members}}
         if crew['slots']:
             # The container (NGH-025): which slot holds which crew pane, and the empty ones `spawn` can fill.
@@ -1275,14 +1304,14 @@ def spawn(argv):
                     'the window is gone, no slot is free, or the role is already live. Foreman only.')
     parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
     parser.add_argument('--role', required=True, help='role label, e.g. Advisor or Coder2 (letters, digits, _)')
-    parser.add_argument('--cli', default='claude', choices=list(SPAWN_CLIS),
+    parser.add_argument('--cli', choices=list(SPAWN_CLIS),
                         help='the CLI to run: claude (default), gemini (agy), codex or copilot; opencode is not wired '
                              'yet. Overrides the tool --crew would give')
     parser.add_argument('--crew', help="take the role's brief, colour, tool, model, reasoning and account from "
                                        "crews/NAME.yaml instead of the shift's own manifest (e.g. apprentice-codex)")
     parser.add_argument('--slot', type=int, help='slot number (default: the first free one)')
     args = parser.parse_args(argv)
-    tool = SPAWN_CLIS[args.cli]
+    tool = SPAWN_CLIS[args.cli or 'claude']
     if tool is None:
         raise SystemExit(f'--cli {args.cli} is not yet wired (NGH-022)')
     role = args.role
@@ -1293,7 +1322,7 @@ def spawn(argv):
         crew_role = next((r for r in load_crew(args.crew)['roles'] if r['role'].lower() == role.lower()), None)
         if crew_role is None:
             raise SystemExit(f'crew {args.crew} has no role {role}')
-        if '--cli' not in argv:
+        if args.cli is None:
             tool = crew_role['tool']
     state_dir = resolve_shift(args.shift)
     saved = read_crew_json(state_dir)
@@ -1335,7 +1364,7 @@ def spawn(argv):
                          f'no free slot in shift {state_dir.name} ({slots} slots, all taken)')
     shift = state_dir.name
     lead = next((m for m in members if m.get('human_contact')), members[0])
-    if existing and not crew_role and '--cli' not in argv and existing.get('tool') in TOOLS:
+    if existing and not crew_role and args.cli is None and existing.get('tool') in TOOLS:
         tool = existing['tool']
     same_role = next((m for m in members if m['role'].lower() == role.lower()), None)
     same_tool = next((m for m in members if m.get('tool') == tool), None)
@@ -1360,7 +1389,7 @@ def spawn(argv):
                           colour=manifest_role['colour'])
             if manifest_role['tool'] == tool:
                 member['model'] = manifest_role['model']
-                for opt in ('reasoning', 'account'):
+                for opt in ('reasoning', 'account', 'permissions'):
                     if opt in manifest_role:
                         member[opt] = manifest_role[opt]
     if existing:
@@ -1370,7 +1399,7 @@ def spawn(argv):
                       brief=existing.get('brief', member['brief']), colour=existing.get('colour', member['colour']))
         if tool == existing.get('tool', 'claude') and existing.get('model'):
             member['model'] = existing['model']
-            for opt in ('reasoning', 'account'):
+            for opt in ('reasoning', 'account', 'permissions'):
                 if opt in existing:
                     member[opt] = existing[opt]
     if crew_role:
@@ -1379,11 +1408,11 @@ def spawn(argv):
         member.update(role=crew_role['role'], brief=crew_role['brief'], colour=crew_role['colour'])
         if not existing:
             member['label'] = crew_role['role']
-        for opt in ('reasoning', 'account'):
+        for opt in ('reasoning', 'account', 'permissions'):
             member.pop(opt, None)
         if crew_role['tool'] == tool:
             member['model'] = crew_role['model']
-            for opt in ('reasoning', 'account'):
+            for opt in ('reasoning', 'account', 'permissions'):
                 if opt in crew_role:
                     member[opt] = crew_role[opt]
     updated = [m for m in members if m is not existing] + [member]
@@ -1455,14 +1484,16 @@ def claims_locked(state_dir, wait=5.0, stale=30.0):
     try:
         yield
     finally:
-        with contextlib.suppress(OSError):
-            lock.unlink()
+        release_file_lock(lock)
 
 
 def take_file_lock(lock, wait, stale):
-    """Create `lock` with O_EXCL, retrying for `wait` seconds (then TimeoutError); the caller unlinks it.
+    """Create `lock` with O_EXCL, retrying for `wait` seconds (then TimeoutError); the caller releases it with
+    release_file_lock.
 
-    A lock older than `stale` seconds is left over from a crashed holder and removed.
+    A lock older than `stale` seconds is left over from a crashed holder and removed. On Windows a contender's
+    create can fail with PermissionError instead of FileExistsError (the lock is delete-pending after its holder's
+    unlink, or another contender's stat has it open): that is contention too, retried until `wait` runs out.
     """
     deadline = time.time() + wait
     while True:
@@ -1481,6 +1512,28 @@ def take_file_lock(lock, wait, stale):
             if time.time() > deadline:
                 raise TimeoutError(f'{lock} is still held after {wait:.0f}s')
             time.sleep(0.1)
+        except PermissionError:
+            if time.time() > deadline:
+                raise
+            time.sleep(0.01)
+
+
+def release_file_lock(lock, wait=2.0):
+    """Unlink `lock`, retrying while Windows refuses with PermissionError (a contender's stat or create has it
+    open for a moment). Giving up silently would leave the lock until it goes stale and time out every waiter."""
+    deadline = time.time() + wait
+    while True:
+        try:
+            lock.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if time.time() > deadline:
+                return
+            time.sleep(0.005)
+        except OSError:
+            return
 
 
 def same_role(claim, role):
@@ -1579,8 +1632,7 @@ def bus_append(state_dir, event, **fields):
             finally:
                 os.close(fd)
         finally:
-            with contextlib.suppress(OSError):
-                lock.unlink()
+            release_file_lock(lock)
     except OSError as err:   # TimeoutError included
         print(f'warning: shift bus not written ({event}): {err}', file=sys.stderr)
 
