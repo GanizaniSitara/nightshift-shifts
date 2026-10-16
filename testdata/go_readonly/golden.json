@@ -1,0 +1,137 @@
+{
+  "status-live-filter": {
+    "stdout": "[]\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "status-all-roots": {
+    "stdout": "[\r\n  {\r\n    \"shift\": \"Nightshift-shift-alpha\",\r\n    \"state_dir\": \"<NIGHTSHIFT_STATE_ROOT>\\\\shifts\\\\Nightshift-shift-alpha\",\r\n    \"roles\": {\r\n      \"Boss\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-boss\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Junior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-junior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"Senior\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-senior\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      },\r\n      \"QA\": {\r\n        \"pid\": 2147483000,\r\n        \"wrapper_pid\": 2147483001,\r\n        \"name\": \"session-qa\",\r\n        \"cwd\": \"C:\\\\work space\\\\caf\\u00e9\",\r\n        \"tool\": \"codex\",\r\n        \"alive\": false,\r\n        \"registered\": false\r\n      }\r\n    },\r\n    \"task\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"quote\\\" \\\\path\",\r\n    \"alive\": false,\r\n    \"slots\": [\r\n      {\r\n        \"slot\": 1,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 2,\r\n        \"role\": \"Junior\",\r\n        \"state\": \"starting\",\r\n        \"reusable\": false\r\n      },\r\n      {\r\n        \"slot\": 3,\r\n        \"role\": null,\r\n        \"state\": \"gone\",\r\n        \"reusable\": false\r\n      }\r\n    ],\r\n    \"stage\": \"tested\",\r\n    \"result\": \"short\",\r\n    \"requires\": \"deployed\",\r\n    \"messages\": {\r\n      \"unsent\": 3,\r\n      \"unacked\": 13\r\n    },\r\n    \"holds\": \"C:\\\\locked folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-beta\",\r\n    \"state_dir\": \"<NIGHTSHIFT_LEGACY_ROOT>\\\\shifts\\\\Nightshift-shift-beta\",\r\n    \"roles\": {},\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"stage\": null,\r\n    \"result\": \"invalid\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 0,\r\n      \"unacked\": 0\r\n    },\r\n    \"holds\": \"C:\\\\old folder\"\r\n  },\r\n  {\r\n    \"shift\": \"Nightshift-shift-empty\",\r\n    \"state_dir\": \"<NIGHTSHIFT_STATE_ROOT>\\\\shifts\\\\Nightshift-shift-empty\",\r\n    \"roles\": {},\r\n    \"task\": \"\",\r\n    \"alive\": false,\r\n    \"stage\": null,\r\n    \"result\": \"none\",\r\n    \"requires\": \"tested\",\r\n    \"messages\": {\r\n      \"unsent\": 0,\r\n      \"unacked\": 0\r\n    },\r\n    \"holds\": null\r\n  }\r\n]\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "claims-unicode-order": {
+    "stdout": "{\r\n  \"C:\\\\z path\\\\\\u03a9.py\": {\r\n    \"role\": \"Junior\",\r\n    \"time\": \"first\"\r\n  },\r\n  \"C:\\\\a\\\\\\\".py\": {\r\n    \"role\": \"QA\",\r\n    \"time\": \"second\"\r\n  }\r\n}\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "claims-legacy-invalid": {
+    "stdout": "{}\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "claims-latest-missing": {
+    "stdout": "{}\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "inbox-junior": {
+    "stdout": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 12,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:6 kind:note asg:code-a\",\r\n      \"to\": \"session-boss\"\r\n    },\r\n    {\r\n      \"id\": 9,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": null,\r\n      \"body\": \"unsent output\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:9 kind:note asg:-\",\r\n      \"to\": \"session-senior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    }\r\n  ]\r\n}\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "inbox-session-alias": {
+    "stdout": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 12,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:6 kind:note asg:code-a\",\r\n      \"to\": \"session-boss\"\r\n    },\r\n    {\r\n      \"id\": 9,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": null,\r\n      \"body\": \"unsent output\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:9 kind:note asg:-\",\r\n      \"to\": \"session-senior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    }\r\n  ]\r\n}\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "inbox-mesh-alias": {
+    "stdout": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 12,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:6 kind:note asg:code-a\",\r\n      \"to\": \"session-boss\"\r\n    },\r\n    {\r\n      \"id\": 9,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": null,\r\n      \"body\": \"unsent output\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:9 kind:note asg:-\",\r\n      \"to\": \"session-senior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    }\r\n  ]\r\n}\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "inbox-uplift-foreman": {
+    "stdout": "{\r\n  \"inbound_unacked\": [\r\n    {\r\n      \"id\": 3,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-a\",\r\n      \"body\": \"TESTED-FAIL first\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 5,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"QA\",\r\n      \"sender_incarnation\": 400.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"verify-b\",\r\n      \"body\": \"TESTED-FAIL second\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 6,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 200.5,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"APPRENTICE-NEEDS-SENIOR detail\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    },\r\n    {\r\n      \"id\": 11,\r\n      \"kind\": \"result\",\r\n      \"sender\": \"Junior\",\r\n      \"sender_incarnation\": 199.0,\r\n      \"recipient\": \"Boss\",\r\n      \"recipient_incarnation\": 100.25,\r\n      \"asg\": \"old-code\",\r\n      \"body\": \"done\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null\r\n    }\r\n  ],\r\n  \"outbound_unsent\": [\r\n    {\r\n      \"id\": 14,\r\n      \"kind\": \"note\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": null,\r\n      \"body\": \"stored input\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"stored\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"header\": \"msg:14 kind:note asg:-\",\r\n      \"to\": \"session-junior\"\r\n    }\r\n  ],\r\n  \"active_assignments\": [\r\n    {\r\n      \"id\": 1,\r\n      \"kind\": \"assignment\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Junior\",\r\n      \"recipient_incarnation\": 200.5,\r\n      \"asg\": \"code-a\",\r\n      \"body\": \"Caf\\u00e9 \\ud83d\\ude80 \\\"x\\\" \\\\path\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": 1.25,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": null,\r\n      \"reason\": null,\r\n      \"evidence\": null,\r\n      \"stale\": false\r\n    },\r\n    {\r\n      \"id\": 13,\r\n      \"kind\": \"uplift\",\r\n      \"sender\": \"Boss\",\r\n      \"sender_incarnation\": 100.25,\r\n      \"recipient\": \"Senior\",\r\n      \"recipient_incarnation\": 300.75,\r\n      \"asg\": \"moved\",\r\n      \"body\": \"body\",\r\n      \"created\": \"2026-10-16 00:00:00\",\r\n      \"state\": \"sent\",\r\n      \"delivered_epoch\": null,\r\n      \"coding_asg\": null,\r\n      \"source_dispatch_id\": 12,\r\n      \"reason\": \"needs-senior\",\r\n      \"evidence\": \"[{\\\"id\\\": 12}]\",\r\n      \"stale\": false\r\n    }\r\n  ],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"golden\",\r\n    \"total\": 1,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 1,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": [\r\n    {\r\n      \"asg\": \"code-a\",\r\n      \"source_dispatch_id\": 1,\r\n      \"reasons\": [\r\n        \"needs-senior\",\r\n        \"tester-failed-twice\",\r\n        \"timeout\"\r\n      ]\r\n    }\r\n  ]\r\n}\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "inbox-no-mailbox": {
+    "stdout": "{\r\n  \"inbound_unacked\": [],\r\n  \"outbound_unsent\": [],\r\n  \"active_assignments\": [],\r\n  \"uplift_counts\": {\r\n    \"crew\": \"Nightshift-shift-empty\",\r\n    \"total\": 0,\r\n    \"by_reason\": {\r\n      \"needs-senior\": 0,\r\n      \"tester-failed-twice\": 0,\r\n      \"timeout\": 0\r\n    }\r\n  },\r\n  \"uplift_due\": []\r\n}\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "inbox-unknown-role": {
+    "stdout": "",
+    "stderr": "'outsider' is not a member of shift Nightshift-shift-alpha; use one of: Boss, Junior, Senior, QA\r\n",
+    "exit": 1
+  },
+  "missing-shift": {
+    "stdout": "",
+    "stderr": "shift 'missing' matches 0 shifts; give the full name\r\n",
+    "exit": 1
+  },
+  "log-human": {
+    "stdout": "#1 01:02:03 start ticket:- crew:golden members:Boss,QA cwd:C:\\a b\r\n#2 01:02:04 msg Boss->Junior assignment asg:- msg:8  Café 🚀 tab spaced words \" \\ end\r\n#3 01:02:05 ack msg:8 by QA: bad (why Ω)\r\n#4 01:02:06 sent msg:8\r\n#5 01:02:07 spawn QA slot:2 tool:codex mesh-qa\r\n#6 01:02:08 custom {\"z\": {\"snow\": \"雪\", \"ok\": true}, \"a\": [null, 1.0, \"<>&\"]}\r\n#7 01:02:09 down stopped:Junior lock_released:-\r\n? not-json\r\n? []\r\n? {}\r\n? �\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "log-json": {
+    "stdout": "{\"seq\": 1, \"ts\": \"2026-10-16T01:02:03\", \"event\": \"start\", \"ticket\": null, \"crew\": \"golden\", \"members\": [\"Boss\", \"QA\"], \"cwd\": \"C:\\\\a b\"}\r\n{\"seq\": 2, \"ts\": \"2026-10-16T01:02:04\", \"event\": \"msg\", \"id\": 8, \"sender\": \"Boss\", \"recipient\": \"Junior\", \"kind\": \"assignment\", \"asg\": null, \"body\": \"Café 🚀\\n tab\\t spaced words \\\" \\\\ end\"}\r\n{\"seq\": 3, \"ts\": \"2026-10-16T01:02:05\", \"event\": \"ack\", \"id\": 8, \"by\": \"QA\", \"outcome\": \"bad\", \"reason\": \"why Ω\"}\r\n{\"seq\": 4, \"ts\": \"2026-10-16T01:02:06\", \"event\": \"sent\", \"id\": 8}\r\n{\"seq\": 5, \"ts\": \"2026-10-16T01:02:07\", \"event\": \"spawn\", \"role\": \"QA\", \"slot\": 2, \"tool\": \"codex\", \"identity\": \"mesh-qa\"}\r\n{\"seq\": 6, \"ts\": \"2026-10-16T01:02:08\", \"event\": \"custom\", \"z\": {\"snow\": \"雪\", \"ok\": true}, \"a\": [null, 1.0, \"<>&\"]}\r\n{\"seq\": 7, \"ts\": \"2026-10-16T01:02:09\", \"event\": \"down\", \"stopped\": [\"Junior\"], \"lock_released\": []}\r\nnot-json\r\n[]\r\n{}\r\n�\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "log-since": {
+    "stdout": "#4 01:02:06 sent msg:8\r\n#5 01:02:07 spawn QA slot:2 tool:codex mesh-qa\r\n#6 01:02:08 custom {\"z\": {\"snow\": \"雪\", \"ok\": true}, \"a\": [null, 1.0, \"<>&\"]}\r\n#7 01:02:09 down stopped:Junior lock_released:-\r\n? not-json\r\n? []\r\n? {}\r\n? �\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "log-json-since": {
+    "stdout": "{\"seq\": 4, \"ts\": \"2026-10-16T01:02:06\", \"event\": \"sent\", \"id\": 8}\r\n{\"seq\": 5, \"ts\": \"2026-10-16T01:02:07\", \"event\": \"spawn\", \"role\": \"QA\", \"slot\": 2, \"tool\": \"codex\", \"identity\": \"mesh-qa\"}\r\n{\"seq\": 6, \"ts\": \"2026-10-16T01:02:08\", \"event\": \"custom\", \"z\": {\"snow\": \"雪\", \"ok\": true}, \"a\": [null, 1.0, \"<>&\"]}\r\n{\"seq\": 7, \"ts\": \"2026-10-16T01:02:09\", \"event\": \"down\", \"stopped\": [\"Junior\"], \"lock_released\": []}\r\nnot-json\r\n[]\r\n{}\r\n�\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "log-follow-down-filtered": {
+    "stdout": "? not-json\r\n? []\r\n? {}\r\n? �\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "log-no-bus": {
+    "stdout": "",
+    "stderr": "no bus yet: <NIGHTSHIFT_LEGACY_ROOT>\\shifts\\Nightshift-shift-beta\\bus.jsonl\r\n",
+    "exit": 0
+  },
+  "error-status-extra": {
+    "stdout": "",
+    "stderr": "usage: nightshift status [-h] [--all]\r\nnightshift status: error: unrecognized arguments: --bogus\r\n",
+    "exit": 2
+  },
+  "error-claims-required": {
+    "stdout": "",
+    "stderr": "usage: nightshift claims [-h] shift\r\nnightshift claims: error: the following arguments are required: shift\r\n",
+    "exit": 2
+  },
+  "error-inbox-role-required": {
+    "stdout": "",
+    "stderr": "usage: nightshift inbox [-h] shift role\r\nnightshift inbox: error: the following arguments are required: role\r\n",
+    "exit": 2
+  },
+  "error-log-since-type": {
+    "stdout": "",
+    "stderr": "usage: nightshift log [-h] [--follow] [--since N] [--json] shift\r\nnightshift log: error: argument --since: invalid int value: 'bad'\r\n",
+    "exit": 2
+  },
+  "error-log-unknown": {
+    "stdout": "",
+    "stderr": "usage: nightshift log [-h] [--follow] [--since N] [--json] shift\r\nnightshift log: error: unrecognized arguments: --bogus\r\n",
+    "exit": 2
+  },
+  "help-status": {
+    "stdout": "usage: nightshift status [-h] [--all]\r\n\r\nList shifts and whether their crews are alive.\r\n\r\noptions:\r\n  -h, --help  show this help message and exit\r\n  --all       include shifts whose crew is gone\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "help-claims": {
+    "stdout": "usage: nightshift claims [-h] shift\r\n\r\nPrint a shift's file claims as JSON.\r\n\r\npositional arguments:\r\n  shift       shift name, unique suffix, or \"latest\"\r\n\r\noptions:\r\n  -h, --help  show this help message and exit\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "help-inbox": {
+    "stdout": "usage: nightshift inbox [-h] shift role\r\n\r\nA member's mailbox as JSON: inbound_unacked, outbound_unsent (send each, then\r\n`msg sent`), active_assignments (stale = sent to an earlier incarnation of the\r\nrecipient).\r\n\r\npositional arguments:\r\n  shift       shift name, unique suffix, or \"latest\"\r\n  role        your crew label (Foreman, Coder) or session name\r\n\r\noptions:\r\n  -h, --help  show this help message and exit\r\n",
+    "stderr": "",
+    "exit": 0
+  },
+  "help-log": {
+    "stdout": "usage: nightshift log [-h] [--follow] [--since N] [--json] shift\r\n\r\nPrint a shift's bus (<state_dir>/bus.jsonl) in order: every mailbox message,\r\nsent and ack, and the start, spawn, result and down events. Reads the file\r\nonly; there is no bus process. --follow keeps watching until Ctrl+C, or until\r\nthe shift's down event has been printed.\r\n\r\npositional arguments:\r\n  shift         shift name, unique suffix, or \"latest\"\r\n\r\noptions:\r\n  -h, --help    show this help message and exit\r\n  --follow, -f  keep printing new events as they are appended\r\n  --since N     only events with seq greater than N\r\n  --json        print the raw JSON lines\r\n",
+    "stderr": "",
+    "exit": 0
+  }
+}

@@ -69,6 +69,22 @@ All three commands are wired through the main parser and `COMMANDS` mapping. The
 and dispatch operations, not additional crew sessions: cleaner and warden are safe to run repeatedly,
 and `--dry-run` is the inspection mode for all three.
 
+## Standalone read-only Go view (NGH-021)
+
+The repository also builds a standalone `build\nightshift.exe` containing the four read-only views
+`status`, `claims`, `inbox`, and `log`. It reads the same shift-folder contract as the Python
+launcher and never delegates to Python or replaces the `nightshift.cmd` shim. The state roots may
+be isolated for inspection with `NIGHTSHIFT_STATE_ROOT` (default `C:\nightshift`),
+`NIGHTSHIFT_LEGACY_ROOT` (default `C:\Data\nightshift`), and `NIGHTSHIFT_HOME` (the home used
+for Claude session-registration lookup).
+
+Mailbox reads take the same named Windows mutex as the Python helper, copy `mailbox.sqlite3` and
+an existing `-wal` to a disposable directory while holding it, and open only that copy. They do
+not create `-shm` or other sidecars beside a live shift mailbox. The build requires the cached Go
+1.25.12 toolchain and the pinned module versions in `go.mod`; the build entrypoint is the external script
+`C:\scripts\build-nightshift-go.cmd <worktree>`, which uses the cached Go toolchain with
+`GOPROXY=off`, `GOSUMDB=off`, and `GOTOOLCHAIN=local` and writes `<worktree>\build\nightshift.exe`.
+
 ## Container, not loop (owner decision, 16 Oct 2026; NGH-025)
 
 The owner has reset the shape of the thing. Nightshift is **not a persistent process**. The
@@ -919,7 +935,7 @@ with **Foreman-driven landing (`nightshift land`)**:
 | `down` with handover; `resume` re-dispatches acked-but-unfinished work | `down`/handover, loop retries with handover carry-over, `resume` after reboot | matches |
 | Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | Tester (NGH-024) and a dormant Fable Advisor that only Foreman may consult (NGH-027) built into the default crew; out-of-shift floor CLI roles `cleaner`, `warden`, `gaffer` built (NGH-035) | matches / extended |
 | Second coder, heterogeneous CLIs later | Apprentice in slot 5 (NGH-029), Codex crew (NGH-033), Copilot crew (NGH-037/NGH-039) | built |
-| "Portable package", CLI language open | Python in its own repo; binary decision NGH-021 | open |
+| "Portable package", CLI language open | Python launcher plus the standalone Go read-only view; start/spawn/down/land remain Python | NGH-021 increment 1 built |
 | — (not in the design) | loop, result ladder, crew manifest, opt-in Mailkeep notification, denial capture | additions |
 | — (owner, 16 Oct) | container with slot grid (2x4/1x4), `slots/`, `spawn`, Foreman-owned `down --close/--hold` (close default), launcher exits; loop optional | NGH-025, built |
 | — (owner, 16 Oct) | `C:\nightshift\` state root, `floor.json`, and `nightshift cleaner / warden / gaffer` CLI subcommands | NGH-035, built |
@@ -935,5 +951,4 @@ with **Foreman-driven landing (`nightshift land`)**:
 - Which frontier model the Advisor should run long term across all manifests (Claude Fable in `default.yaml`,
   GPT-6 Astra in `codex.yaml`; Copilot's owner-set policy is Gemini 3.8 Flash for every role).
 - Whether to converge all messaging on mailbox + agents-cli, or keep native mesh for Claude.
-- Single binary (NGH-021): PyInstaller bundle vs Go port — owner's call.
 - Parallel shifts across separate codebases (NGH-013).
