@@ -1,5 +1,5 @@
 # Nightshift crew manifest: `nightshift start` uses this one; `nightshift start --crew NAME`
-# reads nightshift-crews/NAME.yaml instead. Briefs are files in nightshift-briefs/ (common.md
+# reads crews/NAME.yaml instead. Briefs are files in briefs/ (common.md
 # always comes first). Exactly one role has human_contact: true and count 1; 2 to 8 panes in all.
 # The default crew is Foreman, Advisor, Coder, Tester and Apprentice in slots 1..5 of the 2x4 container,
 # leaving slots 6..8 as empty cmd shells for `spawn`. To try the Apprentice on another CLI inside a live
