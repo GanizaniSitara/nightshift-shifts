@@ -109,7 +109,30 @@ func slotShell(slot int, stateDir string) error {
 			kept = setValue(kept, p.key, p.val)
 		}
 	}
+	if crew, ok := readObject(filepath.Join(stateDir, "crew.json")); ok && len(kept) == 0 {
+		if n, ok := objectNumber(crew, "slots"); ok && n.String() == strconv.Itoa(slot) {
+			out(opsBanner(stateDir))
+		}
+	}
 	return writeSlot(stateDir, slot, append(kept, pair{"cmd_pid", os.Getppid()}))
+}
+
+// opsBanner marks the container's last slot as the Ops pane (docs/design-live-shift.md): the place to type
+// nightshift commands for this shift. Commands run here find the shift from the folder.
+func opsBanner(stateDir string) string {
+	shift := filepath.Base(stateDir)
+	label := strings.TrimSpace(readText(filepath.Join(stateDir, "ticket.txt")))
+	if label == "" {
+		label = shift
+	}
+	const bold, dim, reset = "\x1b[1;30;47m", "\x1b[90m", "\x1b[0m"
+	return "\n" + bold + " NIGHTSHIFT OPS  " + label + " " + reset + "\n\n" +
+		"  nightshift add \"task\"            queue work for this crew (or a ticket ID)\n" +
+		"  nightshift queue                 what is queued, running, landed\n" +
+		"  nightshift status                the crew and its panes\n" +
+		"  nightshift log " + shift + " --follow\n" +
+		"  nightshift down " + shift + " --close\n\n" +
+		dim + "  Talk to the Foreman in the top-left pane; type commands here." + reset + "\n\n"
 }
 
 // writeSlot is write_slot: {started, role: None, **fields, slot} with fields winning in place.

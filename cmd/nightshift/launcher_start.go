@@ -288,7 +288,7 @@ func runStart(argv []string, print bool) (string, error) {
 		title = paneTitle(ticket)
 	}
 	command := wtCommand(wtSpec{name: name, stateDir: stateDir, agents: true, modeFlag: "--start", cwd: cwd, members: cells,
-		crew: crew.name, ticket: ticket, slots: slots, colours: colours})
+		crew: crew.name, ticket: ticket, slots: slots, colours: colours, opsDir: repoRoot})
 	if args.present["--dry-run"] {
 		if print {
 			outLine(renderJSON(startPlan(name, stateDir, cwd, ticket, title, task, required, crew, members, cells, slots, advisorSlot,
@@ -705,6 +705,7 @@ func loopTitle(tickets []string) string {
 // wtSpec describes one wt.exe window: the start container, or a legacy trial.
 type wtSpec struct {
 	name, stateDir, modeFlag, briefFile, cwd, crew, ticket string
+	opsDir                                                 string // the last container slot (Ops pane) opens here
 	agents                                                 bool
 	members                                                []string
 	slots                                                  int
@@ -774,7 +775,11 @@ func wtCommand(w wtSpec) []string {
 		if w.agents {
 			command = append(command, "--profile", launcherProfile)
 		}
-		command = append(command, "--title", paneTitle(label), "--suppressApplicationTitle", "-d", dir,
+		cellDir := dir
+		if w.opsDir != "" && w.slots != 0 && i == w.slots-1 {
+			cellDir = w.opsDir
+		}
+		command = append(command, "--title", paneTitle(label), "--suppressApplicationTitle", "-d", cellDir,
 			"cmd.exe", "/k", exe, "--slot", strconv.Itoa(i+1), "--state-dir", w.stateDir)
 	}
 	columns := func(from, to int) {

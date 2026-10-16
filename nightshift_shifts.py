@@ -1144,7 +1144,7 @@ def loop_title(tickets):
 
 
 def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=None, members=DEFAULT_LABELS,
-               crew='default', ticket=None, slots=None, codex_colours=None):
+               crew='default', ticket=None, slots=None, codex_colours=None, ops_dir=None):
     """wt.exe argv for one tab holding `members` (pane labels, in order).
 
     2 panes: side by side, focus left (unchanged since the first crew). 3-4: one row of equal columns,
@@ -1162,7 +1162,8 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
         if agents:
             command.extend(['--profile', PROFILE])
         command.extend(['--title', pane_title(ticket or name), '--suppressApplicationTitle',
-                        '-d', cwd if mode_flag == '--start' and cwd else '%USERPROFILE%', 'cmd.exe', '/k', sys.executable, script,
+                        '-d', str(ops_dir) if ops_dir and slots and slot == slots else
+                        cwd if mode_flag == '--start' and cwd else '%USERPROFILE%', 'cmd.exe', '/k', sys.executable, script,
                         '--slot', str(slot), '--state-dir', str(state_dir)])
 
     def place(parts, i):
@@ -1727,7 +1728,7 @@ def start(argv):
     if slots:
         cells += [None] * (slots - len(cells))
     command = wt_command(name, state_dir, agents=True, mode_flag='--start', cwd=cwd, members=cells, crew=crew['name'],
-                         ticket=ticket, slots=slots,
+                         ticket=ticket, slots=slots, ops_dir=repo_root,
                          codex_colours={m['label']: m['colour'] for m in members if m['tool'] in ('agy', 'codex', 'copilot')})
     if args.dry_run:
         plan = {

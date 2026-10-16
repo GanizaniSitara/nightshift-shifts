@@ -6208,7 +6208,10 @@ def test_worktree_start_records_metadata_and_all_slot_cwds(worktree_world, capsy
     argv = w.launches[-1][0]
     assert argv.count('--cwd') == 4   # Advisor is a reserved cmd slot; four live crew wrappers take --cwd
     assert argv.count('-d') == 8
-    assert all(argv[i + 1] == str(work) for i, token in enumerate(argv) if token == '-d')
+    dirs = [argv[i + 1] for i, token in enumerate(argv) if token == '-d']
+    # the last container slot is the Ops pane and opens in the repository itself
+    assert sorted(dirs, key=lambda d: d != str(work)) == [str(work)] * 7 + [dirs[-1]], dirs
+    assert Path(dirs[-1]).resolve().is_relative_to(w.repo.resolve()), dirs
     assert all(argv[i + 1] == str(work) for i, token in enumerate(argv) if token == '--cwd')
     assert not launcher.lock_path(str(w.repo)).exists()
     # Parent remains untouched even though the nested source folder is untracked.
