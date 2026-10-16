@@ -89,7 +89,7 @@ START_MESSAGES = {'Foreman': 'Begin the assignment: the task text is at the end 
                              '"The human task for this shift follows, verbatim:".',
                   'Coder': 'Begin your Coder role: send READY to Foreman and await assignments.',
                   'Tester': 'Begin your Tester role: send READY to Foreman and await verification assignments.',
-                  'Apprentice': 'Begin your Apprentice role: send READY to Foreman and await bounded assignments.',
+                  'Apprentice': 'Begin your primary coding role: send READY to Foreman and await assignments.',
                   'Advisor': 'You are the Advisor and dormant: do not send READY, do not poll, read or run anything; '
                              'wait silently until Foreman messages you.'}
 ADVISOR = 'Advisor'   # the crew label only the human contact may message, and that answers only it (NGH-027)
@@ -2285,7 +2285,8 @@ class ProtocolViolation(FolderLocked):
     """An ack that does not match the mailbox (unknown id, wrong recipient, stale incarnation); exits with code 5."""
 
 
-MSG_KINDS = ('assignment', 'result', 'note', 'ack')
+MSG_KINDS = ('assignment', 'uplift', 'result', 'note', 'ack')
+UPLIFT_REASONS = ('needs-senior', 'tester-failed-twice', 'timeout')
 MAILBOX_SCHEMA = '''CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, sender TEXT NOT NULL, sender_incarnation REAL,
     recipient TEXT NOT NULL, recipient_incarnation REAL, asg TEXT, body TEXT NOT NULL, created TEXT NOT NULL,
@@ -2350,6 +2351,11 @@ def mailbox(state_dir, create=True):
         if create:
             conn.execute('PRAGMA journal_mode=WAL')
             conn.execute(MAILBOX_SCHEMA)
+            columns = {r[1] for r in conn.execute('PRAGMA table_info(messages)')}
+            for name, sql_type in (('delivered_epoch', 'REAL'), ('coding_asg', 'TEXT'),
+                                   ('source_dispatch_id', 'INTEGER'), ('reason', 'TEXT'), ('evidence', 'TEXT')):
+                if name not in columns:
+                    conn.execute(f'ALTER TABLE messages ADD COLUMN {name} {sql_type}')
             conn.commit()
         yield conn
 
@@ -2406,7 +2412,7 @@ def msg_header(row):
     return f"msg:{row['id']} kind:{row['kind']} asg:{row['asg'] or '-'}"
 
 
-def insert_message(conn, state_dir, kind, sender, recipient, body, asg=None):
+def insert_message(conn, state_dir, kind, sender, recipient, body, asg=None, **metadata):
     """Store a message with both incarnations as they are now and put it on the shift bus; returns its id.
 
     Every mailbox row is written here, so every one lands on the bus as a 'msg' event.
@@ -2417,13 +2423,130 @@ def insert_message(conn, state_dir, kind, sender, recipient, body, asg=None):
             'created, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (kind, sender, incarnation(state_dir, sender), recipient, incarnation(state_dir, recipient), asg, body,
              time.strftime('%Y-%m-%d %H:%M:%S'), 'stored'))
-    bus_append(state_dir, 'msg', id=cur.lastrowid, kind=kind, sender=sender, recipient=recipient, asg=asg, body=body)
+        for key, value in metadata.items():
+            conn.execute(f'UPDATE messages SET {key} = ? WHERE id = ?', (value, cur.lastrowid))
+    bus_append(state_dir, 'msg', id=cur.lastrowid, kind=kind, sender=sender, recipient=recipient, asg=asg, body=body,
+               **metadata)
     return cur.lastrowid
 
 
 def get_message(conn, msg_id):
     row = conn.execute('SELECT * FROM messages WHERE id = ?', (msg_id,)).fetchone()
     return dict(row) if row else None
+
+
+def crew_role(state_dir, label):
+    return next((m.get('role', label) for m in (read_crew_json(state_dir) or {}).get('members', [])
+                 if m['label'] == label), label)
+
+
+def dispatches(state_dir, rows):
+    """Latest coding owner per asg, independent of verification and other assignments."""
+    latest = {}
+    for row in rows:
+        if row['kind'] not in ('assignment', 'uplift'):
+            continue
+        coding = crew_role(state_dir, row['recipient']) in ('Apprentice', 'Coder')
+        key = (row['asg'] if row['asg'] is not None else row['id'], 'coding' if coding else row['recipient'])
+        latest[key] = row
+    return list(latest.values())
+
+
+def dispatch_done(dispatch, rows):
+    return any(r['kind'] == 'result' and r['asg'] == dispatch['asg'] and r['id'] > dispatch['id']
+               and r['sender'] == dispatch['recipient']
+               and r['sender_incarnation'] == dispatch['recipient_incarnation']
+               and r['recipient'] == dispatch['sender'] for r in rows)
+
+
+def uplift_evidence(state_dir, source, rows):
+    """Failures span same-owner retries; needs-senior and timeout belong to the latest dispatch."""
+    reports = [r for r in rows if r['id'] > source['id'] and r['asg'] == source['asg']
+               and r['sender'] == source['recipient'] and r['recipient'] == source['sender']
+               and r['sender_incarnation'] == source['recipient_incarnation']
+               and r['kind'] == 'note' and r['body'].startswith('APPRENTICE-NEEDS-SENIOR')]
+    ownership_start = source['id']
+    for previous in reversed(rows):
+        if (previous['id'] >= source['id'] or previous['asg'] != source['asg']
+                or previous['kind'] not in ('assignment', 'uplift')
+                or crew_role(state_dir, previous['recipient']) not in ('Apprentice', 'Coder')):
+            continue
+        if (previous['recipient'] != source['recipient']
+                or previous['recipient_incarnation'] != source['recipient_incarnation']
+                or previous['sender'] != source['sender']):
+            break
+        ownership_start = previous['id']
+    failures = []
+    for verification in dispatches(state_dir, rows):
+        if (crew_role(state_dir, verification['recipient']) != 'Tester'
+                or verification.get('coding_asg') != source['asg'] or verification['id'] <= ownership_start
+                or verification['sender'] != source['sender']):
+            continue
+        verdict = next((r for r in rows if r['kind'] == 'result' and r['asg'] == verification['asg']
+                        and r['id'] > verification['id'] and r['sender'] == verification['recipient']
+                        and r['sender_incarnation'] == verification['recipient_incarnation']
+                        and r['recipient'] == source['sender'] and r['body'].startswith('TESTED-FAIL')), None)
+        if verdict:
+            failures.append(verdict)
+    evidence = {}
+    if reports:
+        evidence['needs-senior'] = reports
+    if len(failures) >= 2:
+        evidence['tester-failed-twice'] = failures
+    delivered = source.get('delivered_epoch')
+    if delivered is not None and time.time() - delivered >= 900 and not dispatch_done(source, rows):
+        evidence['timeout'] = [{'id': source['id'], 'delivered_epoch': delivered, 'body': source['body']}]
+    return evidence
+
+
+def require_released_claims(state_dir, label):
+    aliases = {label.lower()}
+    aliases.update(str(n).lower() for n in (mesh_name(state_dir, label), member_info(state_dir, label).get('name'),
+                                           next((m['identity'] for m in crew_roster(state_dir)
+                                                 if m['label'] == label), None)) if n)
+    held = [p for p, c in load_claims(state_dir).items() if str(c.get('role', '')).lower() in aliases]
+    if held:
+        raise FileClaimed(4, f'{label} must release claims before transfer: {", ".join(held)}')
+
+
+def store_dispatch_message(conn, state_dir, args, sender, recipient):
+    rows = [dict(r) for r in conn.execute('SELECT * FROM messages ORDER BY id')]
+    lead = human_contact_label(state_dir)
+    latest = dispatches(state_dir, rows)
+    source = next((r for r in latest if args.asg is not None and r['asg'] == args.asg and r['sender'] == lead
+                   and crew_role(state_dir, r['recipient']) in ('Apprentice', 'Coder')), None)
+    metadata = {}
+    if args.coding_asg:
+        if args.kind != 'assignment' or sender != lead or crew_role(state_dir, recipient) != 'Tester' or not args.asg:
+            raise SystemExit('--coding-asg requires a Foreman verification assignment with --asg')
+        if not any(r['asg'] == args.coding_asg and crew_role(state_dir, r['recipient']) in ('Apprentice', 'Coder')
+                   for r in latest):
+            raise SystemExit('--coding-asg must name a coding assignment')
+        metadata['coding_asg'] = args.coding_asg
+    if args.reason and args.kind != 'uplift':
+        raise SystemExit('--reason requires --kind uplift')
+    if args.kind == 'uplift':
+        if sender != lead or crew_role(state_dir, recipient) != 'Coder' or not args.asg or not args.reason:
+            raise SystemExit('uplift requires Foreman -> Coder, --asg and --reason')
+        if source and source['kind'] == 'uplift':
+            if source['recipient'] != recipient or source.get('reason') != args.reason:
+                raise SystemExit('assignment already uplifted to a different recipient or reason')
+            return source['id']
+        if (not source or crew_role(state_dir, source['recipient']) != 'Apprentice'
+                or source['recipient_incarnation'] != incarnation(state_dir, source['recipient'])):
+            raise SystemExit('uplift requires a current Apprentice coding assignment')
+        evidence = uplift_evidence(state_dir, source, rows)
+        if args.reason not in evidence:
+            raise SystemExit(f'uplift trigger not satisfied: {args.reason}')
+        require_released_claims(state_dir, source['recipient'])
+        metadata.update(source_dispatch_id=source['id'], reason=args.reason,
+                        evidence=json.dumps(evidence[args.reason]))
+    elif (args.kind == 'assignment' and sender == lead and source and source['recipient'] != recipient
+          and crew_role(state_dir, recipient) in ('Apprentice', 'Coder')):
+        if crew_role(state_dir, source['recipient']) == 'Apprentice' and crew_role(state_dir, recipient) == 'Coder':
+            raise SystemExit('use --kind uplift with a validated reason for Apprentice -> Coder transfer')
+        require_released_claims(state_dir, source['recipient'])
+    return insert_message(conn, state_dir, args.kind, sender, recipient, args.body, args.asg, **metadata)
 
 
 def msg(argv):
@@ -2438,6 +2561,8 @@ def msg(argv):
     send.add_argument('--kind', required=True, choices=MSG_KINDS)
     send.add_argument('--body', required=True, help='the message text the recipient acts on')
     send.add_argument('--asg', help='assignment id this message belongs to')
+    send.add_argument('--reason', choices=UPLIFT_REASONS, help='validated trigger for an uplift')
+    send.add_argument('--coding-asg', help='coding assignment verified by this Tester assignment')
     sent = sub.add_parser('sent', help='mark a stored message as delivered with SendMessage')
     sent.add_argument('shift', help='shift name, unique suffix, or "latest"')
     sent.add_argument('id', type=int)
@@ -2450,13 +2575,15 @@ def msg(argv):
             raise SystemExit(f'only {lead} may address the {ADVISOR}; nothing stored')
         if sender == ADVISOR and recipient != lead:
             raise SystemExit(f'the {ADVISOR} answers only {lead}; nothing stored')
-        with mailbox(state_dir) as conn:
-            msg_id = insert_message(conn, state_dir, args.kind, sender, recipient, args.body, args.asg)
+        with claims_locked(state_dir), mailbox(state_dir) as conn:
+            msg_id = store_dispatch_message(conn, state_dir, args, sender, recipient)
             print(msg_header(get_message(conn, msg_id)))
         return
     with mailbox(state_dir) as conn:
         with conn:
             conn.execute("UPDATE messages SET state = 'sent' WHERE id = ? AND state = 'stored'", (args.id,))
+            conn.execute('UPDATE messages SET delivered_epoch = COALESCE(delivered_epoch, ?) WHERE id = ?',
+                         (time.time(), args.id))
         row = get_message(conn, args.id)
     if row is None:
         raise SystemExit(f'no message msg:{args.id} in shift {state_dir.name}')
@@ -2467,6 +2594,10 @@ def msg(argv):
 def inbox_view(state_dir, label):
     """What a member has to deal with: unacked inbound, its own unsent outbound, open assignments."""
     view = {'inbound_unacked': [], 'outbound_unsent': [], 'active_assignments': []}
+    if label == human_contact_label(state_dir):
+        view['uplift_counts'] = {'crew': (read_crew_json(state_dir) or {}).get('crew', Path(state_dir).name),
+                                 'total': 0, 'by_reason': {reason: 0 for reason in UPLIFT_REASONS}}
+        view['uplift_due'] = []
     with mailbox(state_dir, create=False) as conn:
         if conn is None:
             return view
@@ -2478,11 +2609,27 @@ def inbox_view(state_dir, label):
             if r['recipient_incarnation'] == current]
         for r in conn.execute("SELECT * FROM messages WHERE sender = ? AND state = 'stored' ORDER BY id", (label,)):
             view['outbound_unsent'].append({**dict(r), 'header': msg_header(r), 'to': mesh_name(state_dir, r['recipient'])})
-        for r in conn.execute(
-                "SELECT * FROM messages a WHERE kind = 'assignment' AND (sender = ? OR recipient = ?) AND NOT EXISTS "
-                "(SELECT 1 FROM messages b WHERE b.kind = 'result' AND b.asg = a.asg) ORDER BY id", (label, label)):
+        rows = [dict(r) for r in conn.execute('SELECT * FROM messages ORDER BY id')]
+        for r in dispatches(state_dir, rows):
+            if label not in (r['sender'], r['recipient']) or dispatch_done(r, rows):
+                continue
             view['active_assignments'].append(
                 {**dict(r), 'stale': r['recipient_incarnation'] != incarnation(state_dir, r['recipient'])})
+        if label == human_contact_label(state_dir):
+            transfers = {r['source_dispatch_id']: r for r in rows
+                         if r['kind'] == 'uplift' and r.get('source_dispatch_id') is not None
+                         and r.get('reason') in UPLIFT_REASONS and r['sender'] == label}
+            view['uplift_counts']['total'] = len(transfers)
+            view['uplift_counts']['by_reason'] = {
+                reason: sum(r['reason'] == reason for r in transfers.values()) for reason in UPLIFT_REASONS}
+            for source in dispatches(state_dir, rows):
+                if (crew_role(state_dir, source['recipient']) != 'Apprentice'
+                        or source['recipient_incarnation'] != incarnation(state_dir, source['recipient'])):
+                    continue
+                reasons = uplift_evidence(state_dir, source, rows)
+                if reasons:
+                    view['uplift_due'].append({'asg': source['asg'], 'source_dispatch_id': source['id'],
+                                                'reasons': list(reasons)})
     return view
 
 
@@ -2531,6 +2678,8 @@ def ack(argv):
         outcome = 'already acknowledged' if row['state'] == 'acknowledged' else 'acknowledged'
         with conn:
             conn.execute("UPDATE messages SET state = 'acknowledged' WHERE id = ?", (args.id,))
+            conn.execute('UPDATE messages SET delivered_epoch = COALESCE(delivered_epoch, ?) WHERE id = ?',
+                         (time.time(), args.id))
         row = get_message(conn, args.id)
     bus_append(state_dir, 'ack', id=args.id, by=label, outcome=outcome)
     print(json.dumps({'ack': outcome, 'row': row}))

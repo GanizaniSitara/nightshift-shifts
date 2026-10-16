@@ -602,9 +602,9 @@ def test_foreman_brief_forbids_repo_edits_and_suite_substitution(brief_file):
     brief = launcher.role_brief('Foreman', 'S-foreman', 'S-coder, S-tester', 'C:/state/S', brief_file).lower()
     assert 'never edit repository files yourself' in brief
     assert 'never run the test suite yourself' in brief
-    for correction in ('nit', 'typo'):
-        assert correction in brief
-    assert re.search(r'missing[- ]tests?', brief)
+    if brief_file != 'foreman-agy-coder.md':
+        assert 'ordinary' in brief and 'apprentice' in brief
+        assert re.search(r'tester owns (?:verification and )?test-file edits', brief)
     assert 'coder' in brief and 'assignment' in brief and 'verification' in brief and 'tester' in brief
     assert re.search(r'foreman commits (?:the passed|exactly that passed) change', brief)
     assert 'commit only what tester passes' in brief
@@ -1031,7 +1031,7 @@ def test_start_dry_run_default_crew_is_the_five_pane_golden(monkeypatch, tmp_pat
                        'permission_flags': ['--permission-mode', 'auto']},
             'Apprentice': {'session_name': f'{shift}-apprentice', 'pane_title': f'{shift} shift',
                            'peer': f'{shift}-foreman', 'receives_prompt': False,
-                           'first_message': 'Begin your Apprentice role: send READY to Foreman and await bounded '
+                               'first_message': 'Begin your primary coding role: send READY to Foreman and await '
                                             'assignments.',
                            'tool': 'agy', 'model': 'gemini-3.8-flash-high', 'exe': str(launcher.AGY_EXE),
                            'compaction': {'automatic': 'unsupported', 'environment': {},
@@ -1944,7 +1944,7 @@ def test_role_brief_fills_shift_and_tells_crew_about_claims():
     # c2 (NGH-027): no backslash in the launcher command, which Git Bash would strip when unquoted
     for brief in (coder, foreman, launcher.role_brief('Advisor', 'S-advisor', 'S-foreman',
                                                       Path('C:/x/Nightshift-shift-abc'), 'advisor.md')):
-        assert 'nightshift-shifts\\nightshift_shifts.py' not in brief and 'nightshift-shifts/nightshift_shifts.py' in brief
+        assert ns in brief and '\\' not in ns
 
 
 
@@ -2443,7 +2443,7 @@ def test_ack_of_unknown_id_exits_5(monkeypatch, tmp_path, capsys):
     assert len(_rows(d)) == 1
 
 
-def test_active_assignment_goes_stale_and_a_result_clears_it(monkeypatch, tmp_path, capsys):
+def test_active_assignment_goes_stale_and_only_current_dispatch_result_clears_it(monkeypatch, tmp_path, capsys):
     d = _mail_shift(monkeypatch, tmp_path)
     _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A1', '--body', 'one')
     _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A2', '--body', 'two')
@@ -2452,6 +2452,10 @@ def test_active_assignment_goes_stale_and_a_result_clears_it(monkeypatch, tmp_pa
     assert [(r['asg'], r['stale']) for r in json.loads(capsys.readouterr().out)['active_assignments']] == \
         [('A1', True), ('A2', True)]
     _send(capsys, 'Coder', 'Foreman', '--kind', 'result', '--asg', 'A1', '--body', 'done one')
+    # A replacement cannot complete the previous incarnation's dispatch.
+    assert [r['asg'] for r in launcher.inbox_view(d, 'Foreman')['active_assignments']] == ['A1', 'A2']
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A1', '--body', 'recover one')
+    _send(capsys, 'Coder', 'Foreman', '--kind', 'result', '--asg', 'A1', '--body', 'done recovered one')
     for role in ('Foreman', 'Coder'):
         launcher.inbox(['mail0001', role])
         assert [r['asg'] for r in json.loads(capsys.readouterr().out)['active_assignments']] == ['A2']
@@ -4092,13 +4096,19 @@ def test_apprentice_brief_fills_every_placeholder_and_relays_the_verdict():
 def test_apprentice_opening_message_asks_for_ready():
     member = {'role': 'Apprentice', 'human_contact': False}
     assert launcher.opening_message(member) == \
-        'Begin your Apprentice role: send READY to Foreman and await bounded assignments.'
+        'Begin your primary coding role: send READY to Foreman and await assignments.'
 
 
-def test_foreman_brief_splits_work_between_coder_and_apprentice():
-    brief = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', 'C:/x/S', 'foreman.md')
-    assert 'Apprentice' in brief and "disjoint from Coder's claims" in brief
-    assert "agents-cli wait <identity> --match 'APPRENTICE-DONE|APPRENTICE-BLOCKED' --timeout 30m" in brief
+@pytest.mark.parametrize('brief_file', ['foreman.md', 'foreman-cli.md'])
+def test_foreman_brief_routes_ordinary_work_to_apprentice_and_reserves_senior(brief_file):
+    brief = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', 'C:/x/S', brief_file)
+    assert 'Apprentice' in brief and 'ordinary' in brief and 'first' in brief
+    for term in ('cross-cutting', 'concurrency', 'security', 'second Tester failure',
+                 'APPRENTICE-NEEDS-SENIOR', 'GUIDANCE', 'TAKEOVER', '900', 'same-asg'):
+        assert term in brief
+    assert 'fallback' in brief and 'no Apprentice' in brief
+    assert 'assign every nit, typo or missing-test fix to Coder' not in brief
+    assert 'Delegate every repository change to Coder' not in brief
 
 
 @pytest.mark.usefixtures('_container_isolated')
@@ -6181,3 +6191,397 @@ def test_worktree_failed_recovery_save_keeps_edits_branch_and_completes_down(
     assert _wt_git(w.repo, 'show', f"{meta['branch']}:shared.txt") == 'unsaved tracked edit'
     assert _wt_git(w.repo, 'show', f"{meta['branch']}:new file.txt") == 'unsaved untracked edit'
     assert json.loads((state / 'recovery.json').read_text())['cleanup_pending'] is False
+
+
+# ── Apprentice-first uplift (NGH-038): independent acceptance regressions ────
+
+def _uplift_shift(monkeypatch, tmp_path):
+    d = _mail_shift(monkeypatch, tmp_path)
+    roles = ['Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice']
+    (d / 'crew.json').write_text(json.dumps({'crew': 'acceptance-crew', 'members': [
+        {'label': r, 'role': r, 'identity': f'{d.name}-{r.lower()}', 'human_contact': r == 'Foreman'}
+        for r in roles]}), encoding='utf-8')
+    for i, role in enumerate(roles):
+        (d / f'{role}.json').write_text(json.dumps({
+            'role': role, 'name': f'{d.name}-{role.lower()}', 'started': 100.0 + i}), encoding='utf-8')
+    return d
+
+
+def _uplift_send(capsys, sender, recipient, kind, asg, body, *options):
+    _send(capsys, sender, recipient, '--kind', kind, '--asg', asg, '--body', body, *options)
+
+
+def _uplift_start(capsys, asg='code-1'):
+    _uplift_send(capsys, 'Foreman', 'Apprentice', 'assignment', asg, 'Implement bounded change')
+
+
+def _uplift_need(capsys, asg='code-1'):
+    _uplift_send(capsys, 'Apprentice', 'Foreman', 'note', asg,
+                 'APPRENTICE-NEEDS-SENIOR\nCross-cutting design requires senior judgment')
+
+
+def _uplift_transfer(capsys, asg='code-1', reason='needs-senior'):
+    _uplift_send(capsys, 'Foreman', 'Coder', 'uplift', asg, 'Review evidence and take over', '--reason', reason)
+
+
+def _uplift_fail(capsys, verification, coding='code-1', body='TESTED-FAIL\nExact reproduction'):
+    _uplift_send(capsys, 'Foreman', 'Tester', 'assignment', verification, 'Verify change', '--coding-asg', coding)
+    _uplift_send(capsys, 'Tester', 'Foreman', 'result', verification, body)
+
+
+def _uplift_view(d, role='Foreman'):
+    return launcher.inbox_view(d, role)
+
+
+def test_uplift_needs_senior_transfers_same_asg_with_durable_evidence(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_need(capsys)
+    original = _rows(d)
+    _uplift_transfer(capsys)
+    rows = _rows(d)
+    assert rows[:2] == original
+    transfer = rows[-1]
+    assert (transfer['kind'], transfer['asg'], transfer['sender'], transfer['recipient']) == \
+        ('uplift', 'code-1', 'Foreman', 'Coder')
+    assert [r['id'] for r in _uplift_view(d, 'Coder')['active_assignments']] == [transfer['id']]
+    assert not _uplift_view(d, 'Apprentice')['active_assignments']
+    assert any(r['id'] == transfer['id'] for r in _uplift_view(d, 'Coder')['inbound_unacked'])
+    # Evidence must survive the sender and the CLI process, not just appear in stdout.
+    persisted = json.dumps(transfer)
+    assert 'APPRENTICE-NEEDS-SENIOR' in persisted
+    events = [json.loads(line) for line in (d / 'bus.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert any(e.get('kind') == 'uplift' and e.get('id') == transfer['id'] for e in events)
+
+
+@pytest.mark.parametrize('owner', ['Apprentice', 'apprentice', 'Nightshift-shift-mail0001-apprentice'])
+def test_uplift_refuses_apprentice_claim_aliases_without_partial_writes(monkeypatch, tmp_path, capsys, owner):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_need(capsys)
+    launcher.claim(['mail0001', owner, str(tmp_path / 'a file.py')])
+    capsys.readouterr()
+    before, bus = _rows(d), (d / 'bus.jsonl').read_bytes()
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys)
+    assert _rows(d) == before and (d / 'bus.jsonl').read_bytes() == bus
+    assert launcher.load_claims(d)
+    launcher.release(['mail0001', owner])
+    capsys.readouterr()
+    _uplift_transfer(capsys)
+    assert _rows(d)[-1]['kind'] == 'uplift'
+
+
+def test_uplift_requires_stored_evidence_and_deduplicates_source_dispatch(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys)
+    assert len(_rows(d)) == 1
+    _uplift_need(capsys)
+    _uplift_transfer(capsys)
+    before = _rows(d)
+    with launcher.contextlib.suppress(SystemExit):
+        _uplift_transfer(capsys)
+    assert _rows(d) == before
+    assert _uplift_view(d)['uplift_counts']['total'] == 1
+
+
+@pytest.mark.parametrize('sender,recipient', [('Apprentice', 'Coder'), ('Coder', 'Foreman'), ('Foreman', 'Tester')])
+def test_uplift_refuses_invalid_routing_without_writes(monkeypatch, tmp_path, capsys, sender, recipient):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_need(capsys)
+    before = _rows(d)
+    with pytest.raises(SystemExit):
+        _uplift_send(capsys, sender, recipient, 'uplift', 'code-1', 'route', '--reason', 'needs-senior')
+    assert _rows(d) == before
+
+
+def test_uplift_two_distinct_linked_failures_trigger_even_after_done(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_send(capsys, 'Apprentice', 'Foreman', 'result', 'code-1', 'APPRENTICE-DONE\nImplemented')
+    _uplift_fail(capsys, 'verify-1')
+    _uplift_send(capsys, 'Tester', 'Foreman', 'result', 'verify-1', 'TESTED-FAIL\nDuplicate verdict')
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys, reason='tester-failed-twice')
+    _uplift_fail(capsys, 'verify-2')
+    _uplift_transfer(capsys, reason='tester-failed-twice')
+    transfer = _rows(d)[-1]
+    assert [r['id'] for r in _uplift_view(d, 'Coder')['active_assignments']] == [transfer['id']]
+    assert 'Exact reproduction' in json.dumps(transfer)
+    assert _uplift_view(d)['uplift_counts']['by_reason']['tester-failed-twice'] == 1
+
+
+def test_uplift_unlinked_failures_and_relay_notes_do_not_count(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_send(capsys, 'Tester', 'Foreman', 'result', 'unlinked-1', 'TESTED-FAIL\nNo linkage')
+    _uplift_send(capsys, 'Tester', 'Foreman', 'result', 'unlinked-2', 'TESTED-FAIL\nNo linkage')
+    _uplift_send(capsys, 'Foreman', 'Coder', 'note', 'code-1', 'TESTED-FAIL\nRelayed failure')
+    before = _rows(d)
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys, reason='tester-failed-twice')
+    assert _rows(d) == before
+
+
+def test_uplift_guidance_handback_requires_released_coder_claims(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_need(capsys)
+    _uplift_transfer(capsys)
+    _uplift_send(capsys, 'Coder', 'Foreman', 'note', 'code-1', 'GUIDANCE\nUse the existing parser')
+    launcher.claim(['mail0001', f'{d.name}-coder', str(tmp_path / 'source.py')])
+    capsys.readouterr()
+    before = _rows(d)
+    with pytest.raises(SystemExit):
+        _uplift_start(capsys)
+    assert _rows(d) == before
+    launcher.release(['mail0001', f'{d.name}-coder'])
+    capsys.readouterr()
+    _uplift_start(capsys)
+    latest = _rows(d)[-1]
+    assert [r['id'] for r in _uplift_view(d, 'Apprentice')['active_assignments']] == [latest['id']]
+    assert not _uplift_view(d, 'Coder')['active_assignments']
+    assert _uplift_view(d)['uplift_counts']['total'] == 1
+
+
+def test_uplift_old_verification_results_do_not_contaminate_handback(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    for verification in ('old-1', 'old-2'):
+        _uplift_send(capsys, 'Foreman', 'Tester', 'assignment', verification, 'Verify old version',
+                     '--coding-asg', 'code-1')
+    _uplift_need(capsys)
+    _uplift_transfer(capsys)
+    _uplift_send(capsys, 'Coder', 'Foreman', 'note', 'code-1', 'GUIDANCE\nReturn to Apprentice')
+    _uplift_start(capsys)
+    for verification in ('old-1', 'old-2'):
+        _uplift_send(capsys, 'Tester', 'Foreman', 'result', verification, 'TESTED-FAIL\nLate old verdict')
+    before = _rows(d)
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys, reason='tester-failed-twice')
+    assert _rows(d) == before
+
+
+def test_uplift_completion_requires_latest_coding_assignee_after_dispatch(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_send(capsys, 'Coder', 'Foreman', 'result', 'code-1', 'CODER-DONE\nHistorical result')
+    _uplift_need(capsys)
+    _uplift_transfer(capsys)
+    transfer_id = _rows(d)[-1]['id']
+    _uplift_send(capsys, 'Apprentice', 'Foreman', 'result', 'code-1', 'APPRENTICE-DONE\nLate old owner')
+    assert [r['id'] for r in _uplift_view(d, 'Coder')['active_assignments']] == [transfer_id]
+    _uplift_send(capsys, 'Coder', 'Foreman', 'result', 'code-1', 'CODER-DONE\nCurrent completion')
+    assert not _uplift_view(d, 'Coder')['active_assignments']
+
+
+def test_uplift_counts_do_not_depend_on_bus_duplicates_or_other_crew(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_need(capsys)
+    _uplift_transfer(capsys)
+    first = _uplift_view(d)['uplift_counts']
+    assert first['crew'] == 'acceptance-crew' and first['total'] == 1
+    assert first['by_reason']['needs-senior'] == 1
+    with (d / 'bus.jsonl').open('ab') as f:
+        f.write((d / 'bus.jsonl').read_bytes())
+    assert _uplift_view(d)['uplift_counts'] == first
+    # A different shift with the same assignment ID starts its own accounting.
+    other = tmp_path / 'shifts' / 'Nightshift-shift-other'
+    other.mkdir()
+    (other / 'crew.json').write_bytes((d / 'crew.json').read_bytes())
+    assert _uplift_view(other)['uplift_counts']['total'] == 0
+
+
+@pytest.mark.parametrize('delivery', ['sent', 'ack'])
+def test_uplift_timeout_uses_first_delivery_epoch_and_exact_900_boundary(monkeypatch, tmp_path, capsys, delivery):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    clock = [10000.0]
+    monkeypatch.setattr(launcher.time, 'time', lambda: clock[0])
+    _uplift_start(capsys)
+    clock[0] += 1000
+    assert not _uplift_view(d)['uplift_due']  # storing is not delivery
+    if delivery == 'sent':
+        launcher.msg(['sent', 'mail0001', '1'])
+    else:
+        launcher.ack(['mail0001', 'Apprentice', '1'])
+    capsys.readouterr()
+    epoch = _rows(d)[0]['delivered_epoch']
+    assert epoch == 11000
+    clock[0] = epoch + 899.999
+    launcher.ack(['mail0001', 'Apprentice', '1'])
+    launcher.msg(['sent', 'mail0001', '1'])
+    capsys.readouterr()
+    assert _rows(d)[0]['delivered_epoch'] == epoch
+    assert not _uplift_view(d)['uplift_due']
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys, reason='timeout')
+    clock[0] = epoch + 900
+    due = _uplift_view(d)['uplift_due']
+    assert due == [{'asg': 'code-1', 'source_dispatch_id': 1, 'reasons': ['timeout']}]
+    _uplift_transfer(capsys, reason='timeout')
+    assert _uplift_view(d)['uplift_counts']['by_reason']['timeout'] == 1
+
+
+def test_uplift_timeout_suppressed_by_done_but_needs_senior_is_not(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    now = [10000.0]
+    monkeypatch.setattr(launcher.time, 'time', lambda: now[0])
+    _uplift_start(capsys)
+    launcher.ack(['mail0001', 'Apprentice', '1'])
+    capsys.readouterr()
+    _uplift_send(capsys, 'Apprentice', 'Foreman', 'result', 'code-1', 'APPRENTICE-DONE\nComplete')
+    now[0] += 900
+    assert not _uplift_view(d)['uplift_due']
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys, reason='timeout')
+    _uplift_need(capsys)
+    _uplift_transfer(capsys)
+
+
+def test_uplift_stale_apprentice_incarnation_cannot_transfer(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_need(capsys)
+    info = json.loads((d / 'Apprentice.json').read_text())
+    (d / 'Apprentice.json').write_text(json.dumps({**info, 'started': 999.0}))
+    before = _rows(d)
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys)
+    assert _rows(d) == before and not _uplift_view(d)['uplift_due']
+
+
+def test_uplift_concurrent_retries_create_one_durable_transfer(monkeypatch, tmp_path, capsys):
+    from concurrent.futures import ThreadPoolExecutor
+
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_need(capsys)
+
+    def transfer(_):
+        launcher.msg(['send', 'mail0001', 'Foreman', 'Coder', '--kind', 'uplift', '--asg', 'code-1',
+                      '--reason', 'needs-senior', '--body', 'Concurrent retry'])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(transfer, range(2)))
+    capsys.readouterr()
+    rows = [r for r in _rows(d) if r['kind'] == 'uplift']
+    assert len(rows) == 1
+    assert _uplift_view(d)['uplift_counts']['total'] == 1
+    events = [json.loads(line) for line in (d / 'bus.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert len([e for e in events if e.get('kind') == 'uplift']) == 1
+
+
+def test_uplift_numbered_labels_use_manifest_roles_and_identity_claims(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    crew = json.loads((d / 'crew.json').read_text())
+    for member in crew['members']:
+        if member['role'] in ('Apprentice', 'Coder', 'Tester'):
+            role = member['role']
+            member['label'] = role + '2'
+            member['identity'] = f'{d.name}-{role.lower()}2'
+            info = json.loads((d / f'{role}.json').read_text())
+            (d / f'{role}2.json').write_text(json.dumps({**info, 'name': member['identity']}))
+    (d / 'crew.json').write_text(json.dumps(crew))
+    _uplift_send(capsys, 'Foreman', 'Apprentice2', 'assignment', 'numbered', 'Implement')
+    _uplift_send(capsys, 'Apprentice2', 'Foreman', 'note', 'numbered', 'APPRENTICE-NEEDS-SENIOR\nReason')
+    launcher.claim(['mail0001', f'{d.name}-apprentice2', str(tmp_path / 'numbered.py')])
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        _uplift_send(capsys, 'Foreman', 'Coder2', 'uplift', 'numbered', 'Takeover', '--reason', 'needs-senior')
+    launcher.release(['mail0001', f'{d.name}-apprentice2'])
+    capsys.readouterr()
+    _uplift_send(capsys, 'Foreman', 'Coder2', 'uplift', 'numbered', 'Takeover', '--reason', 'needs-senior')
+    assert _uplift_view(d, 'Coder2')['active_assignments'][0]['asg'] == 'numbered'
+
+
+def test_uplift_legacy_untimed_dispatch_is_not_assumed_to_have_timed_out(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    with launcher.contextlib.closing(launcher.sqlite3.connect(d / 'mailbox.sqlite3')) as conn:
+        conn.execute(launcher.MAILBOX_SCHEMA)
+        conn.execute("INSERT INTO messages (kind,sender,sender_incarnation,recipient,recipient_incarnation,"
+                     "asg,body,created,state) VALUES (?,?,?,?,?,?,?,?,?)",
+                     ('assignment', 'Foreman', 100.0, 'Apprentice', 104.0, 'code-1', 'Legacy assignment',
+                      '2020-01-01 00:00:00', 'acknowledged'))
+        conn.commit()
+    snapshot = (d / 'mailbox.sqlite3').read_bytes()
+    assert not _uplift_view(d)['uplift_due']
+    assert (d / 'mailbox.sqlite3').read_bytes() == snapshot
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys, reason='timeout')
+    assert _rows(d)[0]['delivered_epoch'] is None
+    assert _rows(d)[0]['body'] == 'Legacy assignment'
+
+
+def test_uplift_failures_span_same_apprentice_retry_dispatches(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_send(capsys, 'Apprentice', 'Foreman', 'result', 'code-1', 'APPRENTICE-DONE\nFirst attempt')
+    _uplift_fail(capsys, 'verify-first')
+    _uplift_start(capsys)
+    latest_id = _rows(d)[-1]['id']
+    _uplift_send(capsys, 'Apprentice', 'Foreman', 'result', 'code-1', 'APPRENTICE-DONE\nSecond attempt')
+    _uplift_fail(capsys, 'verify-second')
+    _uplift_transfer(capsys, reason='tester-failed-twice')
+    transfer = _rows(d)[-1]
+    assert transfer['source_dispatch_id'] == latest_id
+    evidence = json.loads(transfer['evidence'])
+    assert {r['asg'] for r in evidence} == {'verify-first', 'verify-second'}
+    assert all(r['body'].startswith('TESTED-FAIL') for r in evidence)
+
+
+def test_uplift_new_apprentice_incarnation_resets_failure_continuity(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_fail(capsys, 'verify-old')
+    info = json.loads((d / 'Apprentice.json').read_text())
+    (d / 'Apprentice.json').write_text(json.dumps({**info, 'started': 999.0}))
+    _uplift_start(capsys)
+    _uplift_fail(capsys, 'verify-new')
+    before = _rows(d)
+    with pytest.raises(SystemExit):
+        _uplift_transfer(capsys, reason='tester-failed-twice')
+    assert _rows(d) == before
+
+
+def test_uplift_same_owner_retry_timeout_belongs_to_latest_dispatch(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    now = [10000.0]
+    monkeypatch.setattr(launcher.time, 'time', lambda: now[0])
+    _uplift_start(capsys)
+    launcher.msg(['sent', 'mail0001', '1'])
+    capsys.readouterr()
+    now[0] += 901
+    assert _uplift_view(d)['uplift_due'][0]['reasons'] == ['timeout']
+    _uplift_start(capsys)
+    latest_id = _rows(d)[-1]['id']
+    assert not _uplift_view(d)['uplift_due']
+    launcher.msg(['sent', 'mail0001', str(latest_id)])
+    capsys.readouterr()
+    now[0] += 899
+    assert not _uplift_view(d)['uplift_due']
+    now[0] += 1
+    assert _uplift_view(d)['uplift_due'] == [
+        {'asg': 'code-1', 'source_dispatch_id': latest_id, 'reasons': ['timeout']}]
+
+
+def test_uplift_handback_then_new_escalation_counts_each_source_once(monkeypatch, tmp_path, capsys):
+    d = _uplift_shift(monkeypatch, tmp_path)
+    _uplift_start(capsys)
+    _uplift_need(capsys)
+    _uplift_transfer(capsys)
+    first = _rows(d)[-1]
+    _uplift_send(capsys, 'Coder', 'Foreman', 'note', 'code-1', 'GUIDANCE\nEdit using recommendation')
+    _uplift_start(capsys)
+    _uplift_need(capsys)
+    _uplift_transfer(capsys)
+    second = _rows(d)[-1]
+    assert first['source_dispatch_id'] != second['source_dispatch_id']
+    _uplift_transfer(capsys)  # retry same latest transfer
+    assert len([r for r in _rows(d) if r['kind'] == 'uplift']) == 2
+    assert _uplift_view(d)['uplift_counts'] == {
+        'crew': 'acceptance-crew', 'total': 2,
+        'by_reason': {'needs-senior': 2, 'tester-failed-twice': 0, 'timeout': 0}}

@@ -140,12 +140,49 @@ As built (NGH-025):
 
 ## Role boundaries and permission plan (NGH-031)
 
-Foreman is orchestration and review only for repository work. It reads diffs, reviews reports, assigns
-repository changes to the crew's implementation roles, and assigns every verification pass to Tester.
-Coder owns the launcher and correction changes. A nit, typo, or missing-test fix is a new Coder assignment; after Coder
-returns it, Foreman dispatches the revision to Tester and commits only what Tester passes. Foreman never
+Foreman is orchestration and review only for repository work. It reads diffs, reviews reports, routes
+ordinary repository coding to Apprentice first with disjoint claims, and assigns every verification pass
+to Tester. Coder is the senior buddy for upfront cross-cutting, concurrency and security work, for the
+no-Apprentice fallback, and for guarded uplift after a stored Apprentice escalation, two linked Tester
+failures or a timeout. Tester owns test-file edits; ordinary launcher/runtime corrections also go to
+Apprentice unless a senior exception applies. Guidance returns through Foreman as a fresh same-asg Apprentice assignment;
+TAKEOVER remains with Coder. Foreman never
 edits repository files or runs the suite as a substitute for Tester. It may write the shift records under `{state_dir}`—for
 example `result.json` and `handover.md`—because those are runtime state, not repository files.
+
+### Guarded same-asg uplift (NGH-038)
+
+The runtime transfer is an explicit, validated mailbox message rather than a scheduler or a new top-level
+command:
+
+```text
+nightshift msg send SHIFT Foreman Coder --kind uplift --asg CODING_ID \
+  --reason needs-senior|tester-failed-twice|timeout --body TEXT
+```
+
+Only Foreman may send an uplift to Coder, and it must name the current Apprentice coding assignment. The
+transfer is accepted only after every previous-owner claim alias is released, under the claims-then-mailbox
+lock order. A stored Apprentice note whose body starts `APPRENTICE-NEEDS-SENIOR` supplies the `needs-senior`
+evidence. Tester verification is a distinct assignment (`--asg VERIFY_ID`) linked to its coding assignment
+with `--coding-asg CODING_ID`; only a `TESTED-PASS` or `TESTED-FAIL` result under that verification asg is
+counted. Two distinct linked `TESTED-FAIL` assignments trigger `tester-failed-twice`, even if the earlier
+Apprentice dispatch already reported done. Failures accumulate across consecutive same-asg correction
+dispatches to the same Apprentice and incarnation. An actual coding ownership change (including uplift,
+handback, a different Apprentice or a new incarnation) resets that window; delayed verdicts from verification
+assignments in an earlier ownership period do not count.
+
+The timeout trigger is at least 900 seconds from the first `sent` or `ack` delivery timestamp
+of the latest Apprentice coding dispatch (`delivered_epoch` is set once with `COALESCE`), with no matching
+completion. Repeating `sent` or `ack` for that dispatch does not reset its clock. A fresh same-asg correction
+dispatch uses its own first delivery timestamp; legacy timestamps are never inferred. Active coding ownership is the latest coding dispatch,
+independent of Tester assignments; only a result from that current coding assignee after its dispatch closes
+the work. Coder returns either `GUIDANCE` or `TAKEOVER` through Foreman. `GUIDANCE` is handed back as a
+fresh Apprentice assignment under the same asg after Coder claims are released.
+
+Foreman's `inbox` exposes due transfers as `uplift_due` entries
+`{asg, source_dispatch_id, reasons}` and mailbox-derived `uplift_counts`
+`{crew, total, by_reason}`. Counts deduplicate source dispatches rather than bus lines and are copied by
+Foreman into `result.json`.
 
 The built Claude repo-scoped policy for the Foreman member is one inline `--settings` JSON deny rule:
 `{"permissions":{"deny":["Edit(//c/actual/cwd/**)"]}}`. Claude's canonical `Edit(path)` permission covers
@@ -490,13 +527,15 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   `apprentice.md`, agy on `gemini-3.8-flash-high`) in slot 5, leaving slots 6..8 as empty cmd shells
   for `spawn`. Foreman's peers are `<shift>-advisor, <shift>-coder, <shift>-tester, <shift>-apprentice`;
   everyone else's peer is `<shift>-foreman`. Other crews (`--crew NAME`) are unaffected.
-- Apprentice (NGH-029): Coder (expensive model) gets anything needing judgement; Apprentice (cheap
-  model) gets bounded, well-specified jobs with an explicit file list disjoint from Coder's claims; its
-  output is reviewed by Foreman and goes through Tester exactly like Coder's. `START_MESSAGES['Apprentice']`
-  tells it to send READY and await bounded assignments. A non-Claude Apprentice is driven like the agy
-  Coder (mailbox `msg send` → `agents-cli send` → `msg sent`, `agents-cli wait --match
-  'APPRENTICE-DONE|APPRENTICE-BLOCKED'`, `tail`, ack); Foreman relays the Tester verdict to it as a mailbox
-  note, and on TESTED-FAIL it waits for the follow-up assignment.
+- Apprentice (NGH-029, NGH-038): ordinary coding goes to Apprentice first with bounded work and an
+  explicit file list disjoint from Coder's claims. Coder is the senior buddy for upfront cross-cutting,
+  concurrency or security work, the no-Apprentice fallback, and validated uplift after the guarded
+  triggers; Tester owns test-file edits. Output is reviewed by Foreman and goes through Tester exactly
+  like Coder's. `START_MESSAGES['Apprentice']` identifies it as the primary coding role and tells it to
+  send READY and await assignments. A non-Claude Apprentice is driven like the agy Coder (mailbox
+  `msg send` → `agents-cli send` → `msg sent`, `agents-cli wait --match
+  'APPRENTICE-DONE|APPRENTICE-BLOCKED'`, `tail`, ack); Foreman relays Tester verdicts and any Coder
+  `GUIDANCE` as mailbox messages under the same asg.
 - Per-CLI Apprentice manifests (2x4, the default Claude Foreman/Advisor/Coder/Tester plus Apprentice):
   `crews/apprentice-gemini.yaml` (agy, `gemini-3.8-flash-high`), `crews/apprentice-codex.yaml` (codex,
   `gpt-5.6-luna`, account 2), `crews/apprentice-copilot.yaml` (copilot, `gemini-3.8-flash-high`). They
@@ -507,17 +546,20 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   (`apprentice-codex`), OpenCode with Mistral and Qwen (both waiting on a `TOOLS` entry), then Copilot
   CLI (`apprentice-copilot`, once TECH-225 lands). A live round trip is READY, ack of the assignment,
   the done report and the relayed Tester verdict, all on the shift bus.
-- Handoff is Coder -> Foreman -> Tester. Coder reports an assignment done; Foreman reviews it and
-  assigns verification to Tester with its own `--asg` id, saying what changed and what was asked.
-  Coder and Tester never talk to each other.
+- Handoff is Apprentice or Coder -> Foreman -> Tester. Foreman reviews the coding result and assigns
+  verification to Tester with its own `--asg` id and `--coding-asg` link, saying what changed and what
+  was asked. Coder and Tester never talk to each other; a senior `GUIDANCE` handback returns through
+  Foreman as a fresh Apprentice assignment under the original coding asg.
 - Tester runs the suite through `nightshift build` so the evidence is revision-bound and reviews the
-  diff against the assignment. It edits test files only (claims disjoint from Coder's) when verification
-  requires; a missing-test finding is assigned to Coder, and product, nit, or typo fixes are not made by
-  Tester. Foreman verifies the resulting revision flow and commits only after Tester passes it.
+  diff against the assignment. It edits test files only (claims disjoint from the current coding owner's)
+  when verification requires; product, nit, or typo fixes are not made by Tester. Foreman verifies the
+  resulting revision flow and commits only after Tester passes it.
 - Its report starts `TESTED-PASS` or `TESTED-FAIL` and cites `builds/<n>.json` (head, dirty, exit),
   test counts, findings and the test files it changed. A TESTED-PASS on a clean tree is the
   tested-rung evidence Foreman puts in `result.json`; with a Tester present Foreman does not run the
-  suite itself. A TESTED-FAIL goes back to Coder as a new assignment. Without a Tester, Foreman cannot
+  suite itself. The first TESTED-FAIL returns to the same coding owner under the same coding asg; two
+  distinct linked failures during one Apprentice ownership period permit guarded same-asg uplift to Coder.
+  Without a Tester, Foreman cannot
   claim the tested rung and reports the highest supported rung as short or blocked.
 
 ## Mixed crews: per-role tool and model (NGH-012)
@@ -718,6 +760,11 @@ is a persona decision not yet taken (NGH-014).
 - The **mailbox** (NGH-019) sits above both: every message is stored first, carries a
   `msg:<id>` header, is acked by id by the right recipient incarnation, and `inbox` re-delivers
   what was stored but never sent. Transports are notifications; the mailbox is what is true.
+- `msg` also accepts the guarded `uplift` kind for NGH-038. Its Foreman-to-Coder transfer carries
+  `source_dispatch_id`, `reason` and serialized `evidence`; those fields are mirrored on the bus.
+  `APPRENTICE-NEEDS-SENIOR` notes, distinct Tester verification rows linked by `coding_asg`, and
+  `delivered_epoch` provide the durable trigger evidence described above. Foreman's `inbox` reports
+  `uplift_due` and mailbox-derived `uplift_counts`; Foreman copies the latter into `result.json`.
 
 ## The shift bus (NGH-026)
 
@@ -727,7 +774,7 @@ There is no bus process: each command appends its own line and `nightshift log` 
 | Event | Written by | Fields (besides `seq`, `ts`, `event`) |
 |---|---|---|
 | `start` | `start`, once the shift folder exists (never on `--dry-run`) | `shift`, `ticket`, `cwd`, `crew`, `members` (labels) |
-| `msg` | `insert_message`, the one place every mailbox row is stored: `msg send` and the protocol-violation note `ack` files | `id`, `kind`, `sender`, `recipient`, `asg`, `body` |
+| `msg` | `insert_message`, the one place every mailbox row is stored: `msg send` and the protocol-violation note `ack` files | `id`, `kind`, `sender`, `recipient`, `asg`, `body`; uplift rows also carry `source_dispatch_id`, `reason`, `evidence` |
 | `sent` | `msg sent` | `id` |
 | `ack` | `ack` | `id`, `by`, `outcome` (`acknowledged`, `already acknowledged`, `protocol violation` + `reason`) |
 | `spawn` | `spawn`, only after the wrapper line was typed into the slot | `role`, `slot`, `tool`, `identity` |
