@@ -1,6 +1,6 @@
 # Design: a live shift you feed work to (draft for review)
 
-Status: proposal, 16 Oct 2026. Not built. Reviewers: owner, AGY supervisor.
+Status: agreed design, 16 Oct 2026 (owner + AGY review). Not built yet.
 
 ## Problem
 
@@ -54,7 +54,7 @@ NOT-READY item is marked blocked with what is missing), Apprentice-first, Tester
 ### 5. When the shift ends
 
 - `nightshift down` (from the Ops pane, the Foreman on request, or anywhere with `--shift`).
-- Idle timeout: queue empty and nothing added for `idle_minutes` (crew manifest, default 30): the Foreman writes the
+- Idle timeout: queue empty and nothing added for `idle_minutes` (crew manifest, default 5): the Foreman writes the
   handover and closes. Members that are on demand (Advisor, Coder) are already not running while idle; the live
   members (Foreman, Apprentice, Tester) do nothing while waiting, so an idle crew costs nothing per turn.
 
@@ -66,9 +66,19 @@ NOT-READY item is marked blocked with what is missing), Apprentice-first, Tester
 - Foreman brief: queue loop, idle timeout, natural-language intake.
 - `loop` and `gaffer` stay for unattended batches; this design does not need them.
 
-## Open questions for review
+## Decisions (owner with AGY review, 16 Oct 2026)
 
-1. One shift per repository, or allow two shifts on one repository when their file sets are disjoint?
-2. Should a queued item with no ticket get a ticket created automatically (so every change is traceable)?
-3. Idle timeout default: 30 minutes, or keep the shift until `down`?
-4. Ops pane in slot 8, or a separate small window?
+1. Strictly one live shift per repository; the warm crew works queue items one after another.
+2. No ticket is created for a plain-text item; it runs straight from `queue.jsonl`.
+3. Idle timeout 5 minutes (`idle_minutes: 5` default) once the queue is empty and nothing is running.
+4. Ops pane in the 2x4 grid, slot 8 bottom right, with `NIGHTSHIFT_SHIFT` set.
+
+## Implementation notes from review
+
+a. `nightshift add` on an idle shift wakes the Foreman with a mailbox message delivered to its pane, so it notices
+   the new item.
+b. A deterministic step between items, `nightshift queue next` (run by the Foreman): resets the per-item records
+   (result.json, claims, build evidence), checks out a fresh branch off the target branch from worktree.json, marks
+   the item running and prints it.
+c. The idle timeout is enforced by the warden (a timer), not by the Foreman, because an idle prompt cannot time
+   itself out.
