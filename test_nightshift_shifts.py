@@ -1151,12 +1151,19 @@ def test_handover_lists_outstanding_claims(tmp_path, monkeypatch):
     assert (tmp_path / 'claims.json').exists()                       # down does not release claims
 
 
+def _nightshift_cmd():
+    """The command role_brief puts in place of {nightshift}: the suite Python and this repo's launcher."""
+    return f'{launcher.SUITE_PYTHON} {launcher.REPO_DIR / "nightshift_shifts.py"}'
+
+
 def test_role_brief_fills_shift_and_tells_crew_about_claims():
     coder = launcher.role_brief('Coder', 'S-coder', 'S-foreman', Path('C:/x/Nightshift-shift-abc'))
     foreman = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', Path('C:/x/Nightshift-shift-abc'))
-    assert 'nightshift claim Nightshift-shift-abc S-coder' in coder
-    assert 'nightshift release Nightshift-shift-abc S-coder' in coder
-    assert 'nightshift claims Nightshift-shift-abc' in foreman and foreman.rstrip().endswith('verbatim:')
+    ns = _nightshift_cmd()
+    assert f'{ns} claim Nightshift-shift-abc S-coder' in coder
+    assert f'{ns} release Nightshift-shift-abc S-coder' in coder
+    assert f'{ns} claims Nightshift-shift-abc' in foreman and foreman.rstrip().endswith('verbatim:')
+    assert '{nightshift}' not in coder and '{nightshift}' not in foreman
     assert '{shift}' not in launcher.role_brief('Coder', 'c', 'f')   # no state dir: filled with ''
 
 
@@ -1647,17 +1654,204 @@ def test_briefs_tell_both_roles_to_use_the_mailbox():
     shift = Path('C:/x/Nightshift-shift-abc')
     briefs = {'Foreman': launcher.role_brief('Foreman', 'S-foreman', 'S-coder', shift),
               'Coder': launcher.role_brief('Coder', 'S-coder', 'S-foreman', shift)}
+    ns = _nightshift_cmd()
     for me, brief in briefs.items():
         peer = 'Coder' if me == 'Foreman' else 'Foreman'
-        assert f'nightshift msg send Nightshift-shift-abc {me} {peer} --kind' in brief
-        assert 'nightshift msg sent Nightshift-shift-abc <id>' in brief
-        assert f'nightshift ack Nightshift-shift-abc {me} <id>' in brief
-        assert f'nightshift inbox Nightshift-shift-abc {me}' in brief
+        assert f'{ns} msg send Nightshift-shift-abc {me} {peer} --kind' in brief
+        assert f'{ns} msg sent Nightshift-shift-abc <id>' in brief
+        assert f'{ns} ack Nightshift-shift-abc {me} <id>' in brief
+        assert f'{ns} inbox Nightshift-shift-abc {me}' in brief
+        assert '{nightshift}' not in brief
         assert 'header line' in brief and 'never on the SendMessage text' in brief
         assert 'exit code 5 means do not act' in brief and 'resumed crew' in brief and 'outbound_unsent' in brief
     assert briefs['Foreman'].rstrip().endswith('verbatim:')
     assert 'send READY from S-coder' in briefs['Coder']
-    assert 'nightshift claim Nightshift-shift-abc S-coder' in briefs['Coder']
+    assert f'{ns} claim Nightshift-shift-abc S-coder' in briefs['Coder']
+
+
+# ── build slot ────────────────────────────────────────────────────────────────
+
+class _FakeChild:
+    def __init__(self, pid=4242, code=0):
+        self.pid, self.code = pid, code
+
+    def wait(self):
+        return self.code
+
+
+def _build_shift(monkeypatch, tmp_path, git=None, code=0, running=lambda pid, started: False):
+    """A shift dir plus faked git, Popen, process checks and sleep; returns (state_dir, workdir, seen)."""
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'shifts')
+    d = _shift(tmp_path, 'Nightshift-shift-bld00001', {'Foreman': 11, 'Coder': 12})
+    work = tmp_path / 'work'
+    work.mkdir()
+    seen = {'popen': [], 'sleeps': 0, 'run': []}
+    git = git if git is not None else {'rev-parse': (0, b'abcdef1234567890\n'), 'status': (0, b'')}
+
+    def run(argv, **kwargs):
+        seen['run'].append(argv)
+        if argv[0] == 'git':
+            code_, out = git[argv[3]]
+            return subprocess.CompletedProcess(argv, code_, stdout=out, stderr=b'')
+        return subprocess.CompletedProcess(argv, 0, stdout=b'', stderr=b'')
+
+    def popen(cmd, **kwargs):
+        seen['popen'].append((cmd, kwargs))
+        kwargs['stdout'].write(b'build output\n')
+        return _FakeChild(code=code)
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
+    monkeypatch.setattr(launcher, 'process_start_epoch', lambda pid: 1000.0)
+    monkeypatch.setattr(launcher, 'process_running', running)
+    monkeypatch.setattr(launcher, 'BUILD_POLL_SECONDS', 0)
+    return d, work, seen
+
+
+def _hold_build_lock(work, pid=999, n=7):
+    path = launcher.build_lock_path(str(work.resolve()))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'shift': 'Nightshift-shift-other', 'n': n, 'pid': pid, 'started_epoch': 5.0,
+                                'started': '2026-10-16 01:00:00'}), encoding='utf-8')
+    return path
+
+
+def test_build_records_evidence_and_log(monkeypatch, tmp_path, capsys):
+    d, work, seen = _build_shift(monkeypatch, tmp_path)
+    launcher.build(['bld00001', '--cwd', str(work), '--cmd', 'pytest -q'])
+    record = json.loads(capsys.readouterr().out)
+    assert set(record) == {'n', 'cmd', 'cwd', 'head', 'dirty', 'porcelain', 'started', 'ended', 'exit', 'log',
+                           'pid', 'status'}
+    assert record['n'] == 1 and record['cmd'] == 'pytest -q' and record['cwd'] == str(work.resolve())
+    assert (record['head'], record['dirty'], record['porcelain']) == ('abcdef1234567890', False, [])
+    assert (record['exit'], record['status'], record['pid']) == (0, 'passed', 4242)
+    assert record['log'] == str(d / 'builds' / '1.log')
+    assert (d / 'builds' / '1.log').read_bytes() == b'build output\n'
+    assert json.loads((d / 'builds' / '1.json').read_text(encoding='utf-8')) == record
+    cmd, kwargs = seen['popen'][0]
+    assert cmd == 'pytest -q' and kwargs['shell'] is True and kwargs['cwd'] == str(work.resolve())
+    assert kwargs['stderr'] is subprocess.STDOUT
+    assert not launcher.build_lock_path(str(work.resolve())).exists()   # released
+    launcher.build(['bld00001', '--cwd', str(work), '--cmd', 'pytest -q'])
+    assert json.loads(capsys.readouterr().out)['n'] == 2
+
+
+def test_build_exit_code_is_the_commands(monkeypatch, tmp_path, capsys):
+    d, work, _ = _build_shift(monkeypatch, tmp_path, code=3)
+    with pytest.raises(SystemExit) as err:
+        launcher.build(['bld00001', '--cwd', str(work), '--cmd', 'make'])
+    assert err.value.code == 3
+    assert json.loads((d / 'builds' / '1.json').read_text(encoding='utf-8'))['status'] == 'failed'
+
+
+@pytest.mark.parametrize('git, dirty, porcelain, head', [
+    ({'rev-parse': (0, b'abc\n'), 'status': (0, b'')}, False, [], 'abc'),
+    ({'rev-parse': (0, b'abc\n'), 'status': (0, b' M x.py\n?? new.txt\n')}, True, [' M x.py', '?? new.txt'], 'abc'),
+    ({'rev-parse': (128, b''), 'status': (128, b'')}, None, [], None),
+])
+def test_build_dirty_detection(monkeypatch, tmp_path, capsys, git, dirty, porcelain, head):
+    _, work, _ = _build_shift(monkeypatch, tmp_path, git=git)
+    launcher.build(['bld00001', '--cwd', str(work), '--cmd', 'x'])
+    record = json.loads(capsys.readouterr().out)
+    assert (record['head'], record['dirty'], record['porcelain']) == (head, dirty, porcelain)
+
+
+def test_build_waits_for_a_live_holder_then_runs(monkeypatch, tmp_path, capsys):
+    d, work, seen = _build_shift(monkeypatch, tmp_path, running=lambda pid, started: pid == 999)
+    lock = _hold_build_lock(work)
+
+    def sleep(seconds):
+        seen['sleeps'] += 1
+        assert json.loads((d / 'builds' / '1.json').read_text(encoding='utf-8'))['status'] == 'waiting'
+        lock.unlink()   # the other build finishes
+    monkeypatch.setattr(launcher.time, 'sleep', sleep)
+    launcher.build(['bld00001', '--cwd', str(work), '--cmd', 'x'])
+    assert seen['sleeps'] == 1 and len(seen['popen']) == 1
+    assert json.loads(capsys.readouterr().out)['status'] == 'passed'
+
+
+def test_build_times_out_with_exit_6_naming_the_holder(monkeypatch, tmp_path, capsys):
+    d, work, seen = _build_shift(monkeypatch, tmp_path, running=lambda pid, started: True)
+    lock = _hold_build_lock(work)
+    with pytest.raises(SystemExit) as err:
+        launcher.build(['bld00001', '--cwd', str(work), '--cmd', 'x', '--timeout', '0'])
+    assert err.value.code == 6
+    assert 'build #7 of shift Nightshift-shift-other (pid 999' in capsys.readouterr().err
+    assert seen['popen'] == [] and lock.exists()   # the holder's lock is untouched
+    assert json.loads((d / 'builds' / '1.json').read_text(encoding='utf-8'))['status'] == 'timeout'
+
+
+def test_build_replaces_a_stale_holder(monkeypatch, tmp_path, capsys):
+    checked = []
+    _, work, seen = _build_shift(monkeypatch, tmp_path,
+                                 running=lambda pid, started: checked.append((pid, started)) or False)
+    _hold_build_lock(work)
+    launcher.build(['bld00001', '--cwd', str(work), '--cmd', 'x'])
+    assert checked == [(999, 5.0)] and len(seen['popen']) == 1 and seen['sleeps'] == 0
+
+
+def test_process_running_checks_pid_and_start_time(monkeypatch):
+    listed = subprocess.CompletedProcess([], 0, stdout=b'"python.exe","999","Console","1","10,000 K"\r\n', stderr=b'')
+    monkeypatch.setattr(launcher.subprocess, 'run', _fake_run([(['tasklist'], listed)]))
+    monkeypatch.setattr(launcher, 'process_start_epoch', lambda pid: 100.0)
+    assert launcher.process_running(999) is True               # any image name, not just claude/node
+    assert launcher.process_running(999, 101.0) is True
+    assert launcher.process_running(999, 500.0) is False       # PID reused by a later process
+    assert launcher.process_running(99) is False               # 999 listed, 99 is not
+    assert launcher.process_running(None) is False
+
+
+def test_cancel_running_build_kills_its_pid_and_ends_cancelled(monkeypatch, tmp_path, capsys):
+    d, work, seen = _build_shift(monkeypatch, tmp_path, code=1)
+    real_wait = _FakeChild.wait
+
+    def wait(child):
+        launcher.build(['--cancel', 'bld00001', '1'])   # from another process while the build runs
+        return real_wait(child)
+    monkeypatch.setattr(_FakeChild, 'wait', wait)
+    with pytest.raises(SystemExit):
+        launcher.build(['bld00001', '--cwd', str(work), '--cmd', 'x'])
+    assert ['taskkill', '/F', '/T', '/PID', '4242'] in seen['run']
+    assert not any('/IM' in argv for argv in seen['run'])
+    assert json.loads((d / 'builds' / '1.json').read_text(encoding='utf-8'))['status'] == 'cancelled'
+
+
+def test_cancel_finished_build_does_not_kill(monkeypatch, tmp_path, capsys):
+    _, work, seen = _build_shift(monkeypatch, tmp_path)
+    launcher.build(['bld00001', '--cwd', str(work), '--cmd', 'x'])
+    capsys.readouterr()
+    launcher.build(['--cancel', 'bld00001', '1'])
+    out = json.loads(capsys.readouterr().out)
+    assert out['cancelled'] is False and 'already finished' in out['message']
+    assert not any(argv[0] == 'taskkill' for argv in seen['run'])
+
+
+def test_handover_lists_builds(tmp_path, monkeypatch):
+    monkeypatch.setattr(launcher, 'suite_result', lambda: ('passed', '1 passed'))
+    record = {'roles': {}}
+    report = launcher.handover_report(tmp_path, record)
+    assert report[report.index('## Builds') + 2] == '(none)'
+    (tmp_path / 'builds').mkdir()
+    (tmp_path / 'builds' / '1.json').write_text(json.dumps(
+        {'n': 1, 'status': 'passed', 'exit': 0, 'head': 'abcdef1234567890', 'dirty': False, 'cmd': 'pytest -q'}),
+        encoding='utf-8')
+    report = launcher.handover_report(tmp_path, record)
+    assert '- #1 passed exit=0 head=abcdef12 dirty=False pytest -q' in report
+    assert report.index('## Unacknowledged messages') < report.index('## Builds') \
+        < report.index('## Commits since shift start')
+
+
+def test_build_locks_are_invisible_to_shift_locks(monkeypatch, tmp_path):
+    _, work, _ = _build_shift(monkeypatch, tmp_path)
+    _hold_build_lock(work)
+    assert launcher.build_lock_path(str(work)).name == launcher.lock_path(str(work)).name
+    assert launcher.read_locks() == [] and launcher.stale_locks() == []
+
+
+def test_main_dispatches_build(monkeypatch, tmp_path, capsys):
+    _, work, seen = _build_shift(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['nightshift', 'build', 'bld00001', '--cwd', str(work), '--cmd', 'x'])
+    launcher.main()
+    assert json.loads(capsys.readouterr().out)['status'] == 'passed'
 
 
 # ── PowerShell launchers parse ────────────────────────────────────────────────

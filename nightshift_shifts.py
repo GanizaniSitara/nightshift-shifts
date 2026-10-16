@@ -16,6 +16,7 @@ and `down` releases it.
 Coders claim files before editing them (`claim`/`release`/`claims`, kept in <state_dir>/claims.json); a file
 held by another role makes `claim` exit 4 and change nothing.
 Crew messages go through a durable mailbox (<state_dir>/mailbox.sqlite3): `msg send`/`msg sent`, `inbox`, `ack` (exit 5 = protocol violation).
+`build` runs heavy builds one at a time per folder (exit 6 = waited past --timeout) and records <state_dir>/builds/<n>.json.
 `resume` reruns, through `loop`, every ticket whose latest shift never reached done, continuing from that shift.
 Result ladder: result.json carries a stage (implemented < tested < deployed < validated; none = implemented).
 A ticket line `requires: <rung>` sets the bar (default tested); a done below it is recorded as 'short' and stops the loop.
@@ -182,8 +183,11 @@ def role_brief(role, identity, peer_name, state_dir='', brief=None):
         text += (BRIEFS_DIR / name).read_text(encoding='utf-8').strip() + '\n\n'
     shift = Path(state_dir).name if state_dir else ''
     # Plain replace, not str.format: the briefs contain literal JSON braces.
+    # {nightshift} is the exact command: the crews' shell is Git Bash, where the nightshift.cmd shim
+    # does not resolve by bare name.
+    nightshift_cmd = f'{SUITE_PYTHON} {REPO_DIR / "nightshift_shifts.py"}'
     for key, value in (('{role}', role), ('{identity}', identity), ('{peer_name}', peer_name),
-                       ('{state_dir}', str(state_dir)), ('{shift}', shift)):
+                       ('{state_dir}', str(state_dir)), ('{shift}', shift), ('{nightshift}', nightshift_cmd)):
         text = text.replace(key, value)
     return text
 
@@ -863,6 +867,10 @@ def handover_report(state_dir, record):
     pending = unacked_messages(state_dir)
     lines += [f"- msg:{m['id']} {m['kind']} {m['asg'] or '-'} {m['sender']} -> {m['recipient']} [{m['state']}]"
               for m in pending] if pending else ['(none)']
+    lines += ['', '## Builds', '']
+    builds = load_builds(state_dir)
+    lines += [f"- #{b.get('n')} {b.get('status')} exit={b.get('exit')} head={(b.get('head') or '-')[:8]} "
+              f"dirty={b.get('dirty')} {b.get('cmd')}" for b in builds] if builds else ['(none)']
     lines += ['', '## Commits since shift start', '']
     launch_path = state_dir / 'launch.json'
     roles = record['roles']
@@ -1232,6 +1240,221 @@ def unacked_messages(state_dir):
         return [dict(r) for r in conn.execute("SELECT * FROM messages WHERE state IN ('stored', 'sent') ORDER BY id")]
 
 
+BUILD_POLL_SECONDS = 5           # how often a waiting build re-checks its folder's build lock
+BUILD_TIMEOUT_MINUTES = 60       # default --timeout: how long a build waits for the folder before exit 6
+BUILD_UNREADABLE_GRACE = 5       # seconds an unreadable build lock may be (a holder mid-write) before it is stale
+
+
+class BuildWaitTimeout(FolderLocked):
+    """Another live build held the folder for the whole --timeout; exits with code 6."""
+
+
+def build_lock_path(cwd):
+    """LOCKS_DIR/builds/<lock_path key>: a subfolder, so read_locks()/stale_locks()/resume never see build locks."""
+    return LOCKS_DIR / 'builds' / lock_path(cwd).name
+
+
+def process_running(pid, started_epoch=None):
+    """True if any process has this PID (any image name) and, given started_epoch, was created then (within 2s)."""
+    if not pid:
+        return False
+    out = subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/FO', 'CSV', '/NH'],
+                         capture_output=True, timeout=15).stdout.decode('utf-8', 'replace')
+    if not any(line.startswith('"') and line.strip('"').split('","')[1:2] == [str(pid)] for line in out.splitlines()):
+        return False
+    if started_epoch is None:
+        return True
+    created = process_start_epoch(pid)
+    return created is None or abs(created - started_epoch) <= 2
+
+
+def write_json(path, data):
+    """Write JSON through a temp file + os.replace, so a reader never sees half a file."""
+    tmp = path.with_name(f'{path.name}.{os.getpid()}.tmp')
+    tmp.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    os.replace(tmp, path)
+
+
+def take_build_lock(cwd, shift, n, timeout_minutes):
+    """Hold the folder's build lock (O_EXCL); waits while a live build holds it, BuildWaitTimeout after the timeout.
+
+    A holder whose pid is gone, or whose process start time differs (PID reused), is stale and replaced.
+    """
+    path = build_lock_path(cwd)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        started_epoch = process_start_epoch(os.getpid())
+    except (OSError, subprocess.TimeoutExpired):
+        started_epoch = None
+    mine = {'shift': shift, 'n': n, 'cwd': cwd, 'pid': os.getpid(), 'started_epoch': started_epoch,
+            'started': time.strftime('%Y-%m-%d %H:%M:%S')}
+    deadline = time.time() + timeout_minutes * 60
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                raw = path.read_text(encoding='utf-8')
+                age = time.time() - path.stat().st_mtime
+            except OSError:
+                continue   # released between open and read: try again
+            try:
+                held = json.loads(raw)
+            except ValueError:
+                held = None
+            if not isinstance(held, dict):
+                stale = age > BUILD_UNREADABLE_GRACE   # a fresh empty file is a holder still writing it
+            else:
+                stale = not process_running(held.get('pid'), held.get('started_epoch'))
+            if stale:
+                with contextlib.suppress(OSError):
+                    if path.read_text(encoding='utf-8') == raw:   # not already replaced by another waiter
+                        path.unlink()
+                continue
+            if time.time() >= deadline:
+                holder = (f"build #{held.get('n')} of shift {held.get('shift')} (pid {held.get('pid')}, "
+                          f"since {held.get('started')})") if isinstance(held, dict) else 'a build still writing its lock'
+                message = f'folder {cwd} is still held by {holder} after {timeout_minutes:g} minutes; lock {path}'
+                print(message, file=sys.stderr)
+                raise BuildWaitTimeout(6, message)
+            time.sleep(BUILD_POLL_SECONDS)
+            continue
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(mine, f)
+        return path
+
+
+def release_build_lock(path):
+    """Remove the build lock if this process still holds it."""
+    with contextlib.suppress(OSError, ValueError):
+        if json.loads(path.read_text(encoding='utf-8')).get('pid') == os.getpid():
+            path.unlink()
+
+
+def reserve_build(builds_dir):
+    """Next build number in builds_dir (1, 2, ...), reserved by creating <n>.json with O_EXCL."""
+    builds_dir.mkdir(parents=True, exist_ok=True)
+    n = 1 + max((int(p.stem) for p in builds_dir.glob('*.json') if p.stem.isdigit()), default=0)
+    while True:
+        try:
+            os.close(os.open(builds_dir / f'{n}.json', os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return n
+        except FileExistsError:
+            n += 1
+
+
+def git_state(cwd):
+    """(head, dirty, porcelain lines) of cwd; (None, None, []) when it is not a git work tree or git fails."""
+    try:
+        head = subprocess.run(['git', '-C', cwd, 'rev-parse', 'HEAD'], capture_output=True, timeout=30)
+        if head.returncode != 0:
+            return None, None, []
+        status = subprocess.run(['git', '-C', cwd, 'status', '--porcelain'], capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None, []
+    sha = (head.stdout or b'').decode('utf-8', 'replace').strip() or None
+    if status.returncode != 0:
+        return sha, None, []
+    porcelain = [line for line in (status.stdout or b'').decode('utf-8', 'replace').splitlines() if line.strip()]
+    return sha, bool(porcelain), porcelain
+
+
+def load_builds(state_dir):
+    """Every readable <state_dir>/builds/<n>.json, lowest n first."""
+    builds_dir = Path(state_dir) / 'builds'
+    found = []
+    for p in sorted((p for p in builds_dir.glob('*.json') if p.stem.isdigit()), key=lambda p: int(p.stem)) \
+            if builds_dir.is_dir() else []:
+        try:
+            data = json.loads(p.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            found.append(data)
+    return found
+
+
+def cancel_build(state_dir, n):
+    """Mark build n cancelled; a running build's process tree is killed by PID. Finished builds are left alone."""
+    path = Path(state_dir) / 'builds' / f'{n}.json'
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise SystemExit(f'no build #{n} in shift {Path(state_dir).name}')
+    if record.get('status') not in ('waiting', 'running'):
+        print(json.dumps({'build': n, 'cancelled': False,
+                          'message': f"build #{n} already finished with status {record.get('status')}"}))
+        return
+    (Path(state_dir) / 'builds' / f'{n}.cancel').write_text(time.strftime('%Y-%m-%d %H:%M:%S'), encoding='utf-8')
+    killed = False
+    if record.get('status') == 'running' and record.get('pid'):
+        subprocess.run(['taskkill', '/F', '/T', '/PID', str(record['pid'])], capture_output=True, timeout=30)
+        killed = True
+    print(json.dumps({'build': n, 'cancelled': True, 'killed_pid': record.get('pid') if killed else None}))
+
+
+def build(argv):
+    parser = argparse.ArgumentParser(
+        prog='nightshift build',
+        description='Run a heavy build or test suite in a folder, one at a time across shifts: waits while another '
+                    'live build holds the folder (exit 6 after --timeout), then runs COMMAND and records '
+                    '<state_dir>/builds/<n>.json (head, dirty tree, exit, log) as evidence; exit code = COMMAND\'s. '
+                    '--cancel SHIFT N kills build N\'s process tree and marks it cancelled.')
+    parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
+    parser.add_argument('n', nargs='?', type=int, help='with --cancel: the build number')
+    parser.add_argument('--cwd', help='folder to build in (its build lock serialises builds there)')
+    parser.add_argument('--cmd', help='the command line to run (through the shell)')
+    parser.add_argument('--timeout', type=float, default=BUILD_TIMEOUT_MINUTES,
+                        help=f'minutes to wait for the folder before giving up with exit 6 (default {BUILD_TIMEOUT_MINUTES})')
+    parser.add_argument('--cancel', action='store_true', help='cancel build N of SHIFT')
+    args = parser.parse_args(argv)
+    state_dir = resolve_shift(args.shift)
+    if args.cancel:
+        if args.n is None:
+            parser.error('--cancel needs the build number: nightshift build --cancel SHIFT N')
+        cancel_build(state_dir, args.n)
+        return
+    if not args.cwd or not args.cmd:
+        parser.error('give both --cwd DIR and --cmd COMMAND')
+    if not Path(args.cwd).is_dir():
+        parser.error(f'build folder does not exist: {args.cwd}')
+    cwd = str(Path(args.cwd).resolve())
+    builds_dir = state_dir / 'builds'
+    n = reserve_build(builds_dir)
+    path, cancel_marker = builds_dir / f'{n}.json', builds_dir / f'{n}.cancel'
+    log = builds_dir / f'{n}.log'
+    record = {'n': n, 'cmd': args.cmd, 'cwd': cwd, 'head': None, 'dirty': None, 'porcelain': [], 'started': None,
+              'ended': None, 'exit': None, 'log': str(log), 'pid': None, 'status': 'waiting'}
+    write_json(path, record)
+    lock = None
+    try:
+        lock = take_build_lock(cwd, state_dir.name, n, args.timeout)
+        record['head'], record['dirty'], record['porcelain'] = git_state(cwd)
+        record['started'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        if cancel_marker.exists():
+            record.update(status='cancelled', ended=record['started'])
+        else:
+            with open(log, 'wb') as out:
+                child = subprocess.Popen(args.cmd, shell=True, cwd=cwd, stdout=out, stderr=subprocess.STDOUT)
+                record.update(status='running', pid=child.pid)
+                write_json(path, record)
+                code = child.wait()
+            record.update(exit=code, ended=time.strftime('%Y-%m-%d %H:%M:%S'),
+                          status='cancelled' if cancel_marker.exists() else 'passed' if code == 0 else 'failed')
+    except BuildWaitTimeout:
+        record.update(status='timeout', ended=time.strftime('%Y-%m-%d %H:%M:%S'))
+        raise
+    finally:
+        if record['status'] in ('waiting', 'running'):
+            record.update(status='failed', ended=time.strftime('%Y-%m-%d %H:%M:%S'))   # interrupted
+        write_json(path, record)
+        if lock:
+            release_build_lock(lock)
+    print(json.dumps(record, indent=2))
+    if record['exit']:
+        raise SystemExit(record['exit'])
+
+
 def session_idle_since(pid):
     """Seconds the registered Claude session has been idle, or None if busy/unknown."""
     try:
@@ -1508,7 +1731,8 @@ def resume(argv):
 
 def main():
     commands = {'start': start, 'status': status, 'down': down, 'loop': loop, 'resume': resume,
-                'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack}
+                'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack,
+                'build': build}
     if len(sys.argv) > 1 and sys.argv[1] in commands:
         commands[sys.argv[1]](sys.argv[2:])
         return
@@ -1528,7 +1752,10 @@ def main():
                '                                              store a crew message; prints its header line\n'
                '  msg sent SHIFT ID                           mark a stored message as sent with SendMessage\n'
                '  inbox SHIFT ROLE                            unacked inbound, unsent outbound, active assignments\n'
-               '  ack SHIFT ROLE ID                           acknowledge and print the stored body; exit 5 = do not act')
+               '  ack SHIFT ROLE ID                           acknowledge and print the stored body; exit 5 = do not act\n'
+               "  build SHIFT --cwd DIR --cmd 'COMMAND' [--timeout MIN]\n"
+               '                                              run a build one at a time per folder; evidence in builds/<n>.json\n'
+               '  build --cancel SHIFT N                      kill build N and mark it cancelled')
     parser.add_argument('--pane', help=argparse.SUPPRESS)
     parser.add_argument('--state-dir', help=argparse.SUPPRESS)
     parser.add_argument('--start', action='store_true', help=argparse.SUPPRESS)
