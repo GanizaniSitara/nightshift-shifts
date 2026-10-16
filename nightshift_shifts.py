@@ -13,8 +13,8 @@ window is titled 'Nightshift <first ticket>..<last ticket>', and
 <state_dir>/<Role>.json records pid, name, peer and model. There is no restart or
 resume; a closed pane is not relaunched. `start --dry-run` prints the plan as
 JSON without launching or writing anything.
-Container (NGH-025): a crew with layout 1x4 fills four equal columns, the crew in the first slots and plain cmd
-shells in the rest (each records <state_dir>/slots/<N>.json); the launcher exits once every pane and slot has
+Container (NGH-025): a crew with layout 2x4 (8 slots, 2 rows x 4 columns) or 1x4 (4 equal columns) puts the crew
+in the first slots and plain cmd shells in the rest (each records <state_dir>/slots/<N>.json); the launcher exits once every pane and slot has
 reported. `spawn SHIFT --role ROLE [--cli claude|gemini] [--slot N]` starts a session in a free slot of that
 window (Foreman's only way to add a crew member), and Foreman ends its own shift with `down` (--hold, the
 default, keeps the tab; --close closes the window, as `loop` does). A working folder holds one live shift at a time:
@@ -78,9 +78,9 @@ AGY_EXE = Path(os.environ.get('LOCALAPPDATA', '')) / 'Microsoft' / 'WinGet' / 'L
 DEFAULT_LABELS = ('Foreman', 'Coder')   # panes of the trial modes and of shifts started before crew.json existed
 STAGES = ('implemented', 'tested', 'deployed', 'validated')   # the result ladder, lowest rung first
 DEFAULT_REQUIRES = 'tested'
-# Crew layouts and their slot counts: 'split' sizes the tab to the crew (no slots); '1x4' is the container (NGH-025):
-# four equal columns, the crew in the first slots and plain cmd shells in the rest, which `spawn` can fill.
-LAYOUT_SLOTS = {'split': None, '1x4': 4}
+# Crew layouts and their slot counts: 'split' sizes the tab to the crew (no slots); '1x4' (4 slots) and '2x4'
+# (8 slots, 2 rows x 4 columns) are containers (NGH-025): the crew fills the first slots and plain cmd shells fill the rest.
+LAYOUT_SLOTS = {'split': None, '1x4': 4, '2x4': 8}
 SPAWN_CLIS = {'claude': 'claude', 'gemini': 'agy', 'codex': None, 'copilot': None, 'opencode': None}   # None: not wired
 AGY_MODEL = 'gemini-3.8-flash-high'      # model for a spawned agy role when no crew member names one
 
@@ -216,8 +216,9 @@ def role_brief(role, identity, peer_name, state_dir='', brief=None):
     # {nightshift} is the exact command: the crews' shell is Git Bash, where the nightshift.cmd shim
     # does not resolve by bare name, and forward slashes because Git Bash strips unquoted backslashes.
     nightshift_cmd = f'{SUITE_PYTHON} {(REPO_DIR / "nightshift_shifts.py").as_posix()}'
+    state_posix = Path(state_dir).as_posix() if state_dir else ''
     for key, value in (('{role}', role), ('{identity}', identity), ('{peer_name}', peer_name),
-                       ('{state_dir}', str(state_dir)), ('{shift}', shift), ('{nightshift}', nightshift_cmd)):
+                       ('{state_dir}', state_posix), ('{shift}', shift), ('{nightshift}', nightshift_cmd)):
         text = text.replace(key, value)
     return text
 
@@ -1154,12 +1155,16 @@ def down(argv):
     record = shift_record(state_dir)
     tails = {role: pane_tail(info['pid']) for role, info in record['roles'].items() if info['alive']}
     record_denials(state_dir, tails)
-    handover = [f"# Handover: {record['shift']}", '', f"Task: {record['task']}", f"Stopped: {time.strftime('%Y-%m-%d %H:%M')}", '']
-    handover += handover_report(state_dir, record)
-    for role, info in record['roles'].items():
-        handover += [f"## {role} ({info['name']}, pid {info['pid']}, {'alive' if info['alive'] else 'gone'})", '',
-                     '```', *(tails.get(role, []) or ['(pane not readable)']), '```', '']
-    (state_dir / 'handover.md').write_text('\n'.join(handover), encoding='utf-8')
+    # When Foreman already ran `down` (--hold) and a caller later runs `down --close`, the crew is already gone:
+    # keep the handover captured while the panes were live rather than overwriting it with '(pane not readable)'.
+    if record['alive'] or not (state_dir / 'handover.md').exists():
+        handover = [f"# Handover: {record['shift']}", '', f"Task: {record['task']}",
+                    f"Stopped: {time.strftime('%Y-%m-%d %H:%M')}", '']
+        handover += handover_report(state_dir, record)
+        for role, info in record['roles'].items():
+            handover += [f"## {role} ({info['name']}, pid {info['pid']}, {'alive' if info['alive'] else 'gone'})", '',
+                         '```', *(tails.get(role, []) or ['(pane not readable)']), '```', '']
+        (state_dir / 'handover.md').write_text('\n'.join(handover), encoding='utf-8')
     # The member whose process tree runs this `down` (Foreman ending its own shift) is killed last, after the
     # lock is released and the output printed; killing it first would end `down` half-way.
     mine = own_ancestors()
@@ -1183,7 +1188,7 @@ def down(argv):
 def spawn(argv):
     parser = argparse.ArgumentParser(
         prog='nightshift spawn',
-        description="Start a crew session in a free slot of a live shift's own window (1x4 container, NGH-025): "
+        description="Start a crew session in a free slot of a live shift's own window (2x4/1x4 container, NGH-025): "
                     'adds the role to crew.json and types the pane wrapper into that slot\'s cmd shell. Refused when '
                     'the window is gone, no slot is free, or the role is already live. Foreman only.')
     parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
@@ -1202,7 +1207,7 @@ def spawn(argv):
     saved = read_crew_json(state_dir)
     slots = (saved or {}).get('slots')
     if not slots:
-        raise SystemExit(f'shift {state_dir.name} has no slot grid (its crew layout is not 1x4); nothing to spawn into')
+        raise SystemExit(f'shift {state_dir.name} has no slot grid (its crew layout is split); nothing to spawn into')
     try:
         hwnd = json.loads((state_dir / 'launch.json').read_text(encoding='utf-8')).get('hwnd')
     except (OSError, ValueError):
@@ -1238,13 +1243,15 @@ def spawn(argv):
                          f'no free slot in shift {state_dir.name} ({slots} slots, all taken)')
     shift = state_dir.name
     lead = next((m for m in members if m.get('human_contact')), members[0])
-    same_role = next((m for m in members if m['role'] == role), None)
+    if existing and '--cli' not in argv and existing.get('tool') in TOOLS:
+        tool = existing['tool']
+    same_role = next((m for m in members if m['role'].lower() == role.lower()), None)
     same_tool = next((m for m in members if m.get('tool') == tool), None)
     if same_tool:
         model = same_tool['model']
     else:
         model = (saved.get('model') or MODEL) if tool == 'claude' else AGY_MODEL
-    member = {'role': role, 'label': role, 'identity': f'{shift}-{role.lower()}',
+    member = {'role': same_role['role'] if same_role else role, 'label': role, 'identity': f'{shift}-{role.lower()}',
               'brief': f'{role.lower()}.md' if (BRIEFS_DIR / f'{role.lower()}.md').is_file() else 'coder.md',
               'colour': same_role['colour'] if same_role else 'yellow', 'human_contact': False, 'tool': tool,
               'model': model, 'peer': lead['identity']}
@@ -1262,7 +1269,12 @@ def spawn(argv):
             if manifest_role['tool'] == tool:
                 member['model'] = manifest_role['model']
     if existing:
-        member['label'] = existing['label']   # a gone member is restarted under its own label
+        # a gone member is restarted with its own role, label, identity, brief, colour and (on the same tool) model
+        member.update(role=existing.get('role', existing['label']), label=existing['label'],
+                      identity=existing.get('identity', f"{shift}-{existing['label'].lower()}"),
+                      brief=existing.get('brief', member['brief']), colour=existing.get('colour', member['colour']))
+        if tool == existing.get('tool', 'claude') and existing.get('model'):
+            member['model'] = existing['model']
     updated = [m for m in members if m is not existing] + [member]
     cwd = saved.get('cwd') or member_info(state_dir, lead['label']).get('cwd') or os.getcwd()
     crew_file = state_dir / 'crew.json'
@@ -1547,8 +1559,12 @@ def inbox_view(state_dir, label):
     with mailbox(state_dir, create=False) as conn:
         if conn is None:
             return view
-        view['inbound_unacked'] = [dict(r) for r in conn.execute(
-            "SELECT * FROM messages WHERE recipient = ? AND state IN ('stored', 'sent') ORDER BY id", (label,))]
+        current = incarnation(state_dir, label)
+        # Only rows addressed to the current incarnation can be acked by it (earlier ones are stale assignments).
+        view['inbound_unacked'] = [
+            dict(r) for r in conn.execute(
+                "SELECT * FROM messages WHERE recipient = ? AND state IN ('stored', 'sent') ORDER BY id", (label,))
+            if r['recipient_incarnation'] == current]
         for r in conn.execute("SELECT * FROM messages WHERE sender = ? AND state = 'stored' ORDER BY id", (label,)):
             view['outbound_unsent'].append({**dict(r), 'header': msg_header(r), 'to': mesh_name(state_dir, r['recipient'])})
         for r in conn.execute(

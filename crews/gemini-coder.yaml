@@ -5,7 +5,7 @@
 name: gemini-coder
 permission_mode: auto        # Claude --permission-mode for Claude panes (agy runs --mode auto)
 model: claude-opus-5-5
-layout: 1x4                  # the container: four equal columns, crew in the first slots, empty cmd shells after (spawn fills them)
+layout: 2x4                  # the container: 2 rows x 4 columns (8 slots), crew in the first slots, empty cmd shells after (spawn fills them)
 contract: result.json        # the file Foreman writes in the shift folder when the shift ends
 roles:
   - role: Foreman

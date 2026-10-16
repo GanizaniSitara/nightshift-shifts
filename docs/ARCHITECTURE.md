@@ -13,20 +13,22 @@ exists; where the two differ, this file wins.
 
 The owner has reset the shape of the thing. Nightshift is **not a persistent process**. The
 executable launches a container and exits: one Windows Terminal tab holding a grid of slots
-(1x4 now, 2x4 later), the first slots filled with the crew from the manifest, the rest empty
-shells. From then on **Foreman owns the container**: it may fill an empty slot through
-`nightshift spawn` (any CLI; the Nightshift CLI is the one component that knows how to put a
-session into a tab slot, agents-cli only drives consoles), and when the ticket is tested and
-deployed it writes the records and runs `nightshift down` itself. If Foreman dies, the shift is
-dead until a human looks; there is no watcher of watchers. The `loop` below is kept as an
-optional batch runner and is no longer the default path.
+(2x4 = 8 slots across two rows of four columns; 1x4 = 4 slots also supported), the first slots
+filled with the crew from the manifest, the rest empty shells. From then on **Foreman owns the
+container**: it may fill an empty slot through `nightshift spawn` (any CLI; the Nightshift CLI
+is the one component that knows how to put a session into a tab slot, agents-cli only drives
+consoles), and when the ticket is tested and deployed it writes the records and runs
+`nightshift down` itself. If Foreman dies, the shift is dead until a human looks; there is no
+watcher of watchers. The `loop` below is kept as an optional batch runner and is no longer the
+default path.
 
 As built (NGH-025):
 
-- **Layout.** A manifest says `layout: 1x4` (the default and gemini-coder crews) or `layout: split`
-  (the tab sized to the crew, 2-8 panes, unchanged). `load_crew` exposes `slots` (4 for 1x4, None
-  for split) and refuses a crew that does not fit. `wt_command` lays out four equal columns: crew
-  panes in slots 1..k (their wrappers get `--slot N`), and slots k+1..4 run
+- **Layout.** A manifest says `layout: 2x4` (the default and gemini-coder crews: 8 slots, two rows
+  of four equal columns), `layout: 1x4` (4 slots, one row of four equal columns) or `layout: split`
+  (the tab sized to the crew, 2-8 panes, unchanged). `load_crew` exposes `slots` (8 for 2x4, 4 for
+  1x4, None for split) and refuses a crew that does not fit. `wt_command` lays out the grid: crew
+  panes in slots 1..k (their wrappers get `--slot N`), and slots k+1..slots run
   `cmd.exe /k <python> nightshift_shifts.py --slot N --state-dir <dir>`. Every pane is titled
   `<ticket or shift> shift` (NGH-028).
 - **slots/.** Every slot records `<state_dir>/slots/<N>.json`: an empty slot writes
@@ -45,7 +47,8 @@ As built (NGH-025):
   container shift.
 - **Incarnation history.** When a pane writes `<role>.json` over an earlier one, the earlier record
   (minus its own history) is appended to `history`; `started` stays the current incarnation, so
-  mailbox fencing is unchanged.
+  mailbox fencing is unchanged. `inbox` filters `inbound_unacked` to `recipient_incarnation == current`
+  so a respawned member never tries to ack a dead incarnation's messages.
 - **Launcher exits.** `launch` waits for every `<Role>.json` and every slot record, prints, and
   returns. Nothing polls the shift after that.
 - **spawn.** `nightshift spawn SHIFT --role ROLE [--cli claude|gemini] [--slot N]` is the only way a
@@ -57,21 +60,25 @@ As built (NGH-025):
   copilot and opencode are refused as not yet wired (NGH-022). It appends the member to `crew.json`
   (identity `<shift>-<role>`, brief `<role>.md` if it exists else `coder.md`, the colour of a member
   with the same role else yellow, peer = the human contact; Foreman's own peer list is not rewritten),
-  types the pane wrapper line (paths double-quoted, `--slot N`) into that slot's cmd with
+  preserving a dead member's `role`, `label`, `identity`, `brief`, `colour`, `tool` and `model` when
+  restarting it, types the pane wrapper line (paths double-quoted, `--slot N`) into that slot's cmd with
   `agents-cli _attach inject`, and marks the slot with the role and a `spawned` time. A start-mode pane reads its member
   from `crew.json` (falling back to the manifest), so spawned roles run like launched ones; `status`,
   `down` and the mailbox pick them up from `crew.json`.
 - **down --hold / --close.** Both write the handover, kill the crew and release the folder lock.
-  `--hold` (default) leaves the tab open; `--close` also closes the window (the loop uses it). The
-  member whose process tree is running `down` (Foreman ending its own shift) is killed last, after the
+  `--hold` (default) leaves the tab open; `--close` also closes the window (the loop uses it). When the
+  crew is already dead and `handover.md` exists (Foreman already ran `down`, and a caller later runs
+  `down --close`), the captured `handover.md` is preserved rather than overwritten with `(pane not readable)`.
+  The member whose process tree is running `down` (Foreman ending its own shift) is killed last, after the
   lock is released and the JSON (with `held`) is printed. Foreman's brief makes `down` its last act
   after writing `result.json`.
 
 ## The four identities (owner, 16 Oct 2026)
 
-The 1x4 container is meant for four fixed identities, one per column: **Foreman** (runs the
+The top row of the 2x4 container holds four fixed identities, one per column: **Foreman** (runs the
 ticket's goal statement, sole human contact), **Advisor** (NGH-027), **Coder**, **Tester** (NGH-024);
-all four are built, see "The default crew" below. The
+all four are built, see "The default crew" below, with the bottom four slots (5..8) open for
+`nightshift spawn` and additional identities such as the **Apprentice** (NGH-029). The
 Advisor is a dormant session on a frontier model (Fable, Astra, Mistral Large 4 or Gemini's top
 model, whichever the manifest names): it gets no instructions beyond its identity and does
 nothing until Foreman is stuck on something it cannot resolve. Then, instead of asking the human,
@@ -118,7 +125,7 @@ As built (NGH-027):
 |---|---|---|
 | `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--hold`/`--close`), `spawn` (NGH-025), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020) | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (claude or agy) and `model`, pane layout | this repo |
-| `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`; placeholders filled in); the task text is appended for Foreman | this repo |
+| `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | `C:\Tools\tasks-cli.exe` |
 | agents-cli | universal console driver for any agent TUI: peek a pane, inject a line, press a key, name/wait on a session | `C:\Tools\agents-cli` |
@@ -157,8 +164,8 @@ As built (NGH-027):
 ## The default crew: Foreman, Advisor, Coder, Tester (NGH-024, NGH-027)
 
 - `crews/default.yaml` is Foreman (red), Advisor (purple, Fable, `advisor.md`), Coder (green),
-  Tester (blue, `tester.md`), filling all four slots of the 1x4 container: `spawn` has no free slot
-  until a member dies. Foreman's peers are `<shift>-advisor, <shift>-coder, <shift>-tester`; everyone
+  Tester (blue, `tester.md`), filling slots 1..4 (top row) of the 2x4 container and leaving slots
+  5..8 (bottom row) as empty cmd shells for `spawn`. Foreman's peers are `<shift>-advisor, <shift>-coder, <shift>-tester`; everyone
   else's peer is `<shift>-foreman`. Other crews (`--crew NAME`) are unaffected.
 - Handoff is Coder -> Foreman -> Tester. Coder reports an assignment done; Foreman reviews it and
   assigns verification to Tester with its own `--asg` id, saying what changed and what was asked.

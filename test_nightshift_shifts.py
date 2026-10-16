@@ -82,8 +82,8 @@ def test_start_dry_run_from_a_ticket_titles_panes_with_it(monkeypatch, tmp_path,
                                                                      'Coder': 'NGH-019 shift',
                                                                      'Tester': 'NGH-019 shift'}
     # every pane of the container, crew and empty slot alike, carries the one shift title (NGH-028)
-    assert _titles(plan['wt_argv']) == ['NGH-019 shift'] * 4
-    assert [s['pane_title'] for s in plan['slots']] == ['NGH-019 shift'] * 4
+    assert _titles(plan['wt_argv']) == ['NGH-019 shift'] * 8
+    assert [s['pane_title'] for s in plan['slots']] == ['NGH-019 shift'] * 8
 
 
 @pytest.mark.parametrize('tickets, title', [
@@ -145,7 +145,7 @@ def test_default_manifest_is_foreman_advisor_coder_tester():
     """NGH-027: the Advisor sits second, on its own model; the other roles run the crew model."""
     crew = launcher.load_crew()
     assert crew == {'name': 'default', 'model': 'claude-opus-5-5', 'permission_mode': 'auto',
-                    'contract': 'result.json', 'layout': '1x4', 'slots': 4, 'roles': [
+                    'contract': 'result.json', 'layout': '2x4', 'slots': 8, 'roles': [
                         {'role': 'Foreman', 'brief': 'foreman.md', 'count': 1, 'human_contact': True, 'colour': 'red',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
                         {'role': 'Advisor', 'brief': 'advisor.md', 'count': 1, 'human_contact': False,
@@ -541,8 +541,8 @@ def _fixed_uuid(monkeypatch):
 
 
 def test_start_dry_run_default_crew_is_the_four_pane_golden(monkeypatch, tmp_path, capsys):
-    """Golden for the default crew (Foreman, Advisor, Coder, Tester; NGH-024, NGH-027) filling the 1x4 container
-    (NGH-025) with no empty slot: must not move."""
+    """Golden for the default crew (Foreman, Advisor, Coder, Tester; NGH-024, NGH-027) in the 2x4 container
+    (slots 1..4 crew, slots 5..8 empty shells for spawn): must not move."""
     _fixed_uuid(monkeypatch)
     work = tmp_path / 'work'
     work.mkdir()
@@ -557,6 +557,10 @@ def test_start_dry_run_default_crew_is_the_four_pane_golden(monkeypatch, tmp_pat
     def pane_args(role, slot):
         return ['--profile', 'Nightshift Crew', '--title', f'{shift} shift', '--suppressApplicationTitle', '-d', '%USERPROFILE%',
                 py, script, '--pane', role, '--state-dir', state, '--start', '--cwd', cwd, '--slot', str(slot)]
+
+    def empty_args(slot):
+        return ['--profile', 'Nightshift Crew', '--title', f'{shift} shift', '--suppressApplicationTitle', '-d', '%USERPROFILE%',
+                'cmd.exe', '/k', py, script, '--slot', str(slot), '--state-dir', state]
     assert plan == {
         'dry_run': True, 'shift': shift, 'state_dir': state, 'cwd': cwd, 'ticket': None,
         'prompt_file': str(Path(state) / 'prompt.txt'), 'model': 'claude-opus-5-5', 'profile': 'Nightshift Crew',
@@ -580,11 +584,21 @@ def test_start_dry_run_default_crew_is_the_four_pane_golden(monkeypatch, tmp_pat
         'slots': [{'slot': 1, 'role': 'Foreman', 'pane_title': f'{shift} shift'},
                   {'slot': 2, 'role': 'Advisor', 'pane_title': f'{shift} shift'},
                   {'slot': 3, 'role': 'Coder', 'pane_title': f'{shift} shift'},
-                  {'slot': 4, 'role': 'Tester', 'pane_title': f'{shift} shift'}],
+                  {'slot': 4, 'role': 'Tester', 'pane_title': f'{shift} shift'},
+                  {'slot': 5, 'role': None, 'pane_title': f'{shift} shift'},
+                  {'slot': 6, 'role': None, 'pane_title': f'{shift} shift'},
+                  {'slot': 7, 'role': None, 'pane_title': f'{shift} shift'},
+                  {'slot': 8, 'role': None, 'pane_title': f'{shift} shift'}],
         'wt_argv': ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized', 'new-tab', *pane_args('Foreman', 1),
+                    ';', 'split-pane', '-H', '-s', '0.5', *empty_args(5),
+                    ';', 'move-focus', 'up',
                     ';', 'split-pane', '-V', '-s', '0.75', *pane_args('Advisor', 2),
                     ';', 'split-pane', '-V', '-s', '0.6667', *pane_args('Coder', 3),
                     ';', 'split-pane', '-V', '-s', '0.5', *pane_args('Tester', 4),
+                    ';', 'move-focus', 'down',
+                    ';', 'split-pane', '-V', '-s', '0.75', *empty_args(6),
+                    ';', 'split-pane', '-V', '-s', '0.6667', *empty_args(7),
+                    ';', 'split-pane', '-V', '-s', '0.5', *empty_args(8),
                     ';', 'focus-pane', '-t', '0'],
         'prompt': 'task'}
     assert list(plan) == ['dry_run', 'shift', 'state_dir', 'cwd', 'ticket', 'prompt_file', 'model', 'profile',
@@ -2222,8 +2236,8 @@ roles:
 @pytest.mark.usefixtures('_container_isolated')
 def test_default_crew_is_the_1x4_container():
     crew = launcher.load_crew()
-    assert crew['layout'] == '1x4' and crew['slots'] == 4
-    assert launcher.LAYOUT_SLOTS == {'split': None, '1x4': 4}
+    assert crew['layout'] == '2x4' and crew['slots'] == 8
+    assert launcher.LAYOUT_SLOTS == {'split': None, '1x4': 4, '2x4': 8}
 
 
 @pytest.mark.usefixtures('_container_isolated')
@@ -2249,7 +2263,7 @@ def test_1x4_refuses_more_panes_than_slots(monkeypatch, tmp_path):
 @pytest.mark.usefixtures('_container_isolated')
 def test_unknown_layout_names_the_supported_ones(monkeypatch, tmp_path):
     _crew_file(monkeypatch, tmp_path, 'odd', PAIR.replace('layout: 1x4', 'layout: 2x2'))
-    with pytest.raises(SystemExit, match="'2x2' is not supported; use one of: split, 1x4"):
+    with pytest.raises(SystemExit, match="'2x2' is not supported; use one of: split, 1x4, 2x4"):
         launcher.load_crew('odd')
 
 
@@ -2305,11 +2319,16 @@ def test_dry_run_default_crew_fills_all_four_slots_with_crew(monkeypatch, tmp_pa
     assert plan['slots'] == [{'slot': 1, 'role': 'Foreman', 'pane_title': f'{s} shift'},
                              {'slot': 2, 'role': 'Advisor', 'pane_title': f'{s} shift'},
                              {'slot': 3, 'role': 'Coder', 'pane_title': f'{s} shift'},
-                             {'slot': 4, 'role': 'Tester', 'pane_title': f'{s} shift'}]
-    cells = _cells(plan['wt_argv'])
-    assert [c[c.index('--pane') + 1] for c in cells[:4]] == ['Foreman', 'Advisor', 'Coder', 'Tester']
-    assert [c[c.index('--slot') + 1] for c in cells[:4]] == ['1', '2', '3', '4']
-    assert 'cmd.exe' not in plan['wt_argv']   # no empty slot shell
+                             {'slot': 4, 'role': 'Tester', 'pane_title': f'{s} shift'},
+                             {'slot': 5, 'role': None, 'pane_title': f'{s} shift'},
+                             {'slot': 6, 'role': None, 'pane_title': f'{s} shift'},
+                             {'slot': 7, 'role': None, 'pane_title': f'{s} shift'},
+                             {'slot': 8, 'role': None, 'pane_title': f'{s} shift'}]
+    slot_cells = [c for c in _cells(plan['wt_argv']) if '--slot' in c]
+    assert [(c[c.index('--slot') + 1], c[c.index('--pane') + 1] if '--pane' in c else None) for c in slot_cells] == [
+        ('1', 'Foreman'), ('5', None), ('2', 'Advisor'), ('3', 'Coder'),
+        ('4', 'Tester'), ('6', None), ('7', None), ('8', None)]
+    assert plan['wt_argv'].count('cmd.exe') == 4   # four empty slot shells in the bottom row
     assert not (tmp_path / 'shifts').exists()
 
 
@@ -2864,7 +2883,7 @@ def test_advisor_brief_fills_identity_and_states_its_answer_format():
     advisor = launcher.role_brief('Advisor', 'S-advisor', 'S-foreman', state, 'advisor.md')
     assert 'S-advisor' in advisor and 'S-foreman' in advisor and 'Nightshift-shift-abc' in advisor
     assert not any(p in advisor for p in _PLACEHOLDERS)
-    assert str(state / 'bus.jsonl') in advisor and 'mailbox' in advisor
+    assert (state / 'bus.jsonl').as_posix() in advisor and 'mailbox' in advisor
     assert 'DECISION:' in advisor and 'WHY:' in advisor and 'ASK-HUMAN:' in advisor
     assert 'Advisor Foreman --kind result' in advisor
     assert re.search(r'never edits? (any )?files', advisor, re.IGNORECASE)
@@ -3019,3 +3038,49 @@ def test_dry_run_default_crew_names_only_the_advisors_model(monkeypatch, tmp_pat
     roles = json.loads(capsys.readouterr().out)['roles']
     assert {label: r.get('model') for label, r in roles.items()} == {
         'Foreman': None, 'Advisor': 'claude-fable-5-1', 'Coder': None, 'Tester': None}
+
+
+# ── respawn attribute preservation, down --close handover safety, inbox incarnation ──
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_respawn_preserves_existing_member_model_brief_colour_and_tool(tmp_path, injected, monkeypatch, capsys):
+    d = _container(tmp_path, members=('Foreman', 'Advisor', 'Coder'), slots=4, free=(4,))
+    crew = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    crew['members'][1].update(brief='advisor.md', colour='purple', tool='claude', model='claude-fable-5-1')
+    crew['members'][2].update(brief='coder-agy.md', colour='green', tool='agy', model='gemini-3.8-flash-high')
+    (d / 'crew.json').write_text(json.dumps(crew), encoding='utf-8')
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: pid not in (502, 503))
+    launcher.spawn([CONT_SHIFT, '--role', 'advisor'])
+    launcher.spawn([CONT_SHIFT, '--role', 'coder'])
+    after = {m['label']: m for m in json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members']}
+    assert (after['Advisor']['role'], after['Advisor']['brief'], after['Advisor']['colour'],
+            after['Advisor']['tool'], after['Advisor']['model']) == \
+        ('Advisor', 'advisor.md', 'purple', 'claude', 'claude-fable-5-1')
+    assert (after['Coder']['role'], after['Coder']['brief'], after['Coder']['colour'],
+            after['Coder']['tool'], after['Coder']['model']) == \
+        ('Coder', 'coder-agy.md', 'green', 'agy', 'gemini-3.8-flash-high')
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_down_close_after_down_hold_preserves_handover_from_when_crew_was_live(down_world, monkeypatch):
+    d, _ = down_world
+    launcher.down([CONT_SHIFT, '--hold'])
+    saved = (d / 'handover.md').read_text(encoding='utf-8')
+    assert 'tail' in saved and '(pane not readable)' not in saved
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: False)
+    monkeypatch.setattr(launcher, 'pane_tail', lambda pid, lines=40: [])
+    launcher.down([CONT_SHIFT, '--close'])
+    assert (d / 'handover.md').read_text(encoding='utf-8') == saved
+
+
+def test_inbox_excludes_stale_messages_from_an_earlier_incarnation(monkeypatch, tmp_path, capsys):
+    d = _advisor_shift(monkeypatch, tmp_path)
+    (d / 'Coder.json').write_text(json.dumps({'pid': 10, 'started': 100.0}), encoding='utf-8')
+    launcher.msg(['send', d.name, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'asg-old', '--body', 'first'])
+    (d / 'Coder.json').write_text(json.dumps({'pid': 20, 'started': 200.0}), encoding='utf-8')
+    launcher.msg(['send', d.name, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'asg-new', '--body', 'second'])
+    capsys.readouterr()
+    launcher.inbox([d.name, 'Coder'])
+    view = json.loads(capsys.readouterr().out)
+    assert [m['asg'] for m in view['inbound_unacked']] == ['asg-new']
+
