@@ -1,0 +1,15 @@
+# Work crew on Copilot with premium models (owner, 16 Oct 2026): Foreman, Advisor, Coder and Tester on the
+# strongest model the work Copilot subscription offers (Opus, Sol or Argon); Gemini 3.8 Flash as the
+# Apprentice, the primary coding agent, with the Coder as its senior buddy (NGH-038).
+# MODEL NAMES: the home Copilot subscription offers only grok-4.7 and gemini-3.8-flash, so the premium
+# names below are placeholders until checked against the work catalog (copilot --model NAME -p ok).
+name: copilot-premium
+model: PREMIUM-MODEL-AT-WORK
+layout: 2x4
+contract: result.json
+roles:
+  - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: max, permissions: skip}
+  - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: max, permissions: skip}
+  - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: copilot, model: gemini-3.8-flash, reasoning: high, context: long_context, permissions: skip}
+  - {role: Coder, brief: coder-cli.md, colour: green, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: high, permissions: skip}
+  - {role: Tester, brief: tester-cli.md, colour: blue, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: max, permissions: skip}
