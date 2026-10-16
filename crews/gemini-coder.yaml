@@ -3,7 +3,7 @@
 # (briefs foreman-agy-coder.md / coder-agy.md). A role's tool: is claude (default) or agy; its model:
 # defaults to the crew model.
 name: gemini-coder
-permission_mode: auto        # Claude --permission-mode for Claude panes (agy runs --mode auto)
+permission_mode: auto        # Claude --permission-mode for Claude panes (agy: auto means --dangerously-skip-permissions, see permission_flags)
 model: claude-opus-5-5
 layout: 2x4                  # the container: 2 rows x 4 columns (8 slots), crew in the first slots, empty cmd shells after (spawn fills them)
 contract: result.json        # the file Foreman writes in the shift folder when the shift ends
