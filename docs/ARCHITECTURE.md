@@ -97,11 +97,12 @@ and `--dry-run` is the inspection mode for all three.
 
 ## Standalone Go view and in-shift writes (NGH-021, Increment 2)
 
-The repository also builds a standalone `build\nightshift.exe` containing the four read-only views
-`status`, `claims`, `inbox`, and `log`, the native in-shift writes, and the native lifecycle commands
-`land`, `down`, and `cleaner`. It reads the same shift-folder contract as the Python launcher and
-never delegates to Python or replaces the `nightshift.cmd` shim. The state roots may
-be isolated for inspection with `NIGHTSHIFT_STATE_ROOT` (default `C:\nightshift`),
+The repository also builds a standalone `build\nightshift.exe` containing the complete set of CLI
+commands: read-only views (`status`, `claims`, `inbox`, `log`), native in-shift writes (`claim`,
+`release`, `msg`, `ack`, `build`), native lifecycle commands (`land`, `down`, `cleaner`), and full
+launcher parity (`start`, `spawn`, `warden`, `gaffer`, `loop`, `resume`). It reads the same shift-folder
+contract as the Python launcher and never delegates to Python or replaces the `nightshift.cmd` shim.
+The state roots may be isolated for inspection with `NIGHTSHIFT_STATE_ROOT` (default `C:\nightshift`),
 `NIGHTSHIFT_LEGACY_ROOT` (default `C:\Data\nightshift`), and `NIGHTSHIFT_HOME` (the home used
 for Claude session-registration lookup).
 
@@ -147,8 +148,18 @@ finished shifts and preserves unexpected files.
 The lifecycle helpers are native Go: `handoverReport` renders the result, denial, claim, mailbox, build,
 commit and test-evidence sections; `recordDenials` deduplicates pane lines and persists `denials.json`;
 and `paneTail` reads visible pane lines through `agents-cli`. These lifecycle operations do not launch
-sessions; `down --close` preserves the existing WM_CLOSE window-closing contract, and `start`/`spawn`
-remain Python launcher operations.
+sessions; `down --close` preserves the existing WM_CLOSE window-closing contract.
+
+Increment 4 (NGH-052) completes the native Go migration with full launcher parity: native `start`
+(manifest load, ticket prompt via tasks-cli, worktree/lock, crew.json, the 2x4/1x4 Windows Terminal
+container argv), `spawn`, the hidden `--pane`/`--slot` child entry points and the top-level
+parser/layout trials, `warden`/`gaffer` (agents-cli header delivery), `loop` and `resume`. Standard
+crews, briefs, and personas are embedded directly into the binary with `//go:embed` in root `assets.go`,
+using the lookup order `NIGHTSHIFT_CREWS_DIR`/`NIGHTSHIFT_BRIEFS_DIR`/`NIGHTSHIFT_PERSONAS_DIR` >
+`<exe dir>` > `<exe dir>/..` > embedded, while repository `.nightshift/` layers still take precedence.
+The Go binary's children run the Go executable itself (`launcherExe()`), never Python. New commands
+register through `cmd/nightshift/registry.go` (`extraCommands`, `startHook`, `spawnHook`). Go also
+carries main's on-demand Advisor reservation, consult, floor bus and agy statusline.
 
 ## Container, not loop (owner decision, 16 Oct 2026; NGH-025)
 
@@ -1040,7 +1051,7 @@ with **Foreman-driven landing (`nightshift land`)**:
 | `down` with handover; `resume` re-dispatches acked-but-unfinished work | `down`/handover, loop retries with handover carry-over, `resume` after reboot | matches |
 | Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | Tester (NGH-024) and a dormant Fable Advisor that only Foreman may consult (NGH-027) built into the default crew; out-of-shift floor CLI roles `cleaner`, `warden`, `gaffer` built (NGH-035) | matches / extended |
 | Second coder, heterogeneous CLIs later | Apprentice in slot 5 (NGH-029), Codex crew (NGH-033), Copilot crew (NGH-037/NGH-039) | built |
-| "Portable package", CLI language open | Python launcher plus the standalone Go views, native in-shift claim/release/msg/ack/build writes, and native `land`/`down`/`cleaner` lifecycle commands with lifecycle-report helpers; `start`/`spawn` remain launcher operations | NGH-021 Increment 2 and Increment 3 built |
+| "Portable package", CLI language open | Standalone Go binary (`build\nightshift.exe`) with full parity across all subcommands: read-only views, in-shift writes, lifecycle commands, and complete launcher capabilities (`start`, `spawn`, `warden`, `gaffer`, `loop`, `resume`, embedded assets); never delegates to Python | NGH-021 Increments 2–4 (NGH-052) built |
 | — (not in the design) | loop, result ladder, crew manifest, opt-in Mailkeep notification, denial capture | additions |
 | — (owner, 16 Oct) | container with slot grid (2x4/1x4), `slots/`, `spawn`, Foreman-owned `down --close/--hold` (close default), launcher exits; loop optional | NGH-025, built |
 | — (owner, 16 Oct) | `C:\nightshift\` state root, `floor.json`, and `nightshift cleaner / warden / gaffer` CLI subcommands | NGH-035, built |
@@ -1107,3 +1118,136 @@ This repository self-hosts the layer with `target_branch: main` and the default 
 `C:/miniconda3/envs/python312/python.exe -m pytest test_nightshift_shifts.py -q`. Its shared
 architecture rule lives in `.nightshift/instructions.md`; Foreman-specific pytest and exact-clean-
 commit conventions live in `.nightshift/foreman.md`, so other repositories do not inherit them.
+
+## Go parity checklist (NGH-052)
+
+Every Python subcommand and option from `nightshift_shifts.py` has been ported to the standalone Go binary (`build\nightshift.exe`). The table below records the status and verification evidence for every command and flag.
+
+| Command | Flag | Go status | Evidence |
+|---|---|---|---|
+| `start` | `prompt` (positional) | native, golden-tested | `test_go_launcher.py:test_start_dry_run_matches_oracle` |
+| `start` | `--prompt-file` | native, golden-tested | `test_go_launcher.py:test_start_dry_run_matches_oracle`, `test_go_launcher.py:test_start_missing_prompt_file_reports_the_oracle_error_line` |
+| `start` | `--cwd` | native, golden-tested | `test_go_launcher.py:test_start_dry_run_matches_oracle` |
+| `start` | `--no-worktree` | native, golden-tested | `test_go_launcher.py:test_start_dry_run_matches_oracle` |
+| `start` | `--target-branch` | native, golden-tested | `test_go_launcher.py:test_start_dry_run_matches_oracle` |
+| `start` | `--continue-from` | native, golden-tested | `test_go_launcher.py:test_start_dry_run_matches_oracle` |
+| `start` | `--crew` | native, golden-tested | `test_go_launcher.py:test_start_dry_run_matches_oracle`, `test_go_launcher.py:test_start_dry_run_every_crew_manifest` |
+| `start` | `--dry-run` | native, golden-tested | `test_go_launcher.py:test_start_dry_run_matches_oracle` |
+| `start` | `(live start: install_profile, wt launch, worktree add)` | native, live-only | `launcher_start.go`: opens Windows Terminal via wt.exe and initializes worktree |
+| `start` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `status` | `--all` | native, golden-tested | `test_go_readonly.py:test_go_matches_python_golden`, `test_go_readonly.py:test_go_status_rejects_python_image_and_recognizes_live_cmd_slots` |
+| `status` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `down` | `shift` (positional) | native, golden-tested | `test_go_lifecycle.py:test_go_down_handover_receipt_and_bus` |
+| `down` | `--hold` | native, golden-tested | `test_go_lifecycle.py:test_go_down_captures_live_tail_denials_and_retains_handover_after_hold` |
+| `down` | `--close` | native, golden-tested | `test_go_lifecycle.py:test_go_down_handover_receipt_and_bus` |
+| `down` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `spawn` | `shift` (positional) | native, golden-tested | `test_go_launcher.py:test_spawn_dry_run_matches_oracle` |
+| `spawn` | `--role` | native, golden-tested | `test_go_launcher.py:test_spawn_dry_run_matches_oracle` |
+| `spawn` | `--cli` | native, golden-tested | `test_go_launcher.py:test_spawn_dry_run_matches_oracle` |
+| `spawn` | `--crew` | native, golden-tested | `test_go_launcher.py:test_spawn_dry_run_matches_oracle` |
+| `spawn` | `--slot` | native, golden-tested | `test_go_launcher.py:test_spawn_dry_run_matches_oracle` |
+| `spawn` | `--dry-run` | native, golden-tested | `test_go_launcher.py:test_spawn_dry_run_matches_oracle`, `test_go_launcher.py:test_spawn_dry_run_oracle_cases_reach_the_intended_branch` |
+| `spawn` | `(live spawn: agents-cli inject)` | native, live-only | `launcher_spawn.go`: injects launcher command line into live pane shell |
+| `spawn` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `loop` | `tickets` (positional) | native, golden-tested | `test_go_launcher.py:test_loop_usage_errors_match_oracle` |
+| `loop` | `--project` | native, golden-tested | `test_go_launcher.py:test_loop_usage_errors_match_oracle` |
+| `loop` | `--max` | native, golden-tested | `test_go_launcher.py:test_loop_usage_errors_match_oracle` |
+| `loop` | `--cwd` | not golden-tested | parsed in `launcher_loop.go`; batch execution is live-only |
+| `loop` | `--stall-minutes` | native, golden-tested | `test_go_launcher.py:test_loop_usage_errors_match_oracle` |
+| `loop` | `--retries` | not golden-tested | parsed in `launcher_loop.go`; retry logic is live-only |
+| `loop` | `--notify` | not golden-tested | parsed in `launcher_loop.go`; Mailkeep notification is live-only |
+| `loop` | `--no-notify` | not golden-tested | parsed in `launcher_loop.go`; Mailkeep notification is live-only |
+| `loop` | `(event stream and held-lock path)` | native, live-only | `launcher_loop.go`: multi-shift loop orchestration with result polling |
+| `loop` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `resume` | `--project` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `resume` | `--dry-run` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `resume` | `--stall-minutes` | not golden-tested | parsed in `launcher_loop.go`; stall timeout is live-only |
+| `resume` | `--notify` | not golden-tested | parsed in `launcher_loop.go`; Mailkeep notification is live-only |
+| `resume` | `--no-notify` | not golden-tested | parsed in `launcher_loop.go`; Mailkeep notification is live-only |
+| `resume` | `(lock clearing plus loop)` | native, live-only | `launcher_loop.go`: stale lock removal and continuation invocation |
+| `resume` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `land` | `shift` (positional) | native, golden-tested | `test_go_lifecycle.py:test_go_land_requires_isolated_worktree` |
+| `land` | `--target-branch` | native, golden-tested | `test_go_lifecycle.py:test_go_land_target_branch_precedence` |
+| `land` | `--keep-conflicts` | native, golden-tested | `test_go_lifecycle.py:test_go_land_conflict_abort_or_keep` |
+| `land` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `claim` | `shift`, `role`, `paths` (positional) | native, golden-tested | `test_go_write_commands.py:test_go_claim_release_persisted_byte_parity`, `test_go_write_commands.py:test_go_claim_cross_shift_live_conflict_and_worktree_isolation` |
+| `claim` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `release` | `shift`, `role`, `paths` (positional) | native, golden-tested | `test_go_write_commands.py:test_go_claim_release_persisted_byte_parity` |
+| `release` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `claims` | `shift` (positional) | native, golden-tested | `test_go_readonly.py:test_go_matches_python_golden`, `test_go_readonly.py:test_go_claims_matches_python_duplicate_keys_and_float_serialization` |
+| `claims` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `msg send` | `shift`, `FROM`, `TO` (positional) | native, golden-tested | `test_go_write_commands.py:test_go_mailbox_guards_and_transitions` |
+| `msg send` | `--kind` | native, golden-tested | `test_go_write_commands.py:test_go_mailbox_guards_and_transitions` |
+| `msg send` | `--body` | native, golden-tested | `test_go_write_commands.py:test_go_mailbox_guards_and_transitions` |
+| `msg send` | `--asg` | native, golden-tested | `test_go_write_commands.py:test_go_uplift_rejects_claims_for_every_owner_alias` |
+| `msg send` | `--reason` | native, golden-tested | `test_go_write_commands.py:test_go_uplift_rejects_claims_for_every_owner_alias` |
+| `msg send` | `--coding-asg` | not golden-tested | parsed in `write_msg.go`; verified by schema but not in golden assertion |
+| `msg send` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `msg sent` | `shift`, `id` (positional) | native, golden-tested | `test_go_write_commands.py:test_go_mailbox_guards_and_transitions` |
+| `msg sent` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `inbox` | `shift`, `role` (positional) | native, golden-tested | `test_go_readonly.py:test_go_matches_python_golden` |
+| `inbox` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `ack` | `shift`, `role`, `id` (positional) | native, golden-tested | `test_go_write_commands.py:test_go_mailbox_guards_and_transitions` |
+| `ack` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `build` | `shift`, `n` (positional) | native, golden-tested | `test_go_write_commands.py:test_go_build_records_logs_config_and_locks` |
+| `build` | `--cwd` | native, golden-tested | `test_go_write_commands.py:test_go_build_records_logs_config_and_locks` |
+| `build` | `--cmd` | native, golden-tested | `test_go_write_commands.py:test_go_build_records_logs_config_and_locks` |
+| `build` | `--timeout` | native, golden-tested | `test_go_write_commands.py:test_go_build_explicit_timeout_overrides_zero_second_config_under_contention` |
+| `build` | `--cancel` | not golden-tested | parser checked in `test_go_write_commands.py:test_go_write_parser_exact_bytes`; cancellation runtime not golden-tested |
+| `build` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `log` | `shift` (positional) | native, golden-tested | `test_go_readonly.py:test_go_matches_python_golden` |
+| `log` | `--follow`, `-f` | native, golden-tested | `test_go_readonly.py:test_go_follow_reads_appended_complete_lines_and_stops_at_down` |
+| `log` | `--since` | native, golden-tested | `test_go_readonly.py:test_go_log_since_matches_python_integer_type_filter` |
+| `log` | `--json` | native, golden-tested | `test_go_readonly.py:test_go_matches_python_golden` |
+| `log` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `cleaner` | `--dry-run` | native, golden-tested | `test_go_lifecycle.py:test_go_cleaner_floor_locks_and_dry_run`, `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `cleaner` | `(live cleaner run)` | native, golden-tested | `test_go_lifecycle.py:test_go_cleaner_reaps_locks_claims_legacy_and_repeat_is_noop` |
+| `cleaner` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `warden` | `shift` (positional) | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `warden` | `--dry-run` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `warden` | `(non-dry-run delivery/nudge/recovery)` | native, live-only | `floor_patrol.go`: delivery of stored assignments, nudge via agents-cli, and crash recovery |
+| `warden` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `gaffer` | `--max-shifts` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `gaffer` | `--ticket` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `gaffer` | `--crew` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `gaffer` | `--repo` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `gaffer` | `--tick` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
+| `gaffer` | `--dry-run` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle`, `test_go_launcher.py:test_gaffer_floor_variants_match_oracle` |
+| `gaffer` | `(non-dry-run dispatch)` | native, live-only | `floor_patrol.go`: launches shift under concurrency cap and marks floor state |
+| `gaffer` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `consult` | `shift`, `question` (positional) | not golden-tested yet | parsed in `launcher_consult.go`; consult's real spawn is live-only |
+| `consult` | `--asg` | not golden-tested yet | parsed in `launcher_consult.go`; consult's real spawn is live-only |
+| `consult` | `(real spawn and prompt)` | native, live-only | `launcher_consult.go`: consult's real spawn is live-only |
+| `consult` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `floor` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `floor say` | `FROM`, `TEXT` (positional) | not golden-tested yet | parsed in `floor_bus.go`; appends event to `floor/bus.jsonl` |
+| `floor say` | `--to` | not golden-tested yet | parsed in `floor_bus.go`; defaults to `all` |
+| `floor say` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `floor hear` | `ME` (positional) | not golden-tested yet | parsed in `floor_bus.go`; reads events addressed to reader or `all` |
+| `floor hear` | `--since` | not golden-tested yet | parsed in `floor_bus.go`; non-regressing replay lower bound |
+| `floor hear` | `--follow` | not golden-tested yet | parsed in `floor_bus.go`; live polling loop |
+| `floor hear` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `statusline` | `(env-driven)` | not golden-tested yet | parsed in `floor_bus.go`; prints ANSI statusline from `NIGHTSHIFT_ROLE` / `IDENTITY` / `ROLE_COLOUR` |
+| `statusline` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+| `(top-level)` | `--pane` (Claude branch) | native, live-only | `launcher_pane.go`: trust dialog, /color, opening message |
+| `(top-level)` | `--pane` (Codex /rename) | native, live-only | `launcher_pane.go`: codex /rename session naming |
+| `(top-level)` | `--pane` (OSC 11 background) | native, live-only | `launcher_pane.go`: OSC 11 pane background color escape sequence |
+| `(top-level)` | `--pane` (stub argv) | native, golden-tested | `test_go_launcher.py:test_hidden_pane_start_runs_same_stub_argv_and_records` |
+| `(top-level)` | `--state-dir` | native, golden-tested | `test_go_launcher.py:test_hidden_pane_start_runs_same_stub_argv_and_records` |
+| `(top-level)` | `--start` | native, golden-tested | `test_go_launcher.py:test_hidden_pane_start_runs_same_stub_argv_and_records` |
+| `(top-level)` | `--cwd` | native, golden-tested | `test_go_launcher.py:test_hidden_pane_start_runs_same_stub_argv_and_records` |
+| `(top-level)` | `--crew` | native, golden-tested | `test_go_launcher.py:test_hidden_pane_start_runs_same_stub_argv_and_records` |
+| `(top-level)` | `--slot` | native, golden-tested | `test_go_launcher.py:test_hidden_slot_entry_point_records_parent_shell` |
+| `(top-level)` | `--slot` (cmd handover) | native, live-only | `launcher_pane.go`: cmd handover shell prompt |
+| `(top-level)` | `--live` | native, live-only | `launcher_pane.go`: diagnostic ping/pong trial with live agents |
+| `(top-level)` | `--brief-file` | native, live-only | `launcher_pane.go`: live trial brief file override |
+| `(top-level)` | `(no args: layout trials)` | native, live-only | `main.go`: top-level Windows Terminal layout trials (`no args/--live`) |
+| `(top-level)` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
+
+### Accepted differences
+- The top-level program name reported in usage output is `nightshift.exe` instead of `nightshift_shifts.py`.
+- A missing `--prompt-file` prints only the last traceback line (`[Errno 2] No such file or directory: ...`), exiting with code 1 in both implementations.
+- YAML syntax errors display Go `yaml.v2` error text rather than PyYAML's formatting.
+- Go's `-h` / `--help` text is the standard 80-column argparse rendering and ignores `COLUMNS` (Python argparse rewraps to `COLUMNS - 2`).
+
+Installing `nightshift.exe` to `C:\Tools` and pointing `C:\scripts\nightshift.cmd` at it waits for owner sign-off and the two live starts (`crews/gemini.yaml`, `crews/claude-copilot.yaml`).

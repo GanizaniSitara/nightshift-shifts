@@ -634,8 +634,13 @@ def owned_fixture_process(base):
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline and proc.poll() is None:
                 p = d / 'builds' / '1.json'
-                if p.exists() and json.loads(p.read_bytes()).get('status') == 'running':
-                    break
+                try:
+                    # reserve_build creates <n>.json empty, then os.replace swaps the record in; a poll can
+                    # see the empty reservation or hit the replace's sharing window under parallel load.
+                    if p.exists() and json.loads(p.read_bytes()).get('status') == 'running':
+                        break
+                except (ValueError, PermissionError):
+                    pass
                 time.sleep(0.05)
             else:
                 pytest.fail('owned fixture process never reached running state')
@@ -777,8 +782,11 @@ def lifecycle_helper(tmp_path_factory):
     for path in (REPO / 'cmd' / 'nightshift').glob('*.go'):
         if not path.name.endswith('_test.go'):
             shutil.copyfile(path, source / path.name)
-    for name in ('go.mod', 'go.sum'):
+    # The root package embeds crews/, briefs/ and personas/ (NGH-052); without it the build fails.
+    for name in ('go.mod', 'go.sum', 'assets.go'):
         shutil.copyfile(REPO / name, root / name)
+    for name in ('crews', 'briefs', 'personas'):
+        shutil.copytree(REPO / name, root / name)
     main = source / 'main.go'
     original = main.read_text(encoding='utf-8')
     assert original.count('func main() {') == 1

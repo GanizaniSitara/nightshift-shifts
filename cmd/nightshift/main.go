@@ -749,6 +749,9 @@ func statusRecord(dir string) (object, error) {
 	resultValue, resultOK := readJSONFile(filepath.Join(dir, "result.json"))
 	result := "none"
 	stage := any(nil)
+	if !resultOK && fileExists(filepath.Join(dir, "result.json")) {
+		result = "invalid" // present but not JSON, as the oracle reports it
+	}
 	if resultOK {
 		if o, ok := resultValue.(object); ok {
 			result = objectString(o, "status")
@@ -1824,8 +1827,8 @@ func usageInbox(msg string) int {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		return
+	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-") {
+		os.Exit(topLevel(os.Args[1:]))
 	}
 	var code int
 	switch os.Args[1] {
@@ -1854,8 +1857,11 @@ func main() {
 	case "log":
 		code = logCommand(os.Args[2:])
 	default:
-		errLine("unknown command: " + os.Args[1])
-		code = 1
+		if fn, ok := extraCommands[os.Args[1]]; ok {
+			code = fn(os.Args[2:])
+			break
+		}
+		code = topLevel(os.Args[1:])
 	}
 	os.Exit(code)
 }
