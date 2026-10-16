@@ -324,6 +324,108 @@ def test_pane_start_uses_the_manifest_member(monkeypatch, tmp_path):
     assert json.loads((state / 'Foreman.json').read_text(encoding='utf-8'))['tool'] == 'claude'
 
 
+def _capture_role_launch(monkeypatch, tmp_path, role, cwd, *, member_role=None, tool=None):
+    """Exercise pane argv assembly without starting a CLI, terminal or trust dialog."""
+    state = tmp_path / 'state outside repo' / 'Nightshift-shift-deny0001'
+    state.mkdir(parents=True)
+    (state / 'prompt.txt').write_text('THE TASK', encoding='utf-8')
+    if member_role or tool:
+        members = launcher.crew_members(launcher.load_crew(), state.name)
+        member = next(m for m in members if m['role'] == (member_role or role))
+        member['label'] = role
+        if tool:
+            member['tool'] = tool
+        (state / 'crew.json').write_text(json.dumps({'crew': 'default', 'members': [member]}), encoding='utf-8')
+    seen = {}
+
+    class Child:
+        pid = 42
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(launcher.subprocess, 'Popen',
+                        lambda cmd, **kw: seen.update(cmd=cmd, cwd=kw['cwd']) or Child())
+    monkeypatch.setattr(launcher.subprocess, 'run',
+                        lambda *a, **kw: pytest.fail('unexpected subprocess.run'))
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: None)
+    monkeypatch.setattr(launcher, 'register_name', lambda *a: None)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane(role, str(state), start=True, cwd=cwd)
+    return seen, state
+
+
+def _launch_deny_rules(command):
+    if '--settings' not in command:
+        return []
+    settings = command[command.index('--settings') + 1]
+    return json.loads(settings)['permissions'].get('deny', [])
+
+
+@pytest.mark.parametrize('repo_name,escaped_name', [('other-worktree', 'other-worktree'),
+                                                 ('repo with spaces', 'repo with spaces'),
+                                                 ('repo [live]', r'repo \[live\]')])
+def test_foreman_edit_denies_use_actual_cwd_and_leave_external_state_writable(monkeypatch, tmp_path, repo_name, escaped_name):
+    repo = tmp_path / repo_name
+    repo.mkdir()
+    # Resolve a noncanonical spelling, not the launcher repo or its parent directory.
+    cwd = str(repo / '..' / repo_name)
+    seen, state = _capture_role_launch(monkeypatch, tmp_path, 'Foreman', cwd)
+    command = seen['cmd']
+    rules = _launch_deny_rules(command)
+    absolute = tmp_path.resolve().as_posix() + '/' + escaped_name
+    if repo.drive:
+        absolute = '/' + repo.drive[0].lower() + absolute[len(repo.drive):]
+    pattern = '/' + absolute + '/**'
+    # Claude checks all built-in editors against Edit(path); separate Write/NotebookEdit/
+    # MultiEdit path rules would be inert (Claude permissions reference).
+    assert rules == [f'Edit({pattern})']
+    assert json.loads(command[command.index('--settings') + 1]) == {'permissions': {'deny': rules}}
+    assert seen['cwd'] == cwd
+    assert command[command.index('--permission-mode') + 1] == 'auto'
+    assert command[-1] == launcher.START_MESSAGES['Foreman']
+    assert command[command.index('--append-system-prompt') + 1].endswith('THE TASK')
+    # The only denied tree is repo; result.json/handover.md remain outside it.
+    assert not state.resolve().is_relative_to(repo.resolve())
+    assert all(str(state) not in rule for rule in rules)
+    assert not any(arg in command for arg in ('--allowedTools', '--dangerously-skip-permissions'))
+
+
+@pytest.mark.parametrize('role', ['Coder', 'Tester'])
+def test_coder_and_tester_launches_do_not_inherit_foreman_edit_denies(monkeypatch, tmp_path, role):
+    seen, _ = _capture_role_launch(monkeypatch, tmp_path, role, str(tmp_path))
+    assert not _launch_deny_rules(seen['cmd'])
+    assert '--disallowedTools' not in seen['cmd']
+    assert seen['cmd'][seen['cmd'].index('--permission-mode') + 1] == 'auto'
+
+
+@pytest.mark.parametrize('label,member_role,denied', [('Captain', 'Foreman', True), ('Foreman', 'Coder', False)])
+def test_foreman_edit_denial_follows_member_role_not_pane_label(monkeypatch, tmp_path, label, member_role, denied):
+    seen, _ = _capture_role_launch(monkeypatch, tmp_path, label, str(tmp_path), member_role=member_role)
+    assert bool(_launch_deny_rules(seen['cmd'])) is denied
+
+
+@pytest.mark.parametrize('tool', ['codex', 'copilot', 'agy'])
+def test_non_claude_foreman_has_no_claude_settings_argument(monkeypatch, tmp_path, tool):
+    seen, _ = _capture_role_launch(monkeypatch, tmp_path, 'Foreman', str(tmp_path), tool=tool)
+    assert '--settings' not in seen['cmd']
+
+
+@pytest.mark.parametrize('brief_file', ['foreman.md', 'foreman-cli.md', 'foreman-agy-coder.md'])
+def test_foreman_brief_forbids_repo_edits_and_suite_substitution(brief_file):
+    brief = launcher.role_brief('Foreman', 'S-foreman', 'S-coder, S-tester', 'C:/state/S', brief_file).lower()
+    assert 'never edit repository files yourself' in brief
+    assert 'never run the test suite yourself' in brief
+    for correction in ('nit', 'typo'):
+        assert correction in brief
+    assert re.search(r'missing[- ]tests?', brief)
+    assert 'coder' in brief and 'assignment' in brief and 'verification' in brief and 'tester' in brief
+    assert 'foreman commits the passed change' in brief
+    assert 'commit only what tester passes' in brief
+    assert 'coder owns the launcher and implementation commits' not in brief
+
+
 # ── per-role tool: agy (Gemini) Coder (NGH-012) ───────────────────────────────
 
 MIXED = """\

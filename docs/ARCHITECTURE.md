@@ -74,6 +74,37 @@ As built (NGH-025):
   lock is released and the JSON (with `held`) is printed. Foreman's brief makes `down` its last act
   after writing `result.json`.
 
+## Role boundaries and permission plan (NGH-031)
+
+Foreman is orchestration and review only for repository work. It reads diffs, reviews reports, assigns
+repository changes to the crew's implementation roles, and assigns every verification pass to Tester.
+Coder owns the launcher and correction changes. A nit, typo, or missing-test fix is a new Coder assignment; after Coder
+returns it, Foreman dispatches the revision to Tester and commits only what Tester passes. Foreman never
+edits repository files or runs the suite as a substitute for Tester. It may write the shift records under `{state_dir}`—for
+example `result.json` and `handover.md`—because those are runtime state, not repository files.
+
+The built Claude repo-scoped policy for the Foreman member is one inline `--settings` JSON deny rule:
+`{"permissions":{"deny":["Edit(//c/actual/cwd/**)"]}}`. Claude's canonical `Edit(path)` permission covers
+the built-in `Edit`, `Write`, `NotebookEdit`, and `MultiEdit` tools, so the policy must not add
+redundant inert deny entries for those tool names. The path is formed from the actual repository cwd;
+on Windows, `C:/...` is represented as `/c/...`, with the rule rooted as `//c/...`. This deny applies
+in every Claude permission mode, including `auto`, and is intended only for the Claude Foreman member
+in `start`/`spawn`. It is a tool-level policy, not OS enforcement: arbitrary subprocess writes are not
+covered. See the [Claude permissions](https://code.claude.com/docs/en/permissions),
+[permission modes](https://code.claude.com/docs/en/permission-modes), and
+[CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+Read-only capability checks on 16 Oct 2026 (`codex --help`, `copilot --help`, `agy --help`) show the
+following. Codex exposes coarse `--sandbox read-only|workspace-write|danger-full-access` and approval
+controls, but no per-tool or path-scoped deny option; read-only would also complicate commits and
+shift-state writes, so it is not a direct equivalent. Copilot exposes coarse `--deny-tool` and
+`--excluded-tools` controls, but its help does not show a Claude-style path-scoped deny; Nightshift's
+current launcher still uses `--allow-all`. agy exposes coarse `--sandbox` and `--mode` controls but
+no per-tool deny option; Nightshift's current launcher uses `--mode auto`. These are facts about the
+capabilities surfaced and wired here, not a claim that Codex, Copilot, or agy can never provide a
+different equivalent. Briefs and prompts remain procedural guidance, not a substitute for a CLI or OS
+permission boundary.
+
 ## The four identities (owner, 16 Oct 2026)
 
 The top row of the 2x4 container holds four fixed identities, one per column: **Foreman** (runs the
@@ -172,19 +203,20 @@ As built (NGH-027):
 - Handoff is Coder -> Foreman -> Tester. Coder reports an assignment done; Foreman reviews it and
   assigns verification to Tester with its own `--asg` id, saying what changed and what was asked.
   Coder and Tester never talk to each other.
-- Tester runs the suite through `nightshift build` so the evidence is revision-bound, reviews the
-  diff against the assignment and writes missing tests. It edits test files only (claims disjoint
-  from Coder's); a needed product fix is reported, not made.
+- Tester runs the suite through `nightshift build` so the evidence is revision-bound and reviews the
+  diff against the assignment. It edits test files only (claims disjoint from Coder's) when verification
+  requires; a missing-test finding is assigned to Coder, and product, nit, or typo fixes are not made by
+  Tester. Foreman verifies the resulting revision flow and commits only after Tester passes it.
 - Its report starts `TESTED-PASS` or `TESTED-FAIL` and cites `builds/<n>.json` (head, dirty, exit),
   test counts, findings and the test files it changed. A TESTED-PASS on a clean tree is the
   tested-rung evidence Foreman puts in `result.json`; with a Tester present Foreman does not run the
-  suite itself. A TESTED-FAIL goes back to Coder as a new assignment. Without a Tester, Foreman
-  produces the tested evidence itself as before.
+  suite itself. A TESTED-FAIL goes back to Coder as a new assignment. Without a Tester, Foreman cannot
+  claim the tested rung and reports the highest supported rung as short or blocked.
 
 ## Mixed crews: per-role tool and model (NGH-012)
 
-- A manifest role may say `tool: claude` (default) or `tool: agy`; anything else is refused naming
-  the allowed tools. `model:` on a role overrides the crew `model:` for that role only.
+- A manifest role may say `tool: claude` (default), `agy`, `codex`, or `copilot`; anything else is
+  refused naming the allowed tools. `model:` on a role overrides the crew `model:` for that role only.
 - An agy pane runs `%LOCALAPPDATA%\Microsoft\WinGet\Links\agy.exe --model <model> --mode auto -i
   "<brief>\n\n<opening message>"` (`agy_command`). agy has no `--name` or system-prompt flag, so the brief
   is the prompt text. The wrapper scrubs the env the same way (`crew_env`), then names the pane with
@@ -246,7 +278,7 @@ decision not yet taken (NGH-014).
 ## Messaging: two transports, one record
 
 - Claude ↔ Claude: native `SendMessage`, instant, Claude-only, no persistence.
-- Anything else (Gemini via `agy`, Copilot): `agents-cli send/wait/tail` into the pane, with a
+- Anything else (Codex, Gemini via `agy`, Copilot): `agents-cli send/wait/tail` into the pane, with a
   `CODER-DONE` / `CODER-BLOCKED` convention (NGH-012, NGH-022).
 - The **mailbox** (NGH-019) sits above both: every message is stored first, carries a
   `msg:<id>` header, is acked by id by the right recipient incarnation, and `inbox` re-delivers

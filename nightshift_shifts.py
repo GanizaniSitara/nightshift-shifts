@@ -429,6 +429,17 @@ def slot_state(state_dir, slot):
     return 'dead' if shell else 'gone'
 
 
+def foreman_claude_settings(cwd):
+    """Deny built-in repository edits, leaving external shift state and shell commands available."""
+    repo = Path(cwd).resolve().as_posix().rstrip('/')
+    # Claude normalizes C:/repo to /c/repo; // anchors a permission rule at the filesystem root.
+    repo = re.sub(r'^([A-Za-z]):', lambda match: '/' + match[1].lower(), repo)
+    repo = re.sub(r'([*?\[\]])', r'\\\1', repo)   # literal directory names, not gitignore globs
+    # Edit(path) covers Write, NotebookEdit and legacy MultiEdit too. Their own path rules are ignored.
+    # This is not a sandbox: arbitrary subprocesses can still write files (git commit must remain usable).
+    return {'permissions': {'deny': [f'Edit(/{repo}/**)']}}
+
+
 def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/nightshift', crew=None, slot=None):
     if live or start:
         model, permission_mode, tool = MODEL, START_PERMISSION_MODE, 'claude'
@@ -492,6 +503,8 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             exe = Path('C:/nvm4w/nodejs/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
             command = [str(exe), '--name', identity, '--model', model,
                        '--permission-mode', permission_mode, '--append-system-prompt', brief]
+            if start and member['role'].lower() == 'foreman':
+                command += ['--settings', json.dumps(foreman_claude_settings(cwd))]
             if reasoning:
                 command += ['--effort', reasoning]
             command.append(first_message)
