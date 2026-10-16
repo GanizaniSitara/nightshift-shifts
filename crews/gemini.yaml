@@ -1,0 +1,13 @@
+# All-Gemini crew in Antigravity's agy (owner, 16 Oct): Gemini 4 Argon on high for Foreman and Advisor,
+# Gemini 3.8 Flash on high for the working roles. agy's model name carries the effort (argon-high, flash-high);
+# list them with `agy models`. 2x4 container: slots 1..5 crew, 6..8 empty for `nightshift spawn`.
+name: gemini
+model: gemini-4-argon-high
+layout: 2x4
+contract: result.json
+roles:
+  - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: agy, model: gemini-4-argon-high, permissions: skip}
+  - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: agy, model: gemini-4-argon-high, permissions: skip}
+  - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: agy, model: gemini-3.8-flash-high, permissions: skip}
+  - {role: Coder, brief: coder-cli.md, colour: green, tool: agy, model: gemini-3.8-flash-high, permissions: skip}
+  - {role: Tester, brief: tester-cli.md, colour: blue, tool: agy, model: gemini-3.8-flash-high, permissions: skip}
