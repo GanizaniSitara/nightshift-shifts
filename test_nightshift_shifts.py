@@ -3680,14 +3680,14 @@ def test_codex_and_codex_copilot_manifests_parse_five_roles_in_2x4():
     assert [(r['role'], r['tool'], r['model'], r.get('reasoning')) for r in codex['roles']] == [
         ('Foreman', 'codex', 'gpt-6.1-sol', 'high'),
         ('Advisor', 'codex', 'gpt-6-astra', 'high'),
-        ('Coder', 'codex', 'gpt-6.1-sol', 'high'),
-        ('Tester', 'codex', 'gpt-6.1-sol', 'high'),
-        ('Apprentice', 'codex', 'gpt-5.6-luna', 'high')]   # every non-Gemini model on high (5bb62af)
+        ('Coder', 'codex', 'gpt-6-astra', 'high'),
+        ('Tester', 'codex', 'gpt-6-astra', 'high'),
+        ('Apprentice', 'codex', 'gpt-5.6-luna', 'high')]   # only Foreman on Sol (owner, 16 Oct)
     copilot = launcher.load_crew('codex-copilot')
-    for crew in (codex, copilot):
+    for crew, coder_model in ((codex, 'gpt-6-astra'), (copilot, 'gpt-6.1-sol')):
         advisor = next(r for r in crew['roles'] if r['role'] == 'Advisor')
         coder = next(r for r in crew['roles'] if r['role'] == 'Coder')
-        assert (advisor['model'], advisor['reasoning'], coder['model']) == ('gpt-6-astra', 'high', 'gpt-6.1-sol')
+        assert (advisor['model'], advisor['reasoning'], coder['model']) == ('gpt-6-astra', 'high', coder_model)
     assert copilot['roles'][-1]['tool'] == 'copilot' and copilot['roles'][-1]['model'] == 'gemini-3.8-flash'
 
 
