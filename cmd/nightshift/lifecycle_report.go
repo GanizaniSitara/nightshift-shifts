@@ -314,6 +314,8 @@ func handoverReport(stateDir string, record object) (string, error) {
 		}
 	}
 
+	lines = appendTokenUsage(lines, stateDir)
+
 	lines = append(lines, "", "## Commits since shift start", "")
 	launchPath := filepath.Join(stateDir, "launch.json")
 	launchInfo, launchErr := os.Stat(launchPath)

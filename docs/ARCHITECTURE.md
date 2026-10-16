@@ -150,6 +150,16 @@ commit and test-evidence sections; `recordDenials` deduplicates pane lines and p
 and `paneTail` reads visible pane lines through `agents-cli`. These lifecycle operations do not launch
 sessions; `down --close` preserves the existing WM_CLOSE window-closing contract.
 
+NGH-048 adds best-effort, Go-only session telemetry. A live pane discovers its own Claude or Codex
+session/transcript and records `session_id` and `transcript` on its current `<Role>.json` only when a
+real file exists; `down` takes the final transcript sample before it kills the panes and stores a
+per-role token `usage` summary. The live watcher is fenced by PID and `started` incarnation, serializes
+updates with teardown, and merges only absent telemetry fields, so it cannot overwrite a replacement
+role record, its preserved history, or the final down harvest. The handover adds `## Token Usage` only
+when at least one usable summary exists; absent telemetry leaves Python-oracle-compatible records and
+handover bytes unchanged. The serialization uses a path-keyed Windows named mutex, so a crashed pane
+cannot strand a stale on-disk telemetry lock and block its replacement.
+
 Increment 4 (NGH-052) completes the native Go migration with full launcher parity: native `start`
 (manifest load, ticket prompt via tasks-cli, worktree/lock, crew.json, the 2x4/1x4 Windows Terminal
 container argv), `spawn`, the hidden `--pane`/`--slot` child entry points and the top-level
@@ -201,7 +211,8 @@ As built (NGH-025):
 - **Incarnation history.** When a pane writes `<role>.json` over an earlier one, the earlier record
   (minus its own history) is appended to `history`; `started` stays the current incarnation, so
   mailbox fencing is unchanged. `inbox` filters `inbound_unacked` to `recipient_incarnation == current`
-  so a respawned member never tries to ack a dead incarnation's messages.
+  so a respawned member never tries to ack a dead incarnation's messages. Any discovered
+  `session_id`, `transcript`, and token `usage` remain in that preserved earlier record.
 - **Launcher exits.** `launch` waits for every `<Role>.json` and every slot record, prints, and
   returns. Nothing polls the shift after that.
 - **spawn.** `nightshift spawn SHIFT --role ROLE [--cli claude|gemini|codex|copilot] [--crew NAME] [--slot N]` is the only way a

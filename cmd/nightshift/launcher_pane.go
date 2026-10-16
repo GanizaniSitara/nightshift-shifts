@@ -382,11 +382,9 @@ func (c *paneChild) exited() bool {
 func consultFirstMessage(stateDir, role, identity, peerName, model, cwd, tool string, consult, saved object) (object, string, error) {
 	pre := object{{"wrapper_pid", os.Getpid()}, {"role", role}, {"started", epochNow()}, {"name", identity}, {"peer", peerName},
 		{"model", model}, {"cwd", cwd}, {"tool", tool}}
-	if previous, ok := readObject(filepath.Join(stateDir, role+".json")); ok && len(previous) > 0 {
-		pre = append(pre, pair{"history", earlierIncarnations(previous)})
-	}
-	if err := os.WriteFile(filepath.Join(stateDir, role+".json"), []byte(renderJSON(pre, false, true)), 0666); err != nil {
-		return nil, "", err
+	var writeErr error
+	if pre, writeErr = writeRoleRecord(stateDir, role, pre, true); writeErr != nil {
+		return nil, "", writeErr
 	}
 	question := valueText(rowValue(consult, "question"))
 	var row object
@@ -447,11 +445,15 @@ func runPaneChild(command []string, cwd string, env []string, role, identity, pe
 	if start {
 		record = setValue(record, "tool", tool)
 	}
-	if previous, ok := readObject(filepath.Join(stateDir, role+".json")); ok && len(previous) > 0 && preRecord == nil {
-		record = setValue(record, "history", earlierIncarnations(previous))
+	var recordErr error
+	if record, recordErr = writeRoleRecord(stateDir, role, record, preRecord == nil); recordErr != nil {
+		return 0, recordErr
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, role+".json"), []byte(renderJSON(record, false, true)), 0666); err != nil {
-		return 0, err
+	// Discovery is best-effort and fenced to this exact child incarnation. It
+	// never replaces the launch record or an incarnation written by a respawn.
+	if start {
+		recordStarted, _ := objectNumber(record, "started")
+		go watchRoleTelemetry(child, stateDir, role, uint32(child.pid), numberFloat(recordStarted))
 	}
 	if slot != 0 {
 		old, _ := readObject(filepath.Join(stateDir, "slots", strconv.Itoa(slot)+".json"))

@@ -527,6 +527,9 @@ func stopShift(dir string, closeWindow bool, floor *object, printOutput bool) er
 	if _, err := recordDenials(dir, tails); err != nil {
 		return err
 	}
+	// Claude removes its PID session registry on exit, so take the final
+	// transcript/usage sample while every recorded pane is still alive.
+	harvestShiftTelemetry(dir, record)
 	handoverPath := filepath.Join(dir, "handover.md")
 	if objectBool(record, "alive") || !fileExists(handoverPath) {
 		report, err := handoverReport(dir, record)
