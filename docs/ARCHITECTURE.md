@@ -626,8 +626,10 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   top-level key, so the budget has one source of truth. The share is carried like `reasoning` through
   `crew_members`, `crew.json` (which also records the budget as top-level `max_credits`), `spawn`
   (respawn and `--crew` included, same-tool only) and `pane()`, and reaches Copilot as
-  `--max-ai-credits <share>` only, a soft cap per pane. No `--usage-output-file`: `--no-auto-update` runs the
-  bundled Copilot 1.0.74, which rejects that option and exits 1 at launch.
+  `--max-ai-credits <share>` only, a soft cap per pane. `spawn` applies the shift budget to every copilot
+  spawn (the launcher's per-pane share, the replaced pane's share returned to the pool, refused with 'no budget share left'
+  when the rest is below the share or 30), and `spawn --dry-run` prints the member and pane argv. No
+  `--usage-output-file`: `--no-auto-update` runs the bundled Copilot 1.0.74, which rejects that option and exits 1 at launch.
   `start --dry-run` shows the budget first in the plan and each Copilot role's share.
   Before writing `result.json`, the Claude Foreman (`foreman.md`) reads each Copilot pane's credits from
   `<state_dir>/<label>-usage.json` when present, else from `/usage` sent with agents-cli and read from its

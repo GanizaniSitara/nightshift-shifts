@@ -5783,6 +5783,97 @@ def test_spawn_helper_error_preserves_diagnostics_and_rolls_back_all_state(
     assert _floor_snapshot(tmp_path) == before
 
 
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_dry_run_copilot_budget_share_command_and_leaves_crew_unchanged(tmp_path, injected, capsys):
+    # 1) budget 60 with Copilot Apprentice and Tester at 30 each, Tester gone:
+    # spawn --dry-run --role Tester (copilot) command contains --max-ai-credits 30, and crew.json is unchanged
+    d = _container(tmp_path, members=('Foreman', 'Apprentice'), free=(3,))
+    foreman = _member(CONT_SHIFT, 'Foreman', human=True, colour='red')
+    apprentice = _member(CONT_SHIFT, 'Apprentice', human=False, colour='yellow')
+    apprentice.update(tool='copilot', model='gemini-3.8-flash', max_credits=30)
+    tester = _member(CONT_SHIFT, 'Tester', human=False, colour='green')
+    tester.update(tool='copilot', model='gemini-3.8-flash', max_credits=30)
+    crew_data = {'crew': 'default', 'members': [foreman, apprentice, tester], 'slots': 4,
+                 'permission_mode': 'auto', 'model': 'claude-opus-5-5', 'cwd': 'C:/git/proj',
+                 'max_credits': 60}
+    crew_file = d / 'crew.json'
+    crew_file.write_text(json.dumps(crew_data, indent=2), encoding='utf-8')
+    before_crew = crew_file.read_text(encoding='utf-8')
+
+    launcher.spawn([CONT_SHIFT, '--role', 'Tester', '--dry-run'])
+    out = json.loads(capsys.readouterr().out)
+    assert out['dry_run'] is True
+    assert out['role'] == 'Tester'
+    assert out['tool'] == 'copilot'
+    assert '--max-ai-credits' in out['command']
+    idx = out['command'].index('--max-ai-credits')
+    assert out['command'][idx + 1] == '30'
+    assert crew_file.read_text(encoding='utf-8') == before_crew
+    assert len(injected) == 0
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_dry_run_refuses_when_no_budget_share_left(tmp_path, injected):
+    # 2) same shift, spawn --dry-run --role Coder2 --cli copilot raises SystemExit "no budget share left"
+    d = _container(tmp_path, members=('Foreman', 'Apprentice'), free=(3,))
+    foreman = _member(CONT_SHIFT, 'Foreman', human=True, colour='red')
+    apprentice = _member(CONT_SHIFT, 'Apprentice', human=False, colour='yellow')
+    apprentice.update(tool='copilot', model='gemini-3.8-flash', max_credits=30)
+    tester = _member(CONT_SHIFT, 'Tester', human=False, colour='green')
+    tester.update(tool='copilot', model='gemini-3.8-flash', max_credits=30)
+    crew_data = {'crew': 'default', 'members': [foreman, apprentice, tester], 'slots': 4,
+                 'permission_mode': 'auto', 'model': 'claude-opus-5-5', 'cwd': 'C:/git/proj',
+                 'max_credits': 60}
+    (d / 'crew.json').write_text(json.dumps(crew_data, indent=2), encoding='utf-8')
+
+    with pytest.raises(SystemExit) as err:
+        launcher.spawn([CONT_SHIFT, '--role', 'Coder2', '--cli', 'copilot', '--dry-run'])
+    assert 'no budget share left' in str(err.value)
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_dry_run_replaces_claude_tester_with_copilot_getting_leftover_share(tmp_path, injected, capsys):
+    # 3) budget 60, one copilot pane at 30 and the Tester replaced by claude:
+    # spawn --dry-run --role Tester --cli copilot gets 30
+    d = _container(tmp_path, members=('Foreman', 'Apprentice'), free=(3,))
+    foreman = _member(CONT_SHIFT, 'Foreman', human=True, colour='red')
+    apprentice = _member(CONT_SHIFT, 'Apprentice', human=False, colour='yellow')
+    apprentice.update(tool='copilot', model='gemini-3.8-flash', max_credits=30)
+    tester = _member(CONT_SHIFT, 'Tester', human=False, colour='green')
+    tester.update(tool='claude', model='claude-opus-5-5')
+    crew_data = {'crew': 'default', 'members': [foreman, apprentice, tester], 'slots': 4,
+                 'permission_mode': 'auto', 'model': 'claude-opus-5-5', 'cwd': 'C:/git/proj',
+                 'max_credits': 60}
+    (d / 'crew.json').write_text(json.dumps(crew_data, indent=2), encoding='utf-8')
+
+    launcher.spawn([CONT_SHIFT, '--role', 'Tester', '--cli', 'copilot', '--dry-run'])
+    out = json.loads(capsys.readouterr().out)
+    assert out['dry_run'] is True
+    assert out['tool'] == 'copilot'
+    assert out['member']['max_credits'] == 30
+    idx = out['command'].index('--max-ai-credits')
+    assert out['command'][idx + 1] == '30'
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_claude_on_budgeted_shift_carries_no_max_credits(tmp_path, injected, capsys):
+    # 4) a claude spawn on a budgeted shift has no max_credits
+    d = _container(tmp_path, members=('Foreman', 'Apprentice'), free=(3,))
+    foreman = _member(CONT_SHIFT, 'Foreman', human=True, colour='red')
+    apprentice = _member(CONT_SHIFT, 'Apprentice', human=False, colour='yellow')
+    apprentice.update(tool='copilot', model='gemini-3.8-flash', max_credits=30)
+    crew_data = {'crew': 'default', 'members': [foreman, apprentice], 'slots': 4,
+                 'permission_mode': 'auto', 'model': 'claude-opus-5-5', 'cwd': 'C:/git/proj',
+                 'max_credits': 60}
+    (d / 'crew.json').write_text(json.dumps(crew_data, indent=2), encoding='utf-8')
+
+    launcher.spawn([CONT_SHIFT, '--role', 'Tester', '--cli', 'claude', '--dry-run'])
+    out = json.loads(capsys.readouterr().out)
+    assert out['dry_run'] is True
+    assert out['tool'] == 'claude'
+    assert 'max_credits' not in out['member']
+
+
 # NGH-040: real Git integration; only the crew/window launch boundary is mocked.
 
 def _wt_git(repo, *args, check=True):

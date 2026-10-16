@@ -2040,6 +2040,8 @@ def spawn(argv):
     parser.add_argument('--crew', help="take the role's brief, colour, tool, model, reasoning and account from "
                                        "crews/NAME.yaml instead of the shift's own manifest (e.g. apprentice-codex)")
     parser.add_argument('--slot', type=int, help='slot number (default: the first free one)')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='print the member and the pane command; write, type and start nothing')
     args = parser.parse_args(argv)
     tool = SPAWN_CLIS[args.cli or 'claude']
     if tool is None:
@@ -2153,6 +2155,39 @@ def spawn(argv):
             for opt in ('reasoning', 'context', 'account', 'permissions', 'max_credits'):
                 if opt in crew_role:
                     member[opt] = crew_role[opt]
+    budget = saved.get('max_credits')
+    if tool != 'copilot':
+        member.pop('max_credits', None)
+    elif budget is not None:
+        others = [m for m in members if m is not existing and m.get('tool') == 'copilot']
+        committed = sum(m.get('max_credits', 0) for m in others)
+        left = budget - committed
+        share = (existing['max_credits']
+                 if existing and existing.get('tool') == 'copilot' and existing.get('max_credits')
+                 else next((m['max_credits'] for m in others if m.get('max_credits')), left))
+        if share < COPILOT_MIN_CREDITS or share > left:
+            raise SystemExit(
+                f'no budget share left: shift {state_dir.name} budget {budget}, {committed} committed to other '
+                f'Copilot panes, {left} left; a Copilot pane needs {share} (minimum {COPILOT_MIN_CREDITS})')
+        member['max_credits'] = share
+    if args.dry_run:
+        print(json.dumps({
+            'dry_run': True,
+            'shift': state_dir.name,
+            'slot': slot,
+            'role': member['label'],
+            'identity': member['identity'],
+            'tool': tool,
+            'member': member,
+            'command': tool_command(
+                tool, member['model'], '<brief>', '<opening message>',
+                member.get('permissions') or saved.get('permission_mode'),
+                member.get('reasoning'), member.get('context'),
+                session_name=f"{member['label']} ({member['identity']})",
+                max_credits=member.get('max_credits')
+            ) if tool != 'claude' else None
+        }, indent=2))
+        return
     updated = [m for m in members if m is not existing] + [member]
     cwd = saved.get('cwd') or member_info(state_dir, lead['label']).get('cwd') or os.getcwd()
     crew_file = state_dir / 'crew.json'

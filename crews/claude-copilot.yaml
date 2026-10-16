@@ -5,8 +5,8 @@
 # Reasoning follows the crew convention: Opus roles on their default effort (no reasoning:), Gemini at high.
 # max_credits is the shift's Copilot AI credit budget (owner, 16 Oct): split evenly over the Copilot panes, here
 # 60 over Apprentice and Tester, 30 each; the owner changes this one line. Each pane's share must be at least 30
-# (Copilot's minimum) and reaches Copilot as --max-ai-credits, a soft cap per pane, with the pane's final usage in
-# <state_dir>/<label>-usage.json.
+# (Copilot's minimum) and reaches Copilot as --max-ai-credits, a soft cap per pane; credits are read from the pane
+# with /usage.
 name: claude-copilot
 permission_mode: auto        # Claude --permission-mode for the Claude panes
 model: claude-opus-5-5
