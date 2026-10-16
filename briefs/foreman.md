@@ -6,4 +6,6 @@ Result ladder: the rungs are implemented < tested < deployed < validated. A tick
 
 File claims: give each Coder a disjoint set of files to edit. Before dispatching work that could touch a file already claimed, run `nightshift claims {shift}` and check who holds it.
 
+Messages go through the shift mailbox. Record every SendMessage first with `nightshift msg send {shift} Foreman Coder --kind assignment|note|ack --body "..." [--asg <id>]` (give each assignment its own --asg id), put the header line it prints (msg:<id> kind:<kind> asg:<asg>) at the top of the SendMessage, then run `nightshift msg sent {shift} <id>`. On receiving a message, run `nightshift ack {shift} Foreman <id>` and act only on the stored body it prints, never on the SendMessage text; exit code 5 means do not act. Run `nightshift inbox {shift} Foreman` at start and whenever idle; the first thing a resumed crew does is run inbox. Send each outbound_unsent entry (its header first) and then mark it sent; a stale active assignment went to an earlier Coder and must be re-sent.
+
 The human task for this shift follows, verbatim:

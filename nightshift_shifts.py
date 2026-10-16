@@ -15,6 +15,7 @@ start takes a lock (C:/Data/nightshift/locks), refuses with exit code 3 while a 
 and `down` releases it.
 Coders claim files before editing them (`claim`/`release`/`claims`, kept in <state_dir>/claims.json); a file
 held by another role makes `claim` exit 4 and change nothing.
+Crew messages go through a durable mailbox (<state_dir>/mailbox.sqlite3): `msg send`/`msg sent`, `inbox`, `ack` (exit 5 = protocol violation).
 `resume` reruns, through `loop`, every ticket whose latest shift never reached done, continuing from that shift.
 Result ladder: result.json carries a stage (implemented < tested < deployed < validated; none = implemented).
 A ticket line `requires: <rung>` sets the bar (default tested); a done below it is recorded as 'short' and stops the loop.
@@ -33,6 +34,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -735,6 +737,8 @@ def shift_record(state_dir):
     except (ValueError, AttributeError):
         record['result'] = 'invalid'
     record['requires'] = shift_requires(state_dir)
+    pending = unacked_messages(state_dir)
+    record['messages'] = {'unsent': sum(m['state'] == 'stored' for m in pending), 'unacked': len(pending)}
     # Only shifts started with the ladder (requires.txt) can be short; older done shifts stay done.
     if record['result'] == 'done' and (state_dir / 'requires.txt').exists() \
             and not meets_rung(record['stage'], record['requires']):
@@ -855,6 +859,10 @@ def handover_report(state_dir, record):
     lines += ['', '## Outstanding claims', '']
     claims = load_claims(state_dir)
     lines += [f"- {p} — {c.get('role')} (since {c.get('time')})" for p, c in claims.items()] if claims else ['(none)']
+    lines += ['', '## Unacknowledged messages', '']
+    pending = unacked_messages(state_dir)
+    lines += [f"- msg:{m['id']} {m['kind']} {m['asg'] or '-'} {m['sender']} -> {m['recipient']} [{m['state']}]"
+              for m in pending] if pending else ['(none)']
     lines += ['', '## Commits since shift start', '']
     launch_path = state_dir / 'launch.json'
     roles = record['roles']
@@ -1017,6 +1025,211 @@ def claims_command(argv):
     parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
     args = parser.parse_args(argv)
     print(json.dumps(load_claims(resolve_shift(args.shift)), indent=2))
+
+
+class ProtocolViolation(FolderLocked):
+    """An ack that does not match the mailbox (unknown id, wrong recipient, stale incarnation); exits with code 5."""
+
+
+MSG_KINDS = ('assignment', 'result', 'note', 'ack')
+MAILBOX_SCHEMA = '''CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, sender TEXT NOT NULL, sender_incarnation REAL,
+    recipient TEXT NOT NULL, recipient_incarnation REAL, asg TEXT, body TEXT NOT NULL, created TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'stored')'''
+
+
+@contextlib.contextmanager
+def mailbox(state_dir, create=True):
+    """Open <state_dir>/mailbox.sqlite3 (WAL, busy timeout); yields None when create=False and it does not exist.
+
+    The connection is always closed, so nothing keeps the file open (Windows cannot delete an open file).
+    """
+    path = Path(state_dir) / 'mailbox.sqlite3'
+    if not create and not path.exists():
+        yield None
+        return
+    with contextlib.closing(sqlite3.connect(path, timeout=10)) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA busy_timeout=10000')
+        conn.execute('PRAGMA journal_mode=WAL')
+        if create:
+            conn.execute(MAILBOX_SCHEMA)
+            conn.commit()
+        yield conn
+
+
+def crew_roster(state_dir):
+    """[{label, identity, human_contact}] from crew.json, else DEFAULT_LABELS with the <shift>-<role> names."""
+    state_dir = Path(state_dir)
+    try:
+        members = json.loads((state_dir / 'crew.json').read_text(encoding='utf-8'))['members']
+        return [{'label': m['label'], 'identity': m.get('identity'), 'human_contact': bool(m.get('human_contact'))}
+                for m in members]
+    except (OSError, ValueError, KeyError, TypeError):
+        return [{'label': label, 'identity': f'{state_dir.name}-{label.lower()}', 'human_contact': label == 'Foreman'}
+                for label in DEFAULT_LABELS]
+
+
+def member_info(state_dir, label):
+    """<state_dir>/<label>.json as a dict, {} when missing or unreadable."""
+    try:
+        info = json.loads((Path(state_dir) / f'{label}.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    return info if isinstance(info, dict) else {}
+
+
+def resolve_role(state_dir, role):
+    """Canonical crew label for a label (any case) or a member's mesh identity; SystemExit when not in the crew."""
+    roster = crew_roster(state_dir)
+    wanted = role.lower()
+    for m in roster:
+        names = {m['label'], m['identity'], member_info(state_dir, m['label']).get('name')}
+        if wanted in {str(n).lower() for n in names if n}:
+            return m['label']
+    raise SystemExit(f"{role!r} is not a member of shift {Path(state_dir).name}; "
+                     f"use one of: {', '.join(m['label'] for m in roster)}")
+
+
+def incarnation(state_dir, label):
+    """The member's current incarnation: 'started' from <label>.json, None when that file is absent."""
+    return member_info(state_dir, label).get('started')
+
+
+def mesh_name(state_dir, label):
+    """The member's session name: <label>.json name, else its crew.json identity, else None."""
+    name = member_info(state_dir, label).get('name')
+    return name or next((m['identity'] for m in crew_roster(state_dir) if m['label'] == label), None)
+
+
+def human_contact_label(state_dir):
+    return next((m['label'] for m in crew_roster(state_dir) if m['human_contact']), DEFAULT_LABELS[0])
+
+
+def msg_header(row):
+    return f"msg:{row['id']} kind:{row['kind']} asg:{row['asg'] or '-'}"
+
+
+def insert_message(conn, state_dir, kind, sender, recipient, body, asg=None):
+    """Store a message with both incarnations as they are now; returns its id."""
+    with conn:
+        cur = conn.execute(
+            'INSERT INTO messages (kind, sender, sender_incarnation, recipient, recipient_incarnation, asg, body, '
+            'created, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (kind, sender, incarnation(state_dir, sender), recipient, incarnation(state_dir, recipient), asg, body,
+             time.strftime('%Y-%m-%d %H:%M:%S'), 'stored'))
+    return cur.lastrowid
+
+
+def get_message(conn, msg_id):
+    row = conn.execute('SELECT * FROM messages WHERE id = ?', (msg_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def msg(argv):
+    parser = argparse.ArgumentParser(
+        prog='nightshift msg',
+        description='Record crew messages in the shift mailbox before sending them with SendMessage.')
+    sub = parser.add_subparsers(dest='action', required=True)
+    send = sub.add_parser('send', help='store a message; prints its header line for the top of the SendMessage')
+    send.add_argument('shift', help='shift name, unique suffix, or "latest"')
+    send.add_argument('sender', metavar='FROM', help='your crew label (Foreman, Coder) or session name')
+    send.add_argument('recipient', metavar='TO', help="the peer's crew label or session name")
+    send.add_argument('--kind', required=True, choices=MSG_KINDS)
+    send.add_argument('--body', required=True, help='the message text the recipient acts on')
+    send.add_argument('--asg', help='assignment id this message belongs to')
+    sent = sub.add_parser('sent', help='mark a stored message as delivered with SendMessage')
+    sent.add_argument('shift', help='shift name, unique suffix, or "latest"')
+    sent.add_argument('id', type=int)
+    args = parser.parse_args(argv)
+    state_dir = resolve_shift(args.shift)
+    if args.action == 'send':
+        sender, recipient = resolve_role(state_dir, args.sender), resolve_role(state_dir, args.recipient)
+        with mailbox(state_dir) as conn:
+            msg_id = insert_message(conn, state_dir, args.kind, sender, recipient, args.body, args.asg)
+            print(msg_header(get_message(conn, msg_id)))
+        return
+    with mailbox(state_dir) as conn:
+        with conn:
+            conn.execute("UPDATE messages SET state = 'sent' WHERE id = ? AND state = 'stored'", (args.id,))
+        row = get_message(conn, args.id)
+    if row is None:
+        raise SystemExit(f'no message msg:{args.id} in shift {state_dir.name}')
+    print(json.dumps(row))
+
+
+def inbox_view(state_dir, label):
+    """What a member has to deal with: unacked inbound, its own unsent outbound, open assignments."""
+    view = {'inbound_unacked': [], 'outbound_unsent': [], 'active_assignments': []}
+    with mailbox(state_dir, create=False) as conn:
+        if conn is None:
+            return view
+        view['inbound_unacked'] = [dict(r) for r in conn.execute(
+            "SELECT * FROM messages WHERE recipient = ? AND state IN ('stored', 'sent') ORDER BY id", (label,))]
+        for r in conn.execute("SELECT * FROM messages WHERE sender = ? AND state = 'stored' ORDER BY id", (label,)):
+            view['outbound_unsent'].append({**dict(r), 'header': msg_header(r), 'to': mesh_name(state_dir, r['recipient'])})
+        for r in conn.execute(
+                "SELECT * FROM messages a WHERE kind = 'assignment' AND (sender = ? OR recipient = ?) AND NOT EXISTS "
+                "(SELECT 1 FROM messages b WHERE b.kind = 'result' AND b.asg = a.asg) ORDER BY id", (label, label)):
+            view['active_assignments'].append(
+                {**dict(r), 'stale': r['recipient_incarnation'] != incarnation(state_dir, r['recipient'])})
+    return view
+
+
+def inbox(argv):
+    parser = argparse.ArgumentParser(
+        prog='nightshift inbox',
+        description="A member's mailbox as JSON: inbound_unacked, outbound_unsent (send each, then `msg sent`), "
+                    'active_assignments (stale = sent to an earlier incarnation of the recipient).')
+    parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
+    parser.add_argument('role', help='your crew label (Foreman, Coder) or session name')
+    args = parser.parse_args(argv)
+    state_dir = resolve_shift(args.shift)
+    print(json.dumps(inbox_view(state_dir, resolve_role(state_dir, args.role)), indent=2))
+
+
+def ack(argv):
+    parser = argparse.ArgumentParser(
+        prog='nightshift ack',
+        description='Acknowledge a received message and print its stored body, the only text to act on. '
+                    'Unknown id, wrong recipient or a message for an earlier incarnation: a protocol-violation '
+                    'note goes to the human contact and the exit code is 5 (do not act).')
+    parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
+    parser.add_argument('role', help='your crew label (Foreman, Coder) or session name')
+    parser.add_argument('id', type=int)
+    args = parser.parse_args(argv)
+    state_dir = resolve_shift(args.shift)
+    label = resolve_role(state_dir, args.role)
+    current = incarnation(state_dir, label)
+    with mailbox(state_dir) as conn:
+        row = get_message(conn, args.id)
+        if row is None:
+            reason = f'no message msg:{args.id}'
+        elif row['recipient'] != label:
+            reason = f"msg:{args.id} is addressed to {row['recipient']}, not {label}"
+        elif row['recipient_incarnation'] != current:
+            reason = (f"msg:{args.id} was sent to an earlier {label} incarnation "
+                      f"({row['recipient_incarnation']}; current {current})")
+        else:
+            reason = None
+        if reason:
+            insert_message(conn, state_dir, 'note', label, human_contact_label(state_dir),
+                           f'protocol violation: {reason} (ack of msg:{args.id} by {label})')
+            print(f'protocol violation: {reason}', file=sys.stderr)
+            raise ProtocolViolation(5, reason)
+        outcome = 'already acknowledged' if row['state'] == 'acknowledged' else 'acknowledged'
+        with conn:
+            conn.execute("UPDATE messages SET state = 'acknowledged' WHERE id = ?", (args.id,))
+        row = get_message(conn, args.id)
+    print(json.dumps({'ack': outcome, 'row': row}))
+
+
+def unacked_messages(state_dir):
+    """Stored or sent rows, oldest first; [] when the shift has no mailbox."""
+    with mailbox(state_dir, create=False) as conn:
+        if conn is None:
+            return []
+        return [dict(r) for r in conn.execute("SELECT * FROM messages WHERE state IN ('stored', 'sent') ORDER BY id")]
 
 
 def session_idle_since(pid):
@@ -1295,7 +1508,7 @@ def resume(argv):
 
 def main():
     commands = {'start': start, 'status': status, 'down': down, 'loop': loop, 'resume': resume,
-                'claim': claim, 'release': release, 'claims': claims_command}
+                'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack}
     if len(sys.argv) > 1 and sys.argv[1] in commands:
         commands[sys.argv[1]](sys.argv[2:])
         return
@@ -1310,7 +1523,12 @@ def main():
                '  resume [--project PREFIX] [--dry-run]       rerun tickets whose latest shift never reached done (--continue-from it)\n'
                '  claim SHIFT ROLE PATH...                    claim files before editing; exit 4 if another role holds one\n'
                '  release SHIFT ROLE [PATH...]                drop those claims, or all of ROLE\'s when no paths given\n'
-               '  claims SHIFT                                print the shift\'s claims as JSON')
+               '  claims SHIFT                                print the shift\'s claims as JSON\n'
+               '  msg send SHIFT FROM TO --kind K --body TEXT [--asg ID]\n'
+               '                                              store a crew message; prints its header line\n'
+               '  msg sent SHIFT ID                           mark a stored message as sent with SendMessage\n'
+               '  inbox SHIFT ROLE                            unacked inbound, unsent outbound, active assignments\n'
+               '  ack SHIFT ROLE ID                           acknowledge and print the stored body; exit 5 = do not act')
     parser.add_argument('--pane', help=argparse.SUPPRESS)
     parser.add_argument('--state-dir', help=argparse.SUPPRESS)
     parser.add_argument('--start', action='store_true', help=argparse.SUPPRESS)

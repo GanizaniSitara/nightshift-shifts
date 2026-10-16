@@ -1435,6 +1435,230 @@ def test_handover_shows_stage_and_evidence(tmp_path, monkeypatch):
     report = launcher.handover_report(tmp_path, {'roles': {}})
     assert 'Stage: implemented (required: deployed)' in report and 'Evidence: (none)' in report
 
+# ── durable crew mailbox: msg send/sent, inbox, ack ──────────────────────────
+
+def _mail_shift(monkeypatch, tmp_path, started=None):
+    """A shift whose Foreman/Coder .json files carry a 'started' incarnation."""
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'shifts')
+    d = _shift(tmp_path, 'Nightshift-shift-mail0001', {'Foreman': 31, 'Coder': 32})
+    for role, value in (started or {'Foreman': 100.5, 'Coder': 200.25}).items():
+        info = json.loads((d / f'{role}.json').read_text(encoding='utf-8'))
+        (d / f'{role}.json').write_text(json.dumps({**info, 'started': value}), encoding='utf-8')
+    return d
+
+
+def _relaunch_coder(d, started=999.0):
+    info = json.loads((d / 'Coder.json').read_text(encoding='utf-8'))
+    (d / 'Coder.json').write_text(json.dumps({**info, 'started': started}), encoding='utf-8')
+
+
+def _send(capsys, *argv):
+    launcher.msg(['send', 'mail0001', *argv])
+    return capsys.readouterr().out
+
+
+def _rows(d):
+    with launcher.contextlib.closing(launcher.sqlite3.connect(d / 'mailbox.sqlite3')) as conn:
+        conn.row_factory = launcher.sqlite3.Row
+        return [dict(r) for r in conn.execute('SELECT * FROM messages ORDER BY id')]
+
+
+def test_msg_send_prints_header_and_stores_both_incarnations(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    assert _send(capsys, 'foreman', 'Coder', '--kind', 'assignment', '--asg', 'A1', '--body', 'do X') == \
+        'msg:1 kind:assignment asg:A1\n'
+    assert _send(capsys, 'Nightshift-shift-mail0001-coder', 'FOREMAN', '--kind', 'note', '--body', 'hi') == \
+        'msg:2 kind:note asg:-\n'                                    # mesh identity and any case are accepted
+    first, second = _rows(d)
+    assert {k: first[k] for k in ('kind', 'sender', 'sender_incarnation', 'recipient', 'recipient_incarnation',
+                                  'asg', 'body', 'state')} == {
+        'kind': 'assignment', 'sender': 'Foreman', 'sender_incarnation': 100.5, 'recipient': 'Coder',
+        'recipient_incarnation': 200.25, 'asg': 'A1', 'body': 'do X', 'state': 'stored'}
+    assert len(first['created']) == 19 and second['sender'] == 'Coder' and second['asg'] is None
+
+
+def test_msg_send_unknown_role_is_a_plain_exit(monkeypatch, tmp_path, capsys):
+    _mail_shift(monkeypatch, tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        launcher.msg(['send', 'mail0001', 'Reviewer', 'Coder', '--kind', 'note', '--body', 'x'])
+    assert not isinstance(exc.value, launcher.ProtocolViolation)
+    assert 'not a member' in str(exc.value.code) and 'Foreman, Coder' in str(exc.value.code)
+
+
+def test_incarnation_is_none_without_member_json(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'shifts')
+    d = _shift(tmp_path, 'Nightshift-shift-mail0001', {})
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'note', '--body', 'early')
+    row = _rows(d)[0]
+    assert row['sender_incarnation'] is None and row['recipient_incarnation'] is None
+
+
+def test_msg_sent_marks_stored_only_and_rejects_unknown_id(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'note', '--body', 'b')
+    launcher.msg(['sent', 'mail0001', '1'])
+    assert json.loads(capsys.readouterr().out)['state'] == 'sent'
+    launcher.ack(['mail0001', 'Coder', '1'])
+    capsys.readouterr()
+    launcher.msg(['sent', 'mail0001', '1'])
+    assert json.loads(capsys.readouterr().out)['state'] == 'acknowledged'   # acknowledged rows are left alone
+    with pytest.raises(SystemExit, match='no message msg:9'):
+        launcher.msg(['sent', 'mail0001', '9'])
+    assert len(_rows(d)) == 1
+
+
+def test_inbox_has_exact_shape_and_reads_without_creating_a_mailbox(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    launcher.inbox(['mail0001', 'Coder'])
+    assert json.loads(capsys.readouterr().out) == {'inbound_unacked': [], 'outbound_unsent': [], 'active_assignments': []}
+    assert not (d / 'mailbox.sqlite3').exists()
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A1', '--body', 'do X')
+    _send(capsys, 'Coder', 'Foreman', '--kind', 'note', '--body', 'question')
+    launcher.inbox(['mail0001', 'coder'])
+    view = json.loads(capsys.readouterr().out)
+    assert set(view) == {'inbound_unacked', 'outbound_unsent', 'active_assignments'}
+    assert [r['id'] for r in view['inbound_unacked']] == [1]
+    assert [(r['id'], r['header'], r['to']) for r in view['outbound_unsent']] == \
+        [(2, 'msg:2 kind:note asg:-', 'Nightshift-shift-mail0001-foreman')]
+    assert [(r['id'], r['stale']) for r in view['active_assignments']] == [(1, False)]
+    launcher.msg(['sent', 'mail0001', '2'])
+    capsys.readouterr()
+    launcher.inbox(['mail0001', 'Coder'])
+    assert json.loads(capsys.readouterr().out)['outbound_unsent'] == []
+
+
+def test_ack_happy_path_returns_stored_body_then_already_acknowledged(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A1', '--body', 'the real task')
+    launcher.msg(['sent', 'mail0001', '1'])
+    capsys.readouterr()
+    launcher.ack(['mail0001', 'Coder', '1'])
+    out = json.loads(capsys.readouterr().out)
+    assert out['ack'] == 'acknowledged' and out['row']['body'] == 'the real task' and out['row']['state'] == 'acknowledged'
+    launcher.ack(['mail0001', 'Nightshift-shift-mail0001-coder', '1'])
+    assert json.loads(capsys.readouterr().out)['ack'] == 'already acknowledged'
+    launcher.inbox(['mail0001', 'Coder'])
+    assert json.loads(capsys.readouterr().out)['inbound_unacked'] == []
+    assert len(_rows(d)) == 1
+
+
+def test_ack_from_stored_is_allowed(monkeypatch, tmp_path, capsys):
+    _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'note', '--body', 'sender crashed before msg sent')
+    launcher.ack(['mail0001', 'Coder', '1'])
+    assert json.loads(capsys.readouterr().out)['row']['state'] == 'acknowledged'
+
+
+def _assert_violation(d, capsys, argv, reason_part, original=None):
+    with pytest.raises(SystemExit) as exc:
+        launcher.ack(argv)
+    assert isinstance(exc.value, launcher.ProtocolViolation) and exc.value.code == 5
+    captured = capsys.readouterr()
+    assert reason_part in captured.err and captured.out == ''
+    note = _rows(d)[-1]
+    assert note['kind'] == 'note' and note['recipient'] == 'Foreman' and note['state'] == 'stored'
+    assert note['body'].startswith('protocol violation:') and reason_part in note['body']
+    if original:
+        assert _rows(d)[0] == original                               # the original row is untouched
+
+
+def test_ack_by_wrong_recipient_exits_5_and_notes_foreman(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Coder', 'Foreman', '--kind', 'result', '--asg', 'A1', '--body', 'done')
+    original = _rows(d)[0]
+    _assert_violation(d, capsys, ['mail0001', 'Coder', '1'], 'addressed to Foreman, not Coder', original)
+    assert _rows(d)[-1]['sender'] == 'Coder' and 'msg:1' in _rows(d)[-1]['body']
+
+
+def test_ack_for_a_stale_incarnation_exits_5(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A1', '--body', 'old task')
+    original = _rows(d)[0]
+    _relaunch_coder(d)
+    _assert_violation(d, capsys, ['mail0001', 'Coder', '1'], 'earlier Coder incarnation', original)
+
+
+def test_ack_of_unknown_id_exits_5(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _assert_violation(d, capsys, ['mail0001', 'Coder', '42'], 'no message msg:42')
+    assert len(_rows(d)) == 1
+
+
+def test_active_assignment_goes_stale_and_a_result_clears_it(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A1', '--body', 'one')
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A2', '--body', 'two')
+    _relaunch_coder(d)
+    launcher.inbox(['mail0001', 'Foreman'])
+    assert [(r['asg'], r['stale']) for r in json.loads(capsys.readouterr().out)['active_assignments']] == \
+        [('A1', True), ('A2', True)]
+    _send(capsys, 'Coder', 'Foreman', '--kind', 'result', '--asg', 'A1', '--body', 'done one')
+    for role in ('Foreman', 'Coder'):
+        launcher.inbox(['mail0001', role])
+        assert [r['asg'] for r in json.loads(capsys.readouterr().out)['active_assignments']] == ['A2']
+
+
+def test_handover_lists_unacknowledged_messages(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(launcher, 'suite_result', lambda: ('passed', '1 passed'))
+    d = _mail_shift(monkeypatch, tmp_path)
+    report = launcher.handover_report(d, {'roles': {}})
+    assert report[report.index('## Unacknowledged messages') + 2] == '(none)'
+    assert not (d / 'mailbox.sqlite3').exists()
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'A1', '--body', 'x')
+    _send(capsys, 'Coder', 'Foreman', '--kind', 'note', '--body', 'y')
+    _send(capsys, 'Coder', 'Foreman', '--kind', 'note', '--body', 'z')
+    launcher.msg(['sent', 'mail0001', '2'])
+    launcher.ack(['mail0001', 'Foreman', '3'])
+    report = launcher.handover_report(d, {'roles': {}})
+    start = report.index('## Unacknowledged messages')
+    assert report[start + 2:start + 4] == ['- msg:1 assignment A1 Foreman -> Coder [stored]',
+                                           '- msg:2 note - Coder -> Foreman [sent]']
+    assert report[start + 4] == ''
+    assert report.index('## Outstanding claims') < start < report.index('## Commits since shift start')
+
+
+def test_status_all_shows_message_counts(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: False)
+    launcher.status(['--all'])
+    assert json.loads(capsys.readouterr().out)[0]['messages'] == {'unsent': 0, 'unacked': 0}
+    assert not (d / 'mailbox.sqlite3').exists()
+    for body in ('a', 'b', 'c'):
+        _send(capsys, 'Foreman', 'Coder', '--kind', 'note', '--body', body)
+    launcher.msg(['sent', 'mail0001', '2'])
+    launcher.ack(['mail0001', 'Coder', '3'])
+    capsys.readouterr()
+    launcher.status(['--all'])
+    assert json.loads(capsys.readouterr().out)[0]['messages'] == {'unsent': 1, 'unacked': 2}
+
+
+def test_main_dispatches_mailbox_commands(monkeypatch, tmp_path, capsys):
+    _mail_shift(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['nightshift', 'msg', 'send', 'mail0001', 'Foreman', 'Coder',
+                                      '--kind', 'note', '--body', 'via main'])
+    launcher.main()
+    assert capsys.readouterr().out == 'msg:1 kind:note asg:-\n'
+    monkeypatch.setattr(sys, 'argv', ['nightshift', 'inbox', 'mail0001', 'Coder'])
+    launcher.main()
+    assert json.loads(capsys.readouterr().out)['inbound_unacked'][0]['body'] == 'via main'
+
+
+def test_briefs_tell_both_roles_to_use_the_mailbox():
+    shift = Path('C:/x/Nightshift-shift-abc')
+    briefs = {'Foreman': launcher.role_brief('Foreman', 'S-foreman', 'S-coder', shift),
+              'Coder': launcher.role_brief('Coder', 'S-coder', 'S-foreman', shift)}
+    for me, brief in briefs.items():
+        peer = 'Coder' if me == 'Foreman' else 'Foreman'
+        assert f'nightshift msg send Nightshift-shift-abc {me} {peer} --kind' in brief
+        assert 'nightshift msg sent Nightshift-shift-abc <id>' in brief
+        assert f'nightshift ack Nightshift-shift-abc {me} <id>' in brief
+        assert f'nightshift inbox Nightshift-shift-abc {me}' in brief
+        assert 'header line' in brief and 'never on the SendMessage text' in brief
+        assert 'exit code 5 means do not act' in brief and 'resumed crew' in brief and 'outbound_unsent' in brief
+    assert briefs['Foreman'].rstrip().endswith('verbatim:')
+    assert 'send READY from S-coder' in briefs['Coder']
+    assert 'nightshift claim Nightshift-shift-abc S-coder' in briefs['Coder']
+
 
 # ── PowerShell launchers parse ────────────────────────────────────────────────
 
