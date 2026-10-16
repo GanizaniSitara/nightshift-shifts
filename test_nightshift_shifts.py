@@ -279,6 +279,40 @@ def test_load_crew_refuses_a_missing_or_unusable_persona(monkeypatch, tmp_path, 
         launcher.load_crew('p')
 
 
+@pytest.mark.parametrize('text, message', [('never: do one thing\n', 'never must be a list of text'),
+                                           ('how_you_work: [{a: b}]\n', 'how_you_work must be a list of text'),
+                                           ('identity: [a, b]\n', 'identity must be text'),
+                                           ('', 'not a YAML mapping')])
+def test_load_crew_refuses_a_malformed_persona_named_or_default(monkeypatch, tmp_path, text, message):
+    """A bare string list key would render one bullet per character; a broken default personas/<role>.yaml
+    must fail at load_crew, not later at pane --start inside a live pane."""
+    _persona_dir(monkeypatch, tmp_path, {'coder.yaml': 'identity: x\n' + text if text else '',
+                                         'ghost.yaml': 'identity: x\n' + text if text else ''})
+    _crew_file(monkeypatch, tmp_path, 'named', PERSONA_CREW % 'ghost.yaml')
+    _crew_file(monkeypatch, tmp_path, 'dflt', 'roles:\n  - {role: Foreman, brief: foreman.md, human_contact: true}\n'
+                                              '  - {role: Coder, brief: coder.md}\n')
+    for crew, persona in (('named', 'ghost.yaml'), ('dflt', 'coder.yaml')):
+        with pytest.raises(SystemExit, match=f'crew {crew}: persona {persona} for Coder.*{message}'):
+            launcher.load_crew(crew)
+    with pytest.raises(SystemExit, match=message):
+        launcher.persona_text('Coder', 'coder.yaml')
+
+
+def test_load_crew_checks_only_the_persona_a_role_ends_up_with(monkeypatch, tmp_path):
+    """A named persona replaces the default, so a broken personas/<role>.yaml it overrides must not fail the crew."""
+    _persona_dir(monkeypatch, tmp_path, {'coder.yaml': 'never: do one thing\n', 'careful.yaml': 'identity: careful\n'})
+    _crew_file(monkeypatch, tmp_path, 'p', PERSONA_CREW % 'careful.yaml')
+    assert launcher.crew_members(launcher.load_crew('p'), 'S')[1]['persona'] == 'careful.yaml'
+
+
+def test_persona_with_empty_or_absent_sections_still_loads_and_renders(monkeypatch, tmp_path):
+    _persona_dir(monkeypatch, tmp_path, {'coder.yaml': 'good_looks_like: []\nhow_you_work:\nnever: [guess]\n'})
+    _crew_file(monkeypatch, tmp_path, 'p', PERSONA_CREW % 'coder.yaml')
+    launcher.load_crew('p')
+    text = launcher.persona_text('Coder', 'coder.yaml')
+    assert '- guess' in text and 'What good looks like' not in text and 'How you work' not in text
+
+
 def test_role_without_a_persona_file_still_renders(monkeypatch, tmp_path):
     _crew_file(monkeypatch, tmp_path, 'rev', 'roles:\n  - {role: Foreman, brief: foreman.md, human_contact: true}\n'
                                              '  - {role: Reviewer, brief: coder.md}\n')

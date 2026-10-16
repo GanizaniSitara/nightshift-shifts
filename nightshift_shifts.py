@@ -171,13 +171,11 @@ def load_crew(name='default'):
             raise SystemExit(f'crew {name}: brief {brief} for {role} is not in {BRIEFS_DIR}')
         # persona: names a file in personas/; without the key a role gets personas/<role>.yaml when it exists
         persona = str(entry['persona']) if entry.get('persona') else default_persona(role)
-        if entry.get('persona'):
+        if persona:   # checked here, named or default, so a broken file fails now rather than at pane --start
             try:
-                persona_data = yaml.safe_load((PERSONAS_DIR / persona).read_text(encoding='utf-8'))
-            except (OSError, yaml.YAMLError):
-                persona_data = None
-            if not isinstance(persona_data, dict):
-                raise SystemExit(f'crew {name}: persona {persona} for {role} is not a YAML mapping in {PERSONAS_DIR}')
+                load_persona(role, persona)
+            except SystemExit as e:
+                raise SystemExit(f'crew {name}: {e}') from None
         count = entry.get('count', 1)
         if type(count) is not int or count < 1:
             raise SystemExit(f'crew {name}: count for {role} must be a whole number >= 1, not {count!r}')
@@ -266,13 +264,34 @@ def default_persona(role):
     return name if (PERSONAS_DIR / name).is_file() else None
 
 
+PERSONA_LISTS = (('good_looks_like', 'What good looks like'), ('how_you_work', 'How you work'),
+                 ('never', 'What you never do'))
+
+
+def load_persona(role, persona):
+    """PERSONAS_DIR/<persona> as a dict, or SystemExit when it is missing, not a mapping, has a non-text
+    identity, or gives a list key (good_looks_like, how_you_work, never) as anything but a list of text."""
+    try:
+        data = yaml.safe_load((PERSONAS_DIR / persona).read_text(encoding='utf-8'))
+    except (OSError, yaml.YAMLError):
+        data = None
+    if not isinstance(data, dict):
+        raise SystemExit(f'persona {persona} for {role} is not a YAML mapping in {PERSONAS_DIR}')
+    if data.get('identity') is not None and not isinstance(data['identity'], str):
+        raise SystemExit(f'persona {persona} for {role}: identity must be text')
+    for key, _ in PERSONA_LISTS:
+        items = data.get(key)
+        if items is not None and not (isinstance(items, list) and all(isinstance(i, str) for i in items)):
+            raise SystemExit(f'persona {persona} for {role}: {key} must be a list of text, e.g. {key}: [one thing]')
+    return data
+
+
 def persona_text(role, persona):
     """The persona file PERSONAS_DIR/<persona> as markdown: a heading naming the role, the identity paragraph,
     then What good looks like / How you work / What you never do as bullet lists, closed by a Protocol heading."""
-    data = yaml.safe_load((PERSONAS_DIR / persona).read_text(encoding='utf-8')) or {}
+    data = load_persona(role, persona)
     text = f'# {role}\n\n' + str(data.get('identity') or '').strip() + '\n\n'
-    for key, heading in (('good_looks_like', 'What good looks like'), ('how_you_work', 'How you work'),
-                         ('never', 'What you never do')):
+    for key, heading in PERSONA_LISTS:
         items = data.get(key) or []
         if items:
             text += f'## {heading}\n\n' + ''.join(f'- {str(i).strip()}\n' for i in items) + '\n'
