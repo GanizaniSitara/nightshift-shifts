@@ -70,8 +70,8 @@ As built (NGH-025):
 ## The four identities (owner, 16 Oct 2026)
 
 The 1x4 container is meant for four fixed identities, one per column: **Foreman** (runs the
-ticket's goal statement, sole human contact), **Advisor**, **Coder**, **Tester** (NGH-024; built,
-see "The default crew" below). The
+ticket's goal statement, sole human contact), **Advisor** (NGH-027), **Coder**, **Tester** (NGH-024);
+all four are built, see "The default crew" below. The
 Advisor is a dormant session on a frontier model (Fable, Astra, Mistral Large 4 or Gemini's top
 model, whichever the manifest names): it gets no instructions beyond its identity and does
 nothing until Foreman is stuck on something it cannot resolve. Then, instead of asking the human,
@@ -81,13 +81,44 @@ through the mailbox so the human can audit every decision; the Advisor never edi
 never talks to Coder or Tester; the human is still asked when the ticket itself is wrong or a
 decision cannot be undone. This is the reviewed design's "bounded consultant" (not a council).
 
+As built (NGH-027):
+
+- **Manifest role.** `crews/default.yaml` has `Advisor` in column 2: brief `advisor.md`, colour
+  purple, count 1, role-level `model: claude-fable-5-1` (the crew model stays Opus 5.5).
+- **Dormant opening.** `START_MESSAGES['Advisor']` tells it it is dormant: no READY, no polling,
+  reading or running anything until Foreman messages it. Foreman's peers include `<shift>-advisor`;
+  the Advisor's only peer is `<shift>-foreman`.
+- **Brief (`briefs/advisor.md`).** On a Foreman message: `ack`, act on the stored body only; read
+  context read-only (`bus.jsonl` if present, else the mailbox rows, plus ticket, claims, builds,
+  code, only what the question needs); never edit, build, test, spawn, write tickets or talk to
+  anyone but Foreman; go dormant again after answering.
+- **Mailbox guard.** `msg send` refuses (SystemExit, nothing stored) any message to the member
+  labelled `Advisor` unless the sender is the human contact ("only Foreman may address the
+  Advisor"), and any message from it unless the recipient is the human contact ("the Advisor
+  answers only Foreman"). Foreman <-> Advisor is an ordinary message.
+- **Spawn from the manifest.** `spawn SHIFT --role R` for a role not in `crew.json` but named in the
+  shift's crew manifest takes that role's brief and colour, and its model when the manifest role's
+  tool is the spawned tool. So `spawn SHIFT --role Advisor` in an older three-pane shift gives a
+  purple Fable Advisor on `advisor.md`; any other role behaves as before.
+- **Foreman's consult rule (`briefs/foreman.md`).** Never message the Advisor routinely and do not
+  wait for its READY. Only when stuck after trying: `msg send ... Foreman Advisor --kind assignment
+  --asg adv-<n>` with the question, what was tried and what is seen; wait for the result, ack it,
+  act on its DECISION, and `tasks-cli note` question and decision.
+- **Answer format.** One decision, no options: a `result` with the question's asg and body
+  `DECISION: ...` / `WHY: <two lines>`. When the ticket is wrong or the decision cannot be undone the
+  first line is `ASK-HUMAN: <why>` followed by the recommended decision; that, and the routine-matters
+  cases Foreman's brief already names, are the only times Foreman goes to the human.
+- **Switching model or CLI later.** Astra (Codex) or Mistral Large 4 (OpenCode) is the Advisor's
+  `model:`/`tool:` lines in the manifest plus the agents-cli transport the Gemini Coder already uses
+  (NGH-012); the mailbox guard and briefs do not change.
+
 ## Components
 
 | Piece | Role | Where |
 |---|---|---|
 | `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--hold`/`--close`), `spawn` (NGH-025), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020) | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (claude or agy) and `model`, pane layout | this repo |
-| `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `coder.md`, `tester.md`; placeholders filled in); the task text is appended for Foreman | this repo |
+| `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`; placeholders filled in); the task text is appended for Foreman | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | `C:\Tools\tasks-cli.exe` |
 | agents-cli | universal console driver for any agent TUI: peek a pane, inject a line, press a key, name/wait on a session | `C:\Tools\agents-cli` |
@@ -111,7 +142,7 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
    launched from inside a Claude session is not a child session of it. The human's foreground
    window is restored once the crew window exists.
 3. The crew works. Foreman is the only member that talks to the human; Coder and Tester act only
-   on Foreman's assignments (handoff below). Rules the briefs enforce: never launch sessions/windows/agents
+   on Foreman's assignments (handoff below), and the Advisor sleeps until Foreman consults it. Rules the briefs enforce: never launch sessions/windows/agents
    yourself; the only way a session starts is Foreman's `nightshift spawn` into a free slot (anything else:
    write the command for the human); claim files before editing (`claims.json`, exit 4 on
    conflict); record messages in the mailbox before sending them (NGH-019).
@@ -123,11 +154,12 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
    crew processes (Foreman's own tree last), releases the lock, and keeps the tab open (`--hold`,
    default) or closes only that shift's Terminal window (`--close`).
 
-## The default crew: Foreman, Coder, Tester (NGH-024)
+## The default crew: Foreman, Advisor, Coder, Tester (NGH-024, NGH-027)
 
-- `crews/default.yaml` is Foreman (red), Coder (green), Tester (blue, `tester.md`) in slots 1-3 of
-  the 1x4 container; slot 4 is an empty shell for `spawn`. Foreman's peers are `<shift>-coder, <shift>-tester`; Coder's and
-  Tester's peer is `<shift>-foreman`. Other crews (`--crew NAME`) are unaffected.
+- `crews/default.yaml` is Foreman (red), Advisor (purple, Fable, `advisor.md`), Coder (green),
+  Tester (blue, `tester.md`), filling all four slots of the 1x4 container: `spawn` has no free slot
+  until a member dies. Foreman's peers are `<shift>-advisor, <shift>-coder, <shift>-tester`; everyone
+  else's peer is `<shift>-foreman`. Other crews (`--crew NAME`) are unaffected.
 - Handoff is Coder -> Foreman -> Tester. Coder reports an assignment done; Foreman reviews it and
   assigns verification to Tester with its own `--asg` id, saying what changed and what was asked.
   Coder and Tester never talk to each other.
@@ -150,8 +182,9 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
   `agents-cli name <pid> <identity>` (`register_name`, failures ignored) so it can be addressed by its
   shift identity. The trust-dialog answer and `/color` are Claude-only and skipped.
 - `pid_alive` counts `agy.exe` as a crew process alongside `claude.exe`/`node.exe`.
-- `start --dry-run` adds `tool`, `model` and `exe` to each non-Claude role; Claude roles keep the
-  original shape (the default three-pane crew's plan is golden-tested byte for byte).
+- `start --dry-run` adds `tool`, `model` and `exe` to each non-Claude role; a Claude role on another
+  model than the crew's (the Fable Advisor) adds `model`; Claude roles on the crew model keep the
+  original shape (the default crew's plan is golden-tested byte for byte).
 - `crews/gemini-coder.yaml` is the first mixed crew: Claude Foreman (`foreman-agy-coder.md`), agy
   Coder on `gemini-3.8-flash-high` (`coder-agy.md`). The agy Coder cannot use ListAgents/SendMessage:
   it writes reports in its own window, each ending with `CODER-DONE` or `CODER-BLOCKED`. Foreman
@@ -220,14 +253,14 @@ revision-bound evidence. No worktrees per shift (owner: not needed).
 
 | Reviewed design said | Built | Status |
 |---|---|---|
-| No resident runtime; launch from the human's shell; Windows Terminal, two panes | same; the default crew is now three panes (NGH-024) | matches |
+| No resident runtime; launch from the human's shell; Windows Terminal, two panes | same; the default crew is now four panes (NGH-024, NGH-027) | matches |
 | Named Claude sessions on the native mesh; permission-mode parity | same (`--name`, `--permission-mode auto` for all) | matches |
 | Mailbox with stored→sent→acked, incarnation fencing, `inbox`/`ack`, protocol-violation notes | NGH-019 | matches |
 | Folder lock, worktree lease at `assign` time | folder lock (NGH-010); worktrees dropped by owner, file claims instead (NGH-011) | deliberate departure |
 | Build slot, revision-bound evidence, cancellation (G4) | NGH-020 | in progress |
 | Acceptance gates G0–G5 as the delivery sequence | replaced by ticketed increments run by the loop; G0–G3 and most of G5 are covered, G4 pending | departure in method, not in content |
 | `down` with handover; `resume` re-dispatches acked-but-unfinished work | `down`/handover, loop retries with handover carry-over, `resume` after reboot | matches |
-| Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | Tester built into the default crew (NGH-024); Advisor and the rest not built, NGH-014 holds the design | in progress |
+| Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | Tester (NGH-024) and a dormant Fable Advisor that only Foreman may consult (NGH-027) built into the default crew; Reviewer/DevOps/Controller not built, NGH-014 holds the design | in progress |
 | Second coder, heterogeneous CLIs later | claims ready; per-role `tool:` with an agy Gemini Coder crew (NGH-012, not yet run live); Copilot (NGH-022) | in progress |
 | "Portable package", CLI language open | Python in its own repo; binary decision NGH-021 | open |
 | — (not in the design) | loop, result ladder, crew manifest, email on halt, denial capture | additions |
@@ -235,8 +268,10 @@ revision-bound evidence. No worktrees per shift (owner: not needed).
 
 ## Not decided / not built
 
-- Personas beyond Foreman + Coder + Tester (Advisor, DevOps, Reviewer, validator council): design in
+- Personas beyond Foreman + Advisor + Coder + Tester (DevOps, Reviewer, validator council): design in
   NGH-014, to be agreed with the owner before any is added. Roadmap on NGH-001.
+- Which frontier model the Advisor should run long term (Fable now; Astra or Mistral Large 4 need the
+  agents-cli transport), and whether a 2x4 container gives room for more members than four.
 - Whether to converge all messaging on mailbox + agents-cli, or keep native mesh for Claude.
 - Single binary (NGH-021): PyInstaller bundle vs Go port — owner's call.
 - Parallel shifts on separate codebases (NGH-013) — the locks make it possible; not yet run.

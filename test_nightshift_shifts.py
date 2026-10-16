@@ -5,6 +5,7 @@ Nothing here launches Windows Terminal or Claude: subprocess calls are faked.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import types
@@ -77,6 +78,7 @@ def test_start_dry_run_from_a_ticket_titles_panes_with_it(monkeypatch, tmp_path,
     launcher.start(['--dry-run', 'NGH-019'])
     plan = json.loads(capsys.readouterr().out)
     assert {r: v['pane_title'] for r, v in plan['roles'].items()} == {'Foreman': 'NGH-019 shift',
+                                                                     'Advisor': 'NGH-019 shift',
                                                                      'Coder': 'NGH-019 shift',
                                                                      'Tester': 'NGH-019 shift'}
     # every pane of the container, crew and empty slot alike, carries the one shift title (NGH-028)
@@ -139,20 +141,28 @@ roles:
 """
 
 
-def test_default_manifest_is_foreman_coder_tester():
+def test_default_manifest_is_foreman_advisor_coder_tester():
+    """NGH-027: the Advisor sits second, on its own model; the other roles run the crew model."""
     crew = launcher.load_crew()
     assert crew == {'name': 'default', 'model': 'claude-opus-5-5', 'permission_mode': 'auto',
                     'contract': 'result.json', 'layout': '1x4', 'slots': 4, 'roles': [
                         {'role': 'Foreman', 'brief': 'foreman.md', 'count': 1, 'human_contact': True, 'colour': 'red',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
+                        {'role': 'Advisor', 'brief': 'advisor.md', 'count': 1, 'human_contact': False,
+                         'colour': 'purple', 'tool': 'claude', 'model': 'claude-fable-5-1'},
                         {'role': 'Coder', 'brief': 'coder.md', 'count': 1, 'human_contact': False, 'colour': 'green',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
                         {'role': 'Tester', 'brief': 'tester.md', 'count': 1, 'human_contact': False, 'colour': 'blue',
                          'tool': 'claude', 'model': 'claude-opus-5-5'}]}
     members = launcher.crew_members(crew, 'S')
-    assert [(m['label'], m['identity'], m['peer']) for m in members] == [('Foreman', 'S-foreman', 'S-coder, S-tester'),
-                                                                          ('Coder', 'S-coder', 'S-foreman'),
-                                                                          ('Tester', 'S-tester', 'S-foreman')]
+    assert [(m['label'], m['identity'], m['peer']) for m in members] == [
+        ('Foreman', 'S-foreman', 'S-advisor, S-coder, S-tester'),
+        ('Advisor', 'S-advisor', 'S-foreman'),
+        ('Coder', 'S-coder', 'S-foreman'),
+        ('Tester', 'S-tester', 'S-foreman')]
+    assert [(m['label'], m['model'], m['colour']) for m in members] == [
+        ('Foreman', 'claude-opus-5-5', 'red'), ('Advisor', 'claude-fable-5-1', 'purple'),
+        ('Coder', 'claude-opus-5-5', 'green'), ('Tester', 'claude-opus-5-5', 'blue')]
 
 
 def test_custom_crew_defaults_and_numbered_members(monkeypatch, tmp_path):
@@ -434,7 +444,7 @@ def test_start_dry_run_gemini_coder_shows_the_agy_coder(monkeypatch, tmp_path, c
     assert plan['crew'] == 'gemini-coder'
     coder = plan['roles']['Coder']
     assert (coder['tool'], coder['model'], coder['exe']) == ('agy', 'gemini-3.8-flash-high', str(launcher.AGY_EXE))
-    assert 'tool' not in plan['roles']['Foreman']
+    assert 'tool' not in plan['roles']['Foreman'] and 'model' not in plan['roles']['Foreman']
 
 
 # ── role briefs live in nightshift-briefs/*.md ────────────────────────────────
@@ -530,8 +540,9 @@ def _fixed_uuid(monkeypatch):
     monkeypatch.setattr(launcher.uuid, 'uuid4', lambda: launcher.uuid.UUID('12345678123456781234567812345678'))
 
 
-def test_start_dry_run_default_crew_is_the_three_pane_golden(monkeypatch, tmp_path, capsys):
-    """Golden for the default crew (Foreman, Coder, Tester; NGH-024) in the 1x4 container (NGH-025): must not move."""
+def test_start_dry_run_default_crew_is_the_four_pane_golden(monkeypatch, tmp_path, capsys):
+    """Golden for the default crew (Foreman, Advisor, Coder, Tester; NGH-024, NGH-027) filling the 1x4 container
+    (NGH-025) with no empty slot: must not move."""
     _fixed_uuid(monkeypatch)
     work = tmp_path / 'work'
     work.mkdir()
@@ -552,10 +563,13 @@ def test_start_dry_run_default_crew_is_the_three_pane_golden(monkeypatch, tmp_pa
         'permission_mode': 'auto', 'lock': str(launcher.lock_path(cwd)),
         'roles': {
             'Foreman': {'session_name': f'{shift}-foreman', 'pane_title': f'{shift} shift',
-                        'peer': f'{shift}-coder, {shift}-tester',
+                        'peer': f'{shift}-advisor, {shift}-coder, {shift}-tester',
                         'receives_prompt': True,
                         'first_message': 'Begin the assignment: the task text is at the end of your role instructions, '
                                          'after "The human task for this shift follows, verbatim:".'},
+            'Advisor': {'session_name': f'{shift}-advisor', 'pane_title': f'{shift} shift', 'peer': f'{shift}-foreman',
+                        'receives_prompt': False, 'first_message': launcher.START_MESSAGES['Advisor'],
+                        'model': 'claude-fable-5-1'},
             'Coder': {'session_name': f'{shift}-coder', 'pane_title': f'{shift} shift', 'peer': f'{shift}-foreman',
                       'receives_prompt': False,
                       'first_message': 'Begin your Coder role: send READY to Foreman and await assignments.'},
@@ -564,15 +578,13 @@ def test_start_dry_run_default_crew_is_the_three_pane_golden(monkeypatch, tmp_pa
                        'first_message': 'Begin your Tester role: send READY to Foreman and await verification '
                                         'assignments.'}},
         'slots': [{'slot': 1, 'role': 'Foreman', 'pane_title': f'{shift} shift'},
-                  {'slot': 2, 'role': 'Coder', 'pane_title': f'{shift} shift'},
-                  {'slot': 3, 'role': 'Tester', 'pane_title': f'{shift} shift'},
-                  {'slot': 4, 'role': None, 'pane_title': f'{shift} shift'}],
+                  {'slot': 2, 'role': 'Advisor', 'pane_title': f'{shift} shift'},
+                  {'slot': 3, 'role': 'Coder', 'pane_title': f'{shift} shift'},
+                  {'slot': 4, 'role': 'Tester', 'pane_title': f'{shift} shift'}],
         'wt_argv': ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized', 'new-tab', *pane_args('Foreman', 1),
-                    ';', 'split-pane', '-V', '-s', '0.75', *pane_args('Coder', 2),
-                    ';', 'split-pane', '-V', '-s', '0.6667', *pane_args('Tester', 3),
-                    ';', 'split-pane', '-V', '-s', '0.5', '--profile', 'Nightshift Crew', '--title', f'{shift} shift',
-                    '--suppressApplicationTitle', '-d', '%USERPROFILE%', 'cmd.exe', '/k', py, script,
-                    '--slot', '4', '--state-dir', state,
+                    ';', 'split-pane', '-V', '-s', '0.75', *pane_args('Advisor', 2),
+                    ';', 'split-pane', '-V', '-s', '0.6667', *pane_args('Coder', 3),
+                    ';', 'split-pane', '-V', '-s', '0.5', *pane_args('Tester', 4),
                     ';', 'focus-pane', '-t', '0'],
         'prompt': 'task'}
     assert list(plan) == ['dry_run', 'shift', 'state_dir', 'cwd', 'ticket', 'prompt_file', 'model', 'profile',
@@ -1386,8 +1398,9 @@ def test_handover_lists_outstanding_claims(tmp_path, monkeypatch):
 
 
 def _nightshift_cmd():
-    """The command role_brief puts in place of {nightshift}: the suite Python and this repo's launcher."""
-    return f'{launcher.SUITE_PYTHON} {launcher.REPO_DIR / "nightshift_shifts.py"}'
+    """The command role_brief puts in place of {nightshift}: the suite Python and this repo's launcher, with forward
+    slashes (Git Bash strips unquoted backslashes)."""
+    return f'{launcher.SUITE_PYTHON} {(launcher.REPO_DIR / "nightshift_shifts.py").as_posix()}'
 
 
 def test_role_brief_fills_shift_and_tells_crew_about_claims():
@@ -1399,6 +1412,10 @@ def test_role_brief_fills_shift_and_tells_crew_about_claims():
     assert f'{ns} claims Nightshift-shift-abc' in foreman and foreman.rstrip().endswith('verbatim:')
     assert '{nightshift}' not in coder and '{nightshift}' not in foreman
     assert '{shift}' not in launcher.role_brief('Coder', 'c', 'f')   # no state dir: filled with ''
+    # c2 (NGH-027): no backslash in the launcher command, which Git Bash would strip when unquoted
+    for brief in (coder, foreman, launcher.role_brief('Advisor', 'S-advisor', 'S-foreman',
+                                                      Path('C:/x/Nightshift-shift-abc'), 'advisor.md')):
+        assert 'nightshift-shifts\\nightshift_shifts.py' not in brief and 'nightshift-shifts/nightshift_shifts.py' in brief
 
 
 
@@ -2279,17 +2296,20 @@ def test_wt_without_slots_has_no_slot_args():
 # ── start --dry-run shows the slots ───────────────────────────────────────────
 
 @pytest.mark.usefixtures('_container_isolated')
-def test_dry_run_default_crew_shows_three_crew_and_one_empty_slot(monkeypatch, tmp_path, capsys):
+def test_dry_run_default_crew_fills_all_four_slots_with_crew(monkeypatch, tmp_path, capsys):
     _fixed_uuid(monkeypatch)
     monkeypatch.chdir(tmp_path)
     launcher.start(['--dry-run', 'task'])
     plan = json.loads(capsys.readouterr().out)
     s = 'Nightshift-shift-12345678'
     assert plan['slots'] == [{'slot': 1, 'role': 'Foreman', 'pane_title': f'{s} shift'},
-                             {'slot': 2, 'role': 'Coder', 'pane_title': f'{s} shift'},
-                             {'slot': 3, 'role': 'Tester', 'pane_title': f'{s} shift'},
-                             {'slot': 4, 'role': None, 'pane_title': f'{s} shift'}]
-    assert list(plan)[-2:] == ['wt_argv', 'prompt'] or 'wt_argv' in plan
+                             {'slot': 2, 'role': 'Advisor', 'pane_title': f'{s} shift'},
+                             {'slot': 3, 'role': 'Coder', 'pane_title': f'{s} shift'},
+                             {'slot': 4, 'role': 'Tester', 'pane_title': f'{s} shift'}]
+    cells = _cells(plan['wt_argv'])
+    assert [c[c.index('--pane') + 1] for c in cells[:4]] == ['Foreman', 'Advisor', 'Coder', 'Tester']
+    assert [c[c.index('--slot') + 1] for c in cells[:4]] == ['1', '2', '3', '4']
+    assert 'cmd.exe' not in plan['wt_argv']   # no empty slot shell
     assert not (tmp_path / 'shifts').exists()
 
 
@@ -2466,11 +2486,11 @@ def test_spawn_into_slot_3_of_a_two_role_crew(tmp_path, injected, capsys):
 @pytest.mark.usefixtures('_container_isolated')
 def test_spawn_takes_the_first_free_slot(tmp_path, injected, capsys):
     d = _container(tmp_path, members=('Foreman', 'Coder', 'Tester'), free=(4,))
-    launcher.spawn([CONT_SHIFT, '--role', 'Advisor'])
+    launcher.spawn([CONT_SHIFT, '--role', 'Helper'])
     out = json.loads(capsys.readouterr().out)
     assert out['slot'] == 4 and injected[0][3] == '2504'
-    advisor = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
-    assert advisor['brief'] == 'coder.md' and advisor['colour'] == 'yellow'   # no advisor.md brief yet
+    helper = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert helper['brief'] == 'coder.md' and helper['colour'] == 'yellow'   # not a manifest role, no helper.md
 
 
 @pytest.mark.usefixtures('_container_isolated')
@@ -2828,3 +2848,174 @@ def test_own_ancestors_walks_parents_and_stops_on_a_cycle(monkeypatch):
 def test_parent_pids_sees_this_process_and_its_parent():
     parents = launcher.parent_pids()   # read-only Toolhelp snapshot
     assert parents.get(os.getpid()) == os.getppid()
+
+
+# ── Advisor role in the default crew (NGH-027) ────────────────────────────────
+
+_PLACEHOLDERS = ('{role}', '{identity}', '{peer_name}', '{state_dir}', '{shift}', '{nightshift}')
+
+
+def _default_member(label, shift='S'):
+    return next(m for m in launcher.crew_members(launcher.load_crew(), shift) if m['label'] == label)
+
+
+def test_advisor_brief_fills_identity_and_states_its_answer_format():
+    state = Path('C:/x/Nightshift-shift-abc')
+    advisor = launcher.role_brief('Advisor', 'S-advisor', 'S-foreman', state, 'advisor.md')
+    assert 'S-advisor' in advisor and 'S-foreman' in advisor and 'Nightshift-shift-abc' in advisor
+    assert not any(p in advisor for p in _PLACEHOLDERS)
+    assert str(state / 'bus.jsonl') in advisor and 'mailbox' in advisor
+    assert 'DECISION:' in advisor and 'WHY:' in advisor and 'ASK-HUMAN:' in advisor
+    assert 'Advisor Foreman --kind result' in advisor
+    assert re.search(r'never edits? (any )?files', advisor, re.IGNORECASE)
+    assert 'never launch Claude sessions' in advisor   # common.md still leads
+
+
+def test_foreman_brief_names_the_advisor():
+    foreman = launcher.role_brief('Foreman', 'S-foreman', 'S-advisor, S-coder, S-tester',
+                                  Path('C:/x/Nightshift-shift-abc'))
+    assert 'Advisor' in foreman and 'adv-' in foreman
+    assert 'Foreman Advisor --kind assignment' in foreman
+    assert foreman.rstrip().endswith('verbatim:')
+
+
+def test_advisor_opening_is_dormant_with_no_ready():
+    advisor = _default_member('Advisor')
+    opening = launcher.opening_message(advisor)
+    assert opening == launcher.START_MESSAGES['Advisor']
+    # no instruction to send READY (a "do not send READY" is the point of a dormant opening)
+    assert not re.search(r'(?<!not )send READY', opening, re.IGNORECASE)
+    assert re.search(r'wait', opening, re.IGNORECASE) and 'Foreman' in opening
+    assert opening !='Begin your Advisor role: send READY to Foreman and await assignments.'
+
+
+def test_pane_start_launches_the_default_advisor_on_its_own_model_in_purple(monkeypatch, tmp_path):
+    state = tmp_path / 'Nightshift-shift-advi0001'
+    state.mkdir()
+    (state / 'prompt.txt').write_text('THE TASK', encoding='utf-8')
+    seen = {}
+
+    class Child:
+        pid = 44
+
+        def wait(self):
+            return 0
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.setdefault('colour', colour))
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane('Advisor', str(state), start=True, cwd=str(tmp_path))
+    cmd = seen['cmd']
+    assert cmd[cmd.index('--name') + 1] == 'Nightshift-shift-advi0001-advisor'
+    assert cmd[cmd.index('--model') + 1] == 'claude-fable-5-1' and seen['colour'] == 'purple'
+    brief = cmd[cmd.index('--append-system-prompt') + 1]
+    assert 'THE TASK' not in brief and 'ASK-HUMAN:' in brief
+
+
+# ── msg send: the Advisor talks only to the human contact ────────────────────
+
+def _advisor_shift(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'shifts')
+    name = 'Nightshift-shift-advm0001'
+    d = tmp_path / 'shifts' / name
+    d.mkdir(parents=True)
+    members = launcher.crew_members(launcher.load_crew(), name)
+    (d / 'crew.json').write_text(json.dumps({'crew': 'default', 'members': members}), encoding='utf-8')
+    return d
+
+
+@pytest.mark.parametrize('sender, recipient', [('Coder', 'Advisor'), ('Advisor', 'Tester'), ('Tester', 'Advisor'),
+                                               ('Advisor', 'Coder')])
+def test_msg_send_refuses_advisor_traffic_without_the_human_contact(monkeypatch, tmp_path, capsys, sender, recipient):
+    d = _advisor_shift(monkeypatch, tmp_path)
+    with pytest.raises(SystemExit):
+        launcher.msg(['send', d.name, sender, recipient, '--kind', 'note', '--body', 'psst'])
+    assert capsys.readouterr().out == ''
+    assert not (d / 'mailbox.sqlite3').exists() or _rows(d) == []
+
+
+def test_msg_send_stores_foreman_advisor_traffic_both_ways(monkeypatch, tmp_path, capsys):
+    d = _advisor_shift(monkeypatch, tmp_path)
+    launcher.msg(['send', d.name, 'Foreman', 'Advisor', '--kind', 'assignment', '--asg', 'adv-1', '--body', 'which?'])
+    launcher.msg(['send', d.name, f'{d.name}-advisor', 'foreman', '--kind', 'result', '--asg', 'adv-1',
+                  '--body', 'DECISION: A\nWHY: cheaper'])
+    assert capsys.readouterr().out == 'msg:1 kind:assignment asg:adv-1\nmsg:2 kind:result asg:adv-1\n'
+    with pytest.raises(SystemExit):
+        launcher.msg(['send', d.name, 'Coder', 'Advisor', '--kind', 'note', '--body', 'psst'])
+    assert [(r['sender'], r['recipient'], r['kind']) for r in _rows(d)] == [('Foreman', 'Advisor', 'assignment'),
+                                                                          ('Advisor', 'Foreman', 'result')]
+    # the rest of the crew is unaffected by the guard
+    launcher.msg(['send', d.name, 'Coder', 'Foreman', '--kind', 'note', '--body', 'READY'])
+    assert len(_rows(d)) == 3
+
+
+# ── spawn of a manifest role absent from crew.json ───────────────────────────
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_of_a_manifest_role_takes_its_brief_colour_and_model(tmp_path, injected, capsys):
+    d = _container(tmp_path)   # crew 'default', but crew.json holds only Foreman and Coder
+    launcher.spawn([CONT_SHIFT, '--role', 'Advisor'])
+    assert json.loads(capsys.readouterr().out)['slot'] == 3
+    advisor = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert (advisor['brief'], advisor['colour'], advisor['tool'], advisor['model']) == \
+        ('advisor.md', 'purple', 'claude', 'claude-fable-5-1')
+    assert advisor['peer'] == f'{CONT_SHIFT}-foreman' and advisor['human_contact'] is False
+    launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
+    tester = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert (tester['brief'], tester['colour'], tester['model']) == ('tester.md', 'blue', 'claude-opus-5-5')
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_of_a_manifest_role_on_another_tool_keeps_brief_and_colour_not_model(tmp_path, injected, capsys):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Advisor', '--cli', 'gemini'])
+    advisor = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert (advisor['brief'], advisor['colour'], advisor['tool'], advisor['model']) == \
+        ('advisor.md', 'purple', 'agy', launcher.AGY_MODEL)
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_of_a_role_not_in_the_shifts_manifest_is_unchanged(monkeypatch, tmp_path, injected, capsys):
+    _crew_file(monkeypatch, tmp_path, 'pair', PAIR)
+    d = _container(tmp_path)
+    crew = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    (d / 'crew.json').write_text(json.dumps({**crew, 'crew': 'pair'}), encoding='utf-8')
+    launcher.spawn([CONT_SHIFT, '--role', 'Advisor'])
+    advisor = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert (advisor['colour'], advisor['model']) == ('yellow', 'claude-opus-5-5')   # pair has no Advisor
+
+
+# ── start --dry-run names a Claude role's model only when it is not the crew model (adv-1) ──
+
+MODELS = """\
+name: models
+model: claude-opus-5-5
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true}
+  - {role: Advisor, brief: advisor.md, model: claude-fable-5-1}
+  - {role: Coder, brief: coder.md, model: claude-opus-5-5}
+  - {role: Tester, brief: tester.md, tool: agy, model: gemini-3.8-flash-high}
+"""
+
+
+def test_dry_run_shows_model_only_for_claude_roles_off_the_crew_model(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    _crew_file(monkeypatch, tmp_path, 'models', MODELS)
+    monkeypatch.chdir(tmp_path)
+    launcher.start(['--dry-run', '--crew', 'models', 'task'])
+    roles = json.loads(capsys.readouterr().out)['roles']
+    assert 'model' not in roles['Foreman'] and 'tool' not in roles['Foreman']   # crew model by default
+    assert 'model' not in roles['Coder'] and 'tool' not in roles['Coder']       # crew model named explicitly
+    assert roles['Advisor']['model'] == 'claude-fable-5-1' and 'tool' not in roles['Advisor'] \
+        and 'exe' not in roles['Advisor']
+    tester = roles['Tester']   # a non-Claude role keeps its tool, model and exe
+    assert (tester['tool'], tester['model'], tester['exe']) == ('agy', 'gemini-3.8-flash-high', str(launcher.AGY_EXE))
+
+
+def test_dry_run_default_crew_names_only_the_advisors_model(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    launcher.start(['--dry-run', 'task'])
+    roles = json.loads(capsys.readouterr().out)['roles']
+    assert {label: r.get('model') for label, r in roles.items()} == {
+        'Foreman': None, 'Advisor': 'claude-fable-5-1', 'Coder': None, 'Tester': None}

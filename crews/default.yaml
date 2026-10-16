@@ -1,7 +1,8 @@
 # Nightshift crew manifest: `nightshift start` uses this one; `nightshift start --crew NAME`
 # reads nightshift-crews/NAME.yaml instead. Briefs are files in nightshift-briefs/ (common.md
 # always comes first). Exactly one role has human_contact: true and count 1; 2 to 8 panes in all.
-# The default crew is Foreman, Coder and Tester in slots 1-3 of the 1x4 container; slot 4 is an empty shell.
+# The default crew is Foreman, Advisor, Coder and Tester filling all four slots of the 1x4 container,
+# so `spawn` has no free slot until a member dies.
 # layout: split instead sizes the tab to the crew (2-8 panes, a second row above 4).
 name: default
 permission_mode: auto        # Claude --permission-mode for every pane
@@ -14,6 +15,14 @@ roles:
     colour: red
     count: 1
     human_contact: true      # receives the task; the only one who talks to the human
+  # Dormant frontier-model consultant (NGH-027): no READY, woken only by Foreman, answers only Foreman.
+  # Switching it to Astra (Codex) or Mistral Large 4 (OpenCode) later is this role's model:/tool: lines
+  # plus the agents-cli transport the Gemini Coder uses (crews/gemini-coder.yaml).
+  - role: Advisor
+    brief: advisor.md
+    colour: purple
+    count: 1
+    model: claude-fable-5-1  # role-level; the crew model above stays Opus
   - role: Coder
     brief: coder.md
     colour: green

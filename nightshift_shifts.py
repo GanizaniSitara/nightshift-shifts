@@ -1,13 +1,14 @@
-"""Nightshift launcher: one Windows Terminal tab, Foreman, Coder and Tester side by side.
+"""Nightshift launcher: one Windows Terminal tab, Foreman, Advisor, Coder and Tester side by side.
 
 `start "task"` (via C:/scripts/nightshift.cmd) persists the task to
-<state_dir>/prompt.txt and starts interactive Claude Opus 5.5 Foreman, Coder and Tester (the default crew)
-in the "Nightshift Crew" Terminal profile (Cascadia Mono 12, dark). Only Foreman receives the
-task; Coder and Tester get their role and peer identity, send READY and await work. The task
+<state_dir>/prompt.txt and starts interactive Claude Foreman, Advisor, Coder and Tester (the default crew;
+Opus 5.5, the Advisor Fable 5.1) in the "Nightshift Crew" Terminal profile (Cascadia Mono 12, dark). Only Foreman
+receives the task; Coder and Tester get their role and peer identity, send READY and await work; the Advisor
+(NGH-027) stays dormant until Foreman consults it, and the mailbox lets only Foreman address it. The task
 reaches the panes by file path only, never as argv text. Panes run in the
 caller's current directory (no worktree is created) in Claude's auto permission
 mode (--permission-mode auto). Each `start` is a new shift: mesh names are
-<shift>-foreman / <shift>-coder / <shift>-tester, pane titles are '<ticket or shift> <Role>' (e.g. 'NGH-019 Foreman'), a loop
+<shift>-foreman / <shift>-advisor / <shift>-coder / <shift>-tester, pane titles are '<ticket or shift> <Role>' (e.g. 'NGH-019 Foreman'), a loop
 window is titled 'Nightshift <first ticket>..<last ticket>', and
 <state_dir>/<Role>.json records pid, name, peer and model. There is no restart or
 resume; a closed pane is not relaunched. `start --dry-run` prints the plan as
@@ -64,7 +65,10 @@ START_PERMISSION_MODE = 'auto'  # owner decision 2026-10-15: auto (classifier-gu
 START_MESSAGES = {'Foreman': 'Begin the assignment: the task text is at the end of your role instructions, after '
                              '"The human task for this shift follows, verbatim:".',
                   'Coder': 'Begin your Coder role: send READY to Foreman and await assignments.',
-                  'Tester': 'Begin your Tester role: send READY to Foreman and await verification assignments.'}
+                  'Tester': 'Begin your Tester role: send READY to Foreman and await verification assignments.',
+                  'Advisor': 'You are the Advisor and dormant: do not send READY, do not poll, read or run anything; '
+                             'wait silently until Foreman messages you.'}
+ADVISOR = 'Advisor'   # the crew label only the human contact may message, and that answers only it (NGH-027)
 MAILKEEP = 'C:/Tools/mailkeep/Mailkeep.Cli.exe'
 NOTIFY_IDENTITY = 'owner_id'                # Mailkeep identity for owner@example.com
 NOTIFY_TO = 'owner@example.com'        # `loop` emails the owner here when it halts or finishes
@@ -210,8 +214,8 @@ def role_brief(role, identity, peer_name, state_dir='', brief=None):
     shift = Path(state_dir).name if state_dir else ''
     # Plain replace, not str.format: the briefs contain literal JSON braces.
     # {nightshift} is the exact command: the crews' shell is Git Bash, where the nightshift.cmd shim
-    # does not resolve by bare name.
-    nightshift_cmd = f'{SUITE_PYTHON} {REPO_DIR / "nightshift_shifts.py"}'
+    # does not resolve by bare name, and forward slashes because Git Bash strips unquoted backslashes.
+    nightshift_cmd = f'{SUITE_PYTHON} {(REPO_DIR / "nightshift_shifts.py").as_posix()}'
     for key, value in (('{role}', role), ('{identity}', identity), ('{peer_name}', peer_name),
                        ('{state_dir}', str(state_dir)), ('{shift}', shift), ('{nightshift}', nightshift_cmd)):
         text = text.replace(key, value)
@@ -768,12 +772,12 @@ def release_lock(shift_name):
 def start(argv):
     parser = argparse.ArgumentParser(
         prog='nightshift start',
-        description='Start a Nightshift crew: Claude Foreman, Coder and Tester side by side in one Windows Terminal tab '
+        description='Start a Nightshift crew: Claude Foreman, Advisor, Coder and Tester side by side in one Windows Terminal tab '
                     '(the default crew; --crew NAME uses crews/NAME.yaml for other roles and pane counts). '
                     'The task is saved to <state_dir>/prompt.txt and given to Foreman only; Coder and Tester send '
-                    'READY and wait for Foreman to delegate work. Panes run in the current directory (no worktree is '
+                    'READY and wait for Foreman to delegate work; the Advisor stays dormant until Foreman consults it. Panes run in the current directory (no worktree is '
                     'created) in Claude auto permission mode. Each start is a new shift with its own '
-                    '<shift>-foreman / <shift>-coder / <shift>-tester session names; there is no restart or resume, and a closed '
+                    '<shift>-foreman / <shift>-advisor / <shift>-coder / <shift>-tester session names; there is no restart or resume, and a closed '
                     'pane is not relaunched. A folder holds one live shift at a time: start exits with code 3 '
                     'while another live shift holds the working folder (nightshift down releases it).',
         epilog='Example: nightshift start "Add a --verbose flag to report.py"  |  '
@@ -787,7 +791,7 @@ def start(argv):
                         help='an earlier shift folder for the same task: its handover.md is appended so the crew carries on')
     parser.add_argument('--crew', default='default',
                         help='crew manifest crews/CREW.yaml: roles, briefs, colours, counts, model '
-                             '(default: default = one Foreman, one Coder, one Tester)')
+                             '(default: default = one Foreman, one Advisor, one Coder, one Tester)')
     parser.add_argument('--dry-run', action='store_true',
                         help='print the intended command, roles and prompt as JSON; launch and write nothing')
     args = parser.parse_args(argv)
@@ -827,9 +831,11 @@ def start(argv):
             'roles': {m['label']: {'session_name': m['identity'], 'pane_title': pane_title(ticket or name),
                                    'peer': m['peer'],
                                    'receives_prompt': m['human_contact'], 'first_message': opening_message(m),
-                                   # Claude roles keep the pre-manifest shape; other tools show what will run
+                                   # Claude roles on the crew model keep the pre-manifest shape; a Claude role on
+                                   # another model (the Fable Advisor) shows it; other tools show what will run
                                    **({'tool': m['tool'], 'model': m['model'], 'exe': str(AGY_EXE)}
-                                      if m['tool'] != 'claude' else {})}
+                                      if m['tool'] != 'claude' else
+                                      {'model': m['model']} if m['model'] != crew['model'] else {})}
                       for m in members}}
         if crew['slots']:
             # The container (NGH-025): which slot holds which crew pane, and the empty ones `spawn` can fill.
@@ -1242,6 +1248,19 @@ def spawn(argv):
               'brief': f'{role.lower()}.md' if (BRIEFS_DIR / f'{role.lower()}.md').is_file() else 'coder.md',
               'colour': same_role['colour'] if same_role else 'yellow', 'human_contact': False, 'tool': tool,
               'model': model, 'peer': lead['identity']}
+    if not existing:
+        # a role the shift never had but its crew manifest names (an Advisor added to an older 3-pane shift):
+        # the manifest gives brief and colour, and the model when the manifest role runs the spawned tool
+        try:
+            manifest_roles = load_crew(saved.get('crew', 'default'))['roles']
+        except SystemExit:
+            manifest_roles = []   # the shift's manifest is gone or unusable: spawn as before
+        manifest_role = next((r for r in manifest_roles if r['role'].lower() == role.lower()), None)
+        if manifest_role:
+            member.update(role=manifest_role['role'], label=manifest_role['role'], brief=manifest_role['brief'],
+                          colour=manifest_role['colour'])
+            if manifest_role['tool'] == tool:
+                member['model'] = manifest_role['model']
     if existing:
         member['label'] = existing['label']   # a gone member is restarted under its own label
     updated = [m for m in members if m is not existing] + [member]
@@ -1504,6 +1523,11 @@ def msg(argv):
     state_dir = resolve_shift(args.shift)
     if args.action == 'send':
         sender, recipient = resolve_role(state_dir, args.sender), resolve_role(state_dir, args.recipient)
+        lead = human_contact_label(state_dir)
+        if recipient == ADVISOR and sender != lead:
+            raise SystemExit(f'only {lead} may address the {ADVISOR}; nothing stored')
+        if sender == ADVISOR and recipient != lead:
+            raise SystemExit(f'the {ADVISOR} answers only {lead}; nothing stored')
         with mailbox(state_dir) as conn:
             msg_id = insert_message(conn, state_dir, args.kind, sender, recipient, args.body, args.asg)
             print(msg_header(get_message(conn, msg_id)))
