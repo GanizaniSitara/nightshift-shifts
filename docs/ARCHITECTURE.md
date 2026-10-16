@@ -84,8 +84,24 @@ decision not yet taken (NGH-014).
 ## Concurrency
 
 Folder lock between shifts (NGH-010); file claims between coders inside a shift (NGH-011);
-build slot (NGH-020, in progress) serialises expensive builds per folder and records
+build slot (NGH-020) serialises expensive builds per folder and records
 revision-bound evidence. No worktrees per shift (owner: not needed).
+
+## Design vs built — reconciliation (keep current)
+
+| Reviewed design said | Built | Status |
+|---|---|---|
+| No resident runtime; launch from the human's shell; Windows Terminal, two panes | same | matches |
+| Named Claude sessions on the native mesh; permission-mode parity | same (`--name`, `--permission-mode auto` for all) | matches |
+| Mailbox with stored→sent→acked, incarnation fencing, `inbox`/`ack`, protocol-violation notes | NGH-019 | matches |
+| Folder lock, worktree lease at `assign` time | folder lock (NGH-010); worktrees dropped by owner, file claims instead (NGH-011) | deliberate departure |
+| Build slot, revision-bound evidence, cancellation (G4) | NGH-020 | in progress |
+| Acceptance gates G0–G5 as the delivery sequence | replaced by ticketed increments run by the loop; G0–G3 and most of G5 are covered, G4 pending | departure in method, not in content |
+| `down` with handover; `resume` re-dispatches acked-but-unfinished work | `down`/handover, loop retries with handover carry-over, `resume` after reboot | matches |
+| Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | none built; NGH-014 holds the design for owner agreement | not started |
+| Second coder, heterogeneous CLIs later | claims ready; Gemini Coder spec'd (NGH-012), Copilot (NGH-022) | not started |
+| "Portable package", CLI language open | Python in its own repo; binary decision NGH-021 | open |
+| — (not in the design) | loop, result ladder, crew manifest, email on halt, denial capture | additions |
 
 ## Not decided / not built
 
