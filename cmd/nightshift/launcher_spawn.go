@@ -402,7 +402,7 @@ func runSpawn(argv []string, quiet bool) error {
 		model = objectString(sameTool, "model")
 	} else if tool == "claude" {
 		model = objectString(saved, "model")
-		if model == "" {
+		if !strings.HasPrefix(model, "claude") { // a non-Claude crew's model (e.g. gemini-4-argon-high) is not a Claude model
 			model = launcherModel
 		}
 	} else {

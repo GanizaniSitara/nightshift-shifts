@@ -2252,7 +2252,8 @@ def spawn(argv):
     if same_tool:
         model = same_tool['model']
     else:
-        model = (saved.get('model') or MODEL) if tool == 'claude' else DEFAULT_TOOL_MODELS[tool]
+        crew_model = saved.get('model') or ''
+        model = (crew_model if crew_model.startswith('claude') else MODEL) if tool == 'claude' else DEFAULT_TOOL_MODELS[tool]
     member = {'role': same_role['role'] if same_role else role, 'label': role, 'identity': f'{shift}-{role.lower()}',
               'brief': f'{role.lower()}.md' if (BRIEFS_DIR / f'{role.lower()}.md').is_file() else 'coder.md',
               # like the brief: the role's own persona, else the Coder's (a new label such as Coder2 is a coder)
