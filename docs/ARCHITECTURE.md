@@ -47,7 +47,10 @@ The three out-of-shift commands operate on `floor.json` and emit JSON reports:
 Warden delivers only stored messages addressed to the recipient's current incarnation. A modern
 `agents-cli send` receipt must say `submitted: true`. An older `enter: true`/`sent: <header>` receipt
 also needs tail evidence: the header in history above an empty current composer. Explicit
-`submitted: false` remains unconfirmed. The per-shift `warden-delivery.json` records each attempt
+`submitted: false` remains unconfirmed, except on a copilot pane: Copilot can leave the pasted header
+in its composer (TECH-225, seen live 16 Oct), so `send_header` presses `agents-cli key PID enter` up to
+`COPILOT_ENTER_TRIES` (3) times, each only while the tail shows the header still in the current
+composer and no select/confirm menu footer, and confirms with the same tail check. The per-shift `warden-delivery.json` records each attempt
 before injection; subsequent patrols check uncertain delivery through the tail without injecting
 the same header again. If confirmation stays unavailable, the row remains stored for inspection.
 
@@ -470,7 +473,7 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 | Piece | Role | Where |
 |---|---|---|
 | `nightshift_shifts.py` | the launcher: `start` (`--no-worktree` supported by NGH-040), `status`, `down` (`--close` default, explicit `--hold`), `spawn` (NGH-025), `land` (NGH-040), `cleaner`, `warden`, `gaffer` and `floor.json` (NGH-035), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), `log` (the shift bus, NGH-026) | this repo |
-| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`; copilot also `none`\|`minimal`\|`max`), `context` (`default`\|`long_context`, copilot only), `account` (`1`\|`2`) and `permissions` (`skip`\|`auto`\|`default`), pane layout | this repo |
+| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`; copilot also `none`\|`minimal`\|`max`), `context` (`default`\|`long_context`, copilot only), `account` (`1`\|`2`), `permissions` (`skip`\|`auto`\|`default`) and the top-level `max_credits` (the shift's Copilot credit budget, split evenly across the Copilot panes), pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
 | `personas/*.yaml` | each role's persona (identity, what good looks like, how you work, never), rendered above the brief (NGH-032) | this repo |
 | shift folder | `C:\nightshift\shifts\<shift>\` — the source of truth for one new shift (below) | data, not code |
@@ -493,7 +496,7 @@ This ticket changes architecture only; saved fixtures and runtime verification b
    worktree mode does not hold a whole-repository folder lock while the crew codes and tests. The
    command writes `prompt.txt` and runs `wt.exe` with one `new-tab`/`split-pane` per role. Each pane
    runs this same script as a **wrapper** (`--pane ROLE`), which launches the role's CLI, records
-   `<Role>.json` (pid, name, start time, cwd), answers Claude's trust dialog if it appears, sets the
+   `<Role>.json` (pid, name, start time, cwd), answers the CLI's own trust dialog if it appears, sets the
    role colour, and waits for the CLI to exit. `<Role>.json` also records the role's `tool` (claude or
    agy), which `status` reports per role.
 2. Each Claude member starts with `--name <shift>-<role>`, `--permission-mode auto` (owner
@@ -538,7 +541,8 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   `GUIDANCE` as mailbox messages under the same asg.
 - Per-CLI Apprentice manifests (2x4, the default Claude Foreman/Advisor/Coder/Tester plus Apprentice):
   `crews/apprentice-gemini.yaml` (agy, `gemini-3.8-flash-high`), `crews/apprentice-codex.yaml` (codex,
-  `gpt-5.6-luna`, account 2), `crews/apprentice-copilot.yaml` (copilot, `gemini-3.8-flash-high`). They
+  `gpt-5.6-luna`, account 2), `crews/apprentice-copilot.yaml` (copilot, `gemini-3.8-flash`; `gemini-3.8-flash-high` is not in the
+  Copilot catalog and falls back to Auto). They
   serve both `start --crew NAME` and `spawn --crew NAME`. OpenCode and Qwen have none yet: they are not
   in `TOOLS`, so `load_crew` would refuse the manifest.
 - Apprentice CLI rotation (NGH-029), one live shift per CLI in this order, each recorded on the ticket
@@ -581,7 +585,7 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   "<brief>\n\n<opening message>"` (`agy_command`). agy has no `--name` or system-prompt flag, so the brief
   is the prompt text. The wrapper scrubs the env the same way (`crew_env`), then names the pane with
   `agents-cli name <pid> <identity>` (`register_name`, failures ignored) so it can be addressed by its
-  shift identity. The trust-dialog answer and `/color` are Claude-only and skipped.
+  shift identity. `/color` is Claude-only and skipped; the trust dialog is answered per tool (below).
 - `pid_alive` counts `agy.exe` as a crew process alongside `claude.exe`/`node.exe`.
 - `start --dry-run` adds `tool`, `model`, `exe` and `command` to each non-Claude role; `command` is the
   argv the pane will run, built by the same `tool_command` that `pane()` uses, with `<brief>` and
@@ -597,6 +601,32 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   only on tools in `CONTEXT_TOOLS` (copilot), and is refused on any other tool or with any other value.
   It reaches Copilot as `--context <tier>`, and is carried like `reasoning` through `crew.json`, `spawn`
   and `pane()`. Without `reasoning` or `context`, `copilot_command` builds the same argv as before.
+- `max_credits:` (NGH-041) is a top-level manifest key: the shift's GitHub Copilot AI credit budget
+  (owner, 16 Oct: per whole shift, not per pane). `load_crew` splits it evenly (integer floor) over every
+  Copilot pane (the sum of `count` over `tool: copilot` roles) and gives each such role its share as
+  `max_credits`. It refuses a value that is not a whole number (bool included), a crew with no Copilot
+  panes, and a share below 30 (`COPILOT_MIN_CREDITS`, Copilot's minimum per `copilot help limits`), naming
+  the budget, the pane count and the share. A per-role `max_credits:` is refused and points at the
+  top-level key, so the budget has one source of truth. The share is carried like `reasoning` through
+  `crew_members`, `crew.json` (which also records the budget as top-level `max_credits`), `spawn`
+  (respawn and `--crew` included, same-tool only) and `pane()`, and reaches Copilot as
+  `--max-ai-credits <share> --usage-output-file <state_dir>/<label>-usage.json`, a soft cap per pane.
+  `start --dry-run` shows the budget first in the plan and each Copilot role's share.
+  Before writing `result.json`, the Claude Foreman (`foreman.md`) reads each Copilot pane's credits from
+  that file, or from `/usage` sent with agents-cli and read from its tail, and records
+  `"usage": {"budget": B, "total_used": T, "panes": {"<label>": {"credits_used": n, "cap": share}}}`.
+  `COPILOT_MODEL` (the default for a spawned copilot role) is `gemini-3.8-flash`.
+- `crews/claude-copilot.yaml` (NGH-041, 2x4): Foreman, Advisor and Coder on Claude `claude-opus-5-5`
+  (`foreman.md`, `advisor.md`, `coder.md`); Apprentice and Tester on copilot `gemini-3.8-flash` with
+  `reasoning: high`, `context: long_context`, `permissions: skip` (`apprentice.md`, `tester-cli.md`), and a
+  shift budget `max_credits: 60`, 30 for each of the two Copilot panes. Owner decision 16 Oct 12:52: the Apprentice is the primary coder on Flash and the Coder
+  the senior buddy, paid only on uplift (NGH-038); Apprentice is listed before Coder for NGH-038
+  Apprentice-first routing. The owner changes the budget in that one line.
+- Mixed crews under a Claude Foreman: `foreman.md` drives every member whose `crew.json` tool is not
+  claude only through the mailbox plus agents-cli (msg send, `agents-cli send` header and text, msg sent,
+  `agents-cli wait --match '<ROLE>-DONE|<ROLE>-BLOCKED'`, tail, ack), including a non-Claude Tester's
+  verification handoff, whose stored body starts with `TESTED-PASS` or `TESTED-FAIL`. Claude members stay
+  on SendMessage. `foreman-cli.md` crews are unchanged.
 - `crews/copilot.yaml` is the all-Copilot work crew (2x4, every role `tool: copilot`, `permissions: skip`).
   Every role runs `gemini-3.8-flash` with `reasoning: high` and `context: long_context` (owner's
   16 Oct budget decision; NGH-034's proposed Accountant follows the same rule).
@@ -720,7 +750,21 @@ mailbox/bus note; after compaction, first reread `ticket.txt`, `prompt.txt`, `re
 result ladder, claims, inbox, and `handover.md`, then continue.
 
 `spawn` sends the wrapper command to `agents-cli _attach inject PID 1` through stdin, matching the
-installed helper protocol; command text is not placed in argv. Failed injection reports stdout and
+installed helper protocol; command text is not placed in argv. `inject_command` (Claude `/color`) and the
+Codex `/rename` do the same (NGH-041); passing the text as argv made the helper fail, which is how Claude
+panes lost their role colours.
+
+Trust dialogs (NGH-041): `accept_trust_prompt(child, tool)` runs in every claude, agy, codex and copilot
+pane. `TRUST_PROMPTS` holds each CLI's literal dialog text, the highlighted option that accepts it and,
+for Claude, the banner that proves it is already past it: Claude `Yes, I trust this folder`; agy
+`Do you trust the contents of this project?` / `> Yes, I trust this folder`; Codex `Trust this folder?
+Codex can read...` / `› Trust and continue`; Copilot `Do you trust the files in this folder?` /
+`❯ 1. Yes` (not option 2, which remembers the folder). The texts come from agents-cli's agy fixtures
+and from the strings in the installed codex.exe and Copilot `index.js`. Answering is the same as for
+Claude: poll `agents-cli _attach peek` for about 20 s, act only while the dialog text is on screen (the
+sentence is matched across wrapped lines and box borders), press Down until the accepting option is
+highlighted, then Enter. The CLI runs in the shift's own folder, so the dialog is about that folder.
+When Codex says trusting would apply to the repository root instead, the dialog is left for the human. Failed injection reports stdout and
 stderr (including structured helper errors), restores `crew.json`, and leaves the slot available.
 
 ## The shift folder is the source of truth

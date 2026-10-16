@@ -11,4 +11,4 @@ roles:
   - {role: Advisor, brief: advisor.md, colour: purple, count: 1, model: claude-fable-5-1}
   - {role: Coder, brief: coder.md, colour: green, count: 1}
   - {role: Tester, brief: tester.md, colour: blue, count: 1}
-  - {role: Apprentice, brief: apprentice.md, colour: yellow, count: 1, tool: copilot, model: gemini-3.8-flash-high, permissions: skip}
+  - {role: Apprentice, brief: apprentice.md, colour: yellow, count: 1, tool: copilot, model: gemini-3.8-flash, permissions: skip}

@@ -532,7 +532,7 @@ def _capture_role_launch(monkeypatch, tmp_path, role, cwd, *, member_role=None, 
                         lambda cmd, **kw: seen.update(cmd=cmd, cwd=kw['cwd']) or Child())
     monkeypatch.setattr(launcher.subprocess, 'run',
                         lambda *a, **kw: pytest.fail('unexpected subprocess.run'))
-    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: None)
     monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: None)
     monkeypatch.setattr(launcher, 'register_name', lambda *a: None)
     monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a: None)
@@ -740,6 +740,7 @@ def test_spawn_crew_carries_permissions_and_pane_uses_them(tmp_path, injected, m
             return 0
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
     monkeypatch.setattr(launcher, 'register_name', lambda pid, name: None)
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: None)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
     launcher.pane('Apprentice', str(d), start=True, cwd=str(tmp_path), slot=3)
@@ -806,7 +807,7 @@ def test_pane_start_agy_coder_runs_agy_and_registers_its_name(monkeypatch, tmp_p
     monkeypatch.setattr(launcher.subprocess, 'Popen',
                         lambda cmd, **k: seen.update(cmd=cmd, cwd=k['cwd'], env=k['env']) or Child())
     monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: seen.setdefault('runs', []).append(argv))
-    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: pytest.fail('trust prompt is Claude-only'))
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child, tool='claude': seen.update(trust=tool))
     monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: pytest.fail('/color is Claude-only'))
     monkeypatch.setattr('builtins.input', lambda *a: '')
     launcher.pane('Coder', str(state), start=True, cwd=str(tmp_path), crew='gemini-coder')
@@ -814,7 +815,7 @@ def test_pane_start_agy_coder_runs_agy_and_registers_its_name(monkeypatch, tmp_p
     brief = launcher.role_brief('Coder', f'{s}-coder', f'{s}-foreman', str(state), 'coder-agy.md')
     assert seen['cmd'] == launcher.agy_command('gemini-3.8-flash-high', brief, launcher.START_MESSAGES['Coder'])
     assert seen['cwd'] == str(tmp_path) and 'CLAUDECODE' not in seen['env'] and seen['env']['FORCE_COLOR'] == '3'
-    assert seen['runs'] == [['agents-cli', 'name', '77', f'{s}-coder']]
+    assert seen['runs'] == [['agents-cli', 'name', '77', f'{s}-coder']] and seen['trust'] == 'agy'
     record = json.loads((state / 'Coder.json').read_text(encoding='utf-8'))
     assert record['tool'] == 'agy' and record['model'] == 'gemini-3.8-flash-high' and record['name'] == f'{s}-coder'
 
@@ -1183,12 +1184,14 @@ def test_inject_command_waits_for_an_empty_prompt_and_gives_up(monkeypatch):
     screens = iter([['❯ typing…'], ['❯ typing…'], ['❯ ']])
     sent = []
     monkeypatch.setattr(launcher, 'peek_lines', lambda pid: next(screens))
-    monkeypatch.setattr(launcher.subprocess, 'run',
-                        lambda argv, **k: sent.append(argv[-1]) or subprocess.CompletedProcess([], 0, b'{}', b''))
+    argvs = []
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: argvs.append(argv) or sent.append(k['input'])
+                        or subprocess.CompletedProcess([], 0, b'{}', b''))
     monkeypatch.setattr(launcher.time, 'sleep', lambda s: None)
-    assert launcher.inject_command(1, '/color red') is True and sent == ['/color red']
+    assert launcher.inject_command(1, '/color red') is True and sent == [b'/color red']
+    assert argvs == [['agents-cli', '_attach', 'inject', '1', '1']]   # the text goes on stdin, never in argv
     monkeypatch.setattr(launcher, 'peek_lines', lambda pid: ['❯ never empty'])
-    assert launcher.inject_command(1, '/color red', tries=3) is False and sent == ['/color red']
+    assert launcher.inject_command(1, '/color red', tries=3) is False and sent == [b'/color red']
 
 
 def test_resolve_shift_by_suffix_and_latest(monkeypatch, tmp_path):
@@ -3640,17 +3643,17 @@ def test_codex_and_codex_copilot_manifests_parse_five_roles_in_2x4():
     codex = launcher.load_crew('codex')
     assert codex['layout'] == '2x4' and codex['slots'] == 8 and codex['model'] == 'gpt-6.1-sol'
     assert [(r['role'], r['tool'], r['model'], r.get('reasoning')) for r in codex['roles']] == [
-        ('Foreman', 'codex', 'gpt-6.1-sol', 'medium'),
-        ('Advisor', 'codex', 'gpt-6-astra', 'xhigh'),
-        ('Coder', 'codex', 'gpt-6.1-sol', 'medium'),
-        ('Tester', 'codex', 'gpt-6.1-sol', 'medium'),
-        ('Apprentice', 'codex', 'gpt-5.6-luna', 'xhigh')]
+        ('Foreman', 'codex', 'gpt-6.1-sol', 'high'),
+        ('Advisor', 'codex', 'gpt-6-astra', 'high'),
+        ('Coder', 'codex', 'gpt-6.1-sol', 'high'),
+        ('Tester', 'codex', 'gpt-6.1-sol', 'high'),
+        ('Apprentice', 'codex', 'gpt-5.6-luna', 'high')]   # every non-Gemini model on high (5bb62af)
     copilot = launcher.load_crew('codex-copilot')
     for crew in (codex, copilot):
         advisor = next(r for r in crew['roles'] if r['role'] == 'Advisor')
         coder = next(r for r in crew['roles'] if r['role'] == 'Coder')
-        assert (advisor['model'], advisor['reasoning'], coder['model']) == ('gpt-6-astra', 'xhigh', 'gpt-6.1-sol')
-    assert copilot['roles'][-1]['tool'] == 'copilot' and copilot['roles'][-1]['model'] == 'gemini-3.8-flash-high'
+        assert (advisor['model'], advisor['reasoning'], coder['model']) == ('gpt-6-astra', 'high', 'gpt-6.1-sol')
+    assert copilot['roles'][-1]['tool'] == 'copilot' and copilot['roles'][-1]['model'] == 'gemini-3.8-flash'
 
 
 def test_codex_and_copilot_commands_and_account_env():
@@ -3676,7 +3679,7 @@ def test_spawn_codex_and_copilot_use_their_default_models(tmp_path, injected, ca
     assert json.loads(capsys.readouterr().out)['tool'] == 'copilot'
     members = {m['label']: m for m in json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members']}
     assert (members['Apprentice']['tool'], members['Apprentice']['model']) == ('codex', 'gpt-6.1-sol')
-    assert (members['Helper']['tool'], members['Helper']['model']) == ('copilot', 'gemini-3.8-flash-high')
+    assert (members['Helper']['tool'], members['Helper']['model']) == ('copilot', 'gemini-3.8-flash')
 
 
 # ── Codex role identity, colours and supplied ticket headers (NGH-033) ──────
@@ -3892,9 +3895,9 @@ def test_codex_rename_reads_current_empty_composer_twice_and_sends_once(monkeypa
     child, seen = _rename_world(monkeypatch)
     assert launcher.set_codex_role_name(child, 'Coder-2', 'Nightshift-S-coder-2')
     assert len(seen['peeks']) == 2 and not seen['sleeps']
-    assert seen['sent'] == [(['agents-cli', '_attach', 'inject', '4321', '1',
-                             '/rename Coder-2 (Nightshift-S-coder-2)'],
-                            {'capture_output': True, 'timeout': 10})]
+    assert seen['sent'] == [(['agents-cli', '_attach', 'inject', '4321', '1'],
+                            {'input': '/rename Coder-2 (Nightshift-S-coder-2)'.encode('utf-8'),
+                             'capture_output': True, 'timeout': 10})]
 
 
 def test_codex_rename_can_wait_for_first_readable_composer(monkeypatch):
@@ -4067,7 +4070,7 @@ def test_pane_role_background_and_reset_survive_exit_and_launch_errors(monkeypat
 @pytest.mark.parametrize('name, tool, model, account', [
     ('apprentice-gemini', 'agy', 'gemini-3.8-flash-high', None),
     ('apprentice-codex', 'codex', 'gpt-5.6-luna', 2),
-    ('apprentice-copilot', 'copilot', 'gemini-3.8-flash-high', None)])
+    ('apprentice-copilot', 'copilot', 'gemini-3.8-flash', None)])
 def test_apprentice_manifests_are_the_default_crew_plus_their_apprentice(name, tool, model, account):
     crew = launcher.load_crew(name)
     default = launcher.load_crew()
@@ -4111,6 +4114,34 @@ def test_foreman_brief_routes_ordinary_work_to_apprentice_and_reserves_senior(br
     assert 'Delegate every repository change to Coder' not in brief
 
 
+def test_foreman_brief_splits_work_between_coder_and_apprentice():
+    brief = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', 'C:/x/S', 'foreman.md')
+    assert 'Apprentice' in brief and "disjoint from Coder's claims" in brief
+    assert "agents-cli wait <identity> --match '<ROLE>-DONE|<ROLE>-BLOCKED' --timeout 30m" in brief
+
+
+def test_foreman_brief_drives_every_non_claude_member_through_mailbox_and_agents_cli():
+    brief = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', 'C:/x/S', 'foreman.md')
+    para = brief.split('Non-Claude members:', 1)[1].split('\n\n', 1)[0]
+    assert 'is not `claude`' in para and 'C:/x/S/crew.json' in para and 'whatever its role' in para
+    steps = ['msg send', 'agents-cli send <identity>', 'msg sent', 'agents-cli wait <identity>',
+             'agents-cli tail <identity>', 'ack']
+    positions = [para.index(step) for step in steps]
+    assert positions == sorted(positions)
+    assert 'CODER-, TESTER- or APPRENTICE-' in para and 'TESTED-PASS' in para and 'TESTED-FAIL' in para
+    assert 'Non-Claude members:' not in (launcher.BRIEFS_DIR / 'foreman-cli.md').read_text(encoding='utf-8')
+
+
+def test_foreman_brief_records_copilot_credit_usage_before_result():
+    brief = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', 'C:/x/S', 'foreman.md')
+    contract = brief.split('Shift contract:', 1)[1]
+    assert 'C:/x/S/<label>-usage.json' in contract and '/usage' in contract
+    assert ('"usage": {"budget": <shift max_credits>, "total_used": <sum>, "panes": '
+            '{"<label>": {"credits_used": <n>, "cap": <its share>}}}') in contract
+    assert 'C:/x/S/crew.json' in contract
+    assert contract.index('"usage"') < contract.index('down {shift}'.replace('{shift}', 'S'))
+
+
 @pytest.mark.usefixtures('_container_isolated')
 def test_wt_five_members_fill_slots_1_to_5_of_the_2x4_container():
     argv = launcher.wt_command(CONT_SHIFT, Path('C:/x/state'), agents=True, mode_flag='--start', cwd='C:/w',
@@ -4125,7 +4156,7 @@ def test_wt_five_members_fill_slots_1_to_5_of_the_2x4_container():
 @pytest.mark.usefixtures('_container_isolated')
 @pytest.mark.parametrize('crew, tool, model, account', [
     ('apprentice-codex', 'codex', 'gpt-5.6-luna', 2),
-    ('apprentice-copilot', 'copilot', 'gemini-3.8-flash-high', None),
+    ('apprentice-copilot', 'copilot', 'gemini-3.8-flash', None),
     ('apprentice-gemini', 'agy', 'gemini-3.8-flash-high', None)])
 def test_spawn_crew_takes_the_role_from_the_named_manifest(tmp_path, injected, capsys, crew, tool, model, account):
     d = _container(tmp_path)   # a default shift whose crew.json has only Foreman and Coder
@@ -4177,7 +4208,7 @@ def test_spawn_crew_reasoning_comes_from_the_named_manifest(tmp_path, injected, 
     d = _container(tmp_path)
     launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'codex'])
     member = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
-    assert (member['tool'], member['model'], member['reasoning']) == ('codex', 'gpt-5.6-luna', 'xhigh')
+    assert (member['tool'], member['model'], member['reasoning']) == ('codex', 'gpt-5.6-luna', 'high')
 
 
 @pytest.mark.usefixtures('_container_isolated')
@@ -4224,6 +4255,7 @@ def test_pane_start_runs_a_spawned_crew_apprentice_on_its_tool_model_and_account
     monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
     monkeypatch.setattr(launcher, 'register_name', lambda pid, name: None)
     monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a: None)
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: None)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
     launcher.pane('Apprentice', str(d), start=True, cwd=str(tmp_path), slot=3)
@@ -5375,6 +5407,7 @@ def test_codex_real_popen_type_schedules_rename_on_daemon_thread(monkeypatch, tm
     monkeypatch.setattr(launcher.threading, 'Thread', FakeThread)
     monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a: events.append('rename') or True)
     monkeypatch.setattr(launcher, 'register_name', lambda *a: None)
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: None)
     monkeypatch.setattr(launcher, 'process_running', lambda *a, **k: True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     launcher.pane('Coder', str(d), start=True, cwd=str(tmp_path), slot=2)
@@ -5409,6 +5442,7 @@ def test_spawned_copilot_apprentice_pane_runs_with_reasoning_effort_and_context(
 
     monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
     monkeypatch.setattr(launcher, 'register_name', lambda pid, name: None)
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: None)
     monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a, **k: renames.append(a) or True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
@@ -5452,6 +5486,7 @@ def test_pane_names_copilot_by_pane_label_and_does_not_inject_rename(monkeypatch
 
     monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
     monkeypatch.setattr(launcher, 'register_name', lambda *a: None)
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: None)
     monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a, **k: renames.append(a) or True)
     monkeypatch.setattr(launcher, 'set_pane_background', lambda colour: seen['backgrounds'].append(colour))
     monkeypatch.setattr(launcher, 'process_running', lambda *a, **k: True)
@@ -6585,3 +6620,214 @@ def test_uplift_handback_then_new_escalation_counts_each_source_once(monkeypatch
     assert _uplift_view(d)['uplift_counts'] == {
         'crew': 'acceptance-crew', 'total': 2,
         'by_reason': {'needs-senior': 2, 'tester-failed-twice': 0, 'timeout': 0}}
+
+
+# ── Claude + Copilot crew, Copilot AI credit cap, Copilot send retries (NGH-041) ──
+
+def test_claude_copilot_manifest_loads_with_credit_capped_copilot_panes():
+    crew = launcher.load_crew('claude-copilot')
+    assert crew['layout'] == '2x4' and crew['slots'] == 8 and crew['contract'] == 'result.json'
+    assert crew['max_credits'] == 60   # the shift budget, split over the two Copilot panes
+    assert [(r['role'], r['tool'], r['model'], r.get('max_credits')) for r in crew['roles']] == [
+        ('Foreman', 'claude', 'claude-opus-5-5', None),
+        ('Advisor', 'claude', 'claude-opus-5-5', None),
+        ('Apprentice', 'copilot', 'gemini-3.8-flash', 30),
+        ('Coder', 'claude', 'claude-opus-5-5', None),
+        ('Tester', 'copilot', 'gemini-3.8-flash', 30)]
+    for r in crew['roles']:
+        if r['tool'] == 'copilot':
+            assert (r['reasoning'], r['context'], r['permissions']) == ('high', 'long_context', 'skip')
+    assert [r['brief'] for r in crew['roles']] == ['foreman.md', 'advisor.md', 'apprentice.md', 'coder.md',
+                                                   'tester-cli.md']
+
+
+def test_start_dry_run_claude_copilot_caps_each_copilot_pane(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    monkeypatch.setattr(launcher.subprocess, 'run', _fake_run([]))
+    launcher.start(['--dry-run', '--no-worktree', '--cwd', str(tmp_path), '--crew', 'claude-copilot', 'task'])
+    plan = json.loads(capsys.readouterr().out)
+    assert next(iter(plan)) == 'max_credits' and plan['max_credits'] == 60   # the shift budget comes first
+    roles = plan['roles']
+    for label in ('Foreman', 'Advisor', 'Coder'):
+        assert 'command' not in roles[label] and 'max_credits' not in roles[label]
+        assert roles[label].get('model', plan['model']) == 'claude-opus-5-5'
+    for label in ('Apprentice', 'Tester'):
+        cmd = roles[label]['command']
+        assert roles[label]['max_credits'] == 30
+        assert cmd[cmd.index('--max-ai-credits') + 1] == '30'
+        assert cmd[cmd.index('--usage-output-file') + 1] == \
+            (Path(plan['state_dir']) / f'{label}-usage.json').resolve().as_posix()
+        assert cmd[-4] == '--name' and cmd[-2] == '-i'
+
+
+def test_copilot_command_credit_cap_and_usage_file():
+    head = [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash']
+    assert launcher.copilot_command('gemini-3.8-flash', 'B', 'F', max_credits=30, usage_file='C:/s/Coder-usage.json') \
+        == head + ['--max-ai-credits', '30', '--usage-output-file', 'C:/s/Coder-usage.json', '-i', 'B\n\nF']
+    assert launcher.copilot_command('gemini-3.8-flash', 'B', 'F', usage_file='C:/s/x.json') == head + ['-i', 'B\n\nF']
+
+
+def _budget_crew(monkeypatch, tmp_path, budget, roles):
+    _crew_file(monkeypatch, tmp_path, 'budget', 'name: budget\n' + (f'max_credits: {budget}\n' if budget else '')
+               + 'roles:\n  - {role: Foreman, brief: foreman.md, human_contact: true}\n' + roles)
+    return lambda: launcher.load_crew('budget')
+
+
+COPILOT_PAIR = ('  - {role: Coder, brief: coder.md, tool: copilot, model: m, count: 2}\n'
+                '  - {role: Tester, brief: tester.md, tool: copilot, model: m}\n'
+                '  - {role: Advisor, brief: advisor.md}\n')
+
+
+@pytest.mark.parametrize('budget,share', [(90, 30), (100, 33), (120, 40)])
+def test_max_credits_shift_budget_splits_evenly_with_floor_over_copilot_panes(monkeypatch, tmp_path, budget, share):
+    crew = _budget_crew(monkeypatch, tmp_path, budget, COPILOT_PAIR)()   # 3 Copilot panes: Coder x2 + Tester
+    assert crew['max_credits'] == budget
+    assert {r['role']: r.get('max_credits') for r in crew['roles']} == {
+        'Foreman': None, 'Coder': share, 'Tester': share, 'Advisor': None}
+    members = launcher.crew_members(crew, 'S')
+    assert {m['label']: m.get('max_credits') for m in members} == {
+        'Foreman': None, 'Coder-1': share, 'Coder-2': share, 'Tester': share, 'Advisor': None}
+
+
+def test_max_credits_share_below_copilots_minimum_is_refused(monkeypatch, tmp_path):
+    load = _budget_crew(monkeypatch, tmp_path, 89, COPILOT_PAIR)
+    with pytest.raises(SystemExit, match=r"max_credits 89 over 3 Copilot panes is 29 each; Copilot's minimum "
+                                         r'--max-ai-credits is 30 per pane'):
+        load()
+
+
+def test_max_credits_on_a_crew_without_copilot_panes_is_refused(monkeypatch, tmp_path):
+    load = _budget_crew(monkeypatch, tmp_path, 60, '  - {role: Coder, brief: coder.md, tool: codex, model: m}\n')
+    with pytest.raises(SystemExit, match='the crew has no copilot panes'):
+        load()
+
+
+@pytest.mark.parametrize('value', ["'60'", '60.0', 'true'])
+def test_max_credits_shift_budget_must_be_a_whole_number(monkeypatch, tmp_path, value):
+    load = _budget_crew(monkeypatch, tmp_path, value, COPILOT_PAIR)
+    with pytest.raises(SystemExit, match=r'max_credits \(the shift budget\) must be a whole number'):
+        load()
+
+
+@pytest.mark.parametrize('tool', ['copilot', 'claude'])
+def test_per_role_max_credits_is_refused_in_favour_of_the_shift_budget(monkeypatch, tmp_path, tool):
+    model = ', model: m' if tool == 'copilot' else ''
+    load = _budget_crew(monkeypatch, tmp_path, None,
+                        f'  - {{role: Coder, brief: coder.md, tool: {tool}{model}, max_credits: 30}}\n')
+    with pytest.raises(SystemExit, match='max_credits for Coder: the Copilot credit cap is the shift budget, set once '
+                                         'as a top-level max_credits: key'):
+        load()
+
+
+def test_crew_without_a_budget_has_no_credit_caps():
+    crew = launcher.load_crew('copilot')
+    assert 'max_credits' not in crew and not any('max_credits' in r for r in crew['roles'])
+
+
+def test_default_copilot_model_is_in_the_copilot_catalog():
+    assert launcher.COPILOT_MODEL == 'gemini-3.8-flash' and launcher.DEFAULT_TOOL_MODELS['copilot'] == 'gemini-3.8-flash'
+    assert launcher.AGY_MODEL == 'gemini-3.8-flash-high'
+
+
+def _copilot_send_world(monkeypatch, tails):
+    """agents-cli faked: send reports submitted false; each tail call pops the next screen (the last one repeats)."""
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[1] == 'send':
+            out = {'submitted': False, 'enter': True}
+        elif argv[1] == 'tail':
+            out = tails.pop(0) if len(tails) > 1 else tails[0]
+        else:
+            out = {}
+        return subprocess.CompletedProcess(argv, 0, json.dumps(out).encode(), b'')
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher.time, 'sleep', lambda s: None)
+    return calls
+
+
+HDR = 'msg:7 kind:note asg:-'
+STUCK = {'state': 'prompt', 'lines': ['─────', f'❯ {HDR}', '─────', 'ctrl+c exit']}
+DONE = {'state': 'busy', 'lines': [f'❯ {HDR}', 'Working', '─────', '❯', '─────', 'esc interrupt']}
+MENU = {'state': 'prompt', 'lines': ['─────', f'❯ {HDR}', '─────', '1. Allow  2. Deny  enter to confirm']}
+
+
+def test_copilot_send_presses_enter_until_the_header_is_submitted(monkeypatch):
+    calls = _copilot_send_world(monkeypatch, [STUCK, DONE])
+    assert launcher.send_header(32, HDR, 'copilot') is True
+    assert [a for a in calls if a[1] == 'key'] == [['agents-cli', 'key', '32', 'enter']]
+
+
+def test_copilot_send_enter_retries_are_bounded(monkeypatch):
+    calls = _copilot_send_world(monkeypatch, [STUCK])
+    assert launcher.send_header(32, HDR, 'copilot') is False
+    assert sum(a[1] == 'key' for a in calls) == launcher.COPILOT_ENTER_TRIES
+    assert sum(a[1] == 'send' for a in calls) == 1
+
+
+@pytest.mark.parametrize('tool,tail', [('copilot', MENU), ('codex', STUCK), (None, STUCK)])
+def test_no_extra_enter_into_a_menu_or_on_other_tools(monkeypatch, tool, tail):
+    calls = _copilot_send_world(monkeypatch, [tail])
+    assert launcher.send_header(32, HDR, tool) is False
+    assert not any(a[1] == 'key' for a in calls)
+
+
+
+# ── per-tool trust dialogs and stdin injection (NGH-041 c2) ──────────────────
+
+TRUST_SCREENS = {
+    'claude': (['   No, exit', ' ❯ Yes, I trust this folder'], [' ❯ No, exit', '   Yes, I trust this folder']),
+    'agy': (['Do you trust the contents of this project?', '> Yes, I trust this folder', 'enter Confirm'],
+            ['Do you trust the contents of this project?', '  Yes, I trust this folder', '> No', 'enter Confirm']),
+    'codex': (['Trust this folder? Codex can read, edit, and run files here, subject to your',
+               'permission settings.', '› 1. Trust and continue', '  2. Open restricted', '  3. Quit'],
+              ['Trust this folder? Codex can read, edit, and run', 'files here.', '  1. Trust and continue',
+               '› 2. Open restricted', '  3. Quit']),
+    'copilot': (['│ Confirm folder trust                       │', '│ Do you trust the files in this │',
+                 '│ folder?                                    │', '│ ❯ 1. Yes                    │',
+                 '│   2. Yes, and remember this folder for future sessions │', '│   3. No (Esc) │'],
+                ['│ Do you trust the files in this folder? │', '│   1. Yes │',
+                 '│ ❯ 2. Yes, and remember this folder for future sessions │', '│   3. No (Esc) │']),
+}
+
+
+@pytest.mark.parametrize('tool', sorted(TRUST_SCREENS))
+def test_trust_prompt_matcher_per_tool(tool):
+    accept, other = TRUST_SCREENS[tool]
+    assert launcher.trust_prompt_state(tool, '\n'.join(accept)) == 'accept'
+    assert launcher.trust_prompt_state(tool, '\n'.join(other)) == 'dialog'
+    assert launcher.trust_prompt_state(tool, 'ordinary output\n❯ ') is None
+    for elsewhere in (t for t in TRUST_SCREENS if t != tool and t not in ('claude', 'agy')):
+        # another CLI's dialog text never triggers this tool's answer
+        assert launcher.trust_prompt_state(tool, '\n'.join(TRUST_SCREENS[elsewhere][0])) is None
+
+
+def test_codex_trust_for_the_repository_root_is_left_to_the_human():
+    screen = TRUST_SCREENS['codex'][0] + ["Note: You're in a subdirectory of a Git project. Trusting will apply to the",
+                                          'repository root:']
+    assert launcher.trust_prompt_state('codex', '\n'.join(screen)) == 'past'
+
+
+@pytest.mark.parametrize('tool', sorted(TRUST_SCREENS))
+def test_accept_trust_prompt_moves_to_the_accepting_option_then_presses_enter(monkeypatch, tool):
+    accept, other = TRUST_SCREENS[tool]
+    screens = iter([{'lines': []}, {'lines': other}, {'lines': accept}])
+    keys = []
+
+    def run(argv, **kwargs):
+        if argv[:3] == ['agents-cli', '_attach', 'peek']:
+            return subprocess.CompletedProcess(argv, 0, json.dumps(next(screens)).encode(), b'')
+        if argv[:2] == ['agents-cli', 'key']:
+            keys.append(argv[3])
+            return subprocess.CompletedProcess(argv, 0, b'{}', b'')
+        raise AssertionError(argv)
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher.time, 'sleep', lambda s: None)
+    launcher.accept_trust_prompt(types.SimpleNamespace(pid=1, poll=lambda: None), tool)
+    assert keys == ['down', 'enter']
+
+
+def test_accept_trust_prompt_ignores_tools_without_a_known_dialog(monkeypatch):
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda *a, **k: pytest.fail('no peek for an unknown tool'))
+    launcher.accept_trust_prompt(types.SimpleNamespace(pid=1, poll=lambda: None), 'opencode')

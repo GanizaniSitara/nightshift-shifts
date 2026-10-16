@@ -113,7 +113,9 @@ LAYOUT_SLOTS = {'split': None, '1x4': 4, '2x4': 8}
 SPAWN_CLIS = {'claude': 'claude', 'gemini': 'agy', 'codex': 'codex', 'copilot': 'copilot', 'opencode': None}
 AGY_MODEL = 'gemini-3.8-flash-high'      # model for a spawned agy role when no crew member names one
 CODEX_MODEL = 'gpt-6.1-sol'              # default model for a spawned codex role
-COPILOT_MODEL = 'gemini-3.8-flash-high'  # default model for a spawned copilot role
+COPILOT_MODEL = 'gemini-3.8-flash'       # default model for a spawned copilot role (-high is not in its catalog)
+COPILOT_ENTER_TRIES = 3   # Enter presses send_header adds when Copilot leaves a header in its composer
+COPILOT_MIN_CREDITS = 30  # the lowest --max-ai-credits Copilot accepts (copilot help limits)
 DEFAULT_TOOL_MODELS = {'agy': AGY_MODEL, 'codex': CODEX_MODEL, 'copilot': COPILOT_MODEL}
 REASONING_LEVELS = ('low', 'medium', 'high', 'xhigh')
 # a tool whose reasoning flag takes other levels than REASONING_LEVELS (copilot --reasoning-effort, NGH-037)
@@ -225,6 +227,9 @@ def load_crew(name='default'):
                 raise SystemExit(f"crew {name}: permissions {permissions!r} for {role} must be one of: "
                                  f"{', '.join(PERMISSIONS)}")
             role_dict['permissions'] = permissions
+        if 'max_credits' in entry:
+            raise SystemExit(f"crew {name}: max_credits for {role}: the Copilot credit cap is the shift budget, "
+                             "set once as a top-level max_credits: key and split across the Copilot panes")
         checked.append(role_dict)
     humans = [r['role'] for r in checked if r['human_contact']]
     if len(humans) != 1:
@@ -243,9 +248,27 @@ def load_crew(name='default'):
     model = str(data.get('model') or MODEL)
     for r in checked:
         r['model'] = r['model'] or model   # a role without its own model: runs the crew model
-    return {'name': name, 'model': model,
+    crew = {'name': name, 'model': model,
             'permission_mode': str(data.get('permission_mode') or START_PERMISSION_MODE),
             'contract': str(data.get('contract') or 'result.json'), 'layout': layout, 'slots': slots, 'roles': checked}
+    if data.get('max_credits') is not None:
+        # The shift's Copilot AI credit budget (owner, 16 Oct): split evenly (floor) over every Copilot pane, each
+        # pane's share becoming its --max-ai-credits.
+        budget = data['max_credits']
+        if type(budget) is not int:
+            raise SystemExit(f'crew {name}: max_credits (the shift budget) must be a whole number, not {budget!r}')
+        copilot = [r for r in checked if r['tool'] == 'copilot']
+        panes = sum(r['count'] for r in copilot)
+        if not panes:
+            raise SystemExit(f'crew {name}: max_credits is a Copilot credit budget, but the crew has no copilot panes')
+        share = budget // panes
+        if share < COPILOT_MIN_CREDITS:
+            raise SystemExit(f'crew {name}: max_credits {budget} over {panes} Copilot panes is {share} each; '
+                             f"Copilot's minimum --max-ai-credits is {COPILOT_MIN_CREDITS} per pane")
+        for r in copilot:
+            r['max_credits'] = share
+        crew['max_credits'] = budget
+    return crew
 
 
 def crew_members(crew, shift):
@@ -263,7 +286,7 @@ def crew_members(crew, shift):
                       'persona': r.get('persona'),
                       'colour': r['colour'], 'human_contact': r['human_contact'],
                       'tool': r['tool'], 'model': r['model']}
-            for opt in ('reasoning', 'context', 'account', 'permissions'):
+            for opt in ('reasoning', 'context', 'account', 'permissions', 'max_credits'):
                 if opt in r:
                     member[opt] = r[opt]
             members.append(member)
@@ -427,28 +450,38 @@ def codex_command(model, brief, first_message, reasoning=None, permissions=None)
     return cmd + [brief + '\n\n' + first_message]
 
 
-def copilot_command(model, brief, first_message, permissions=None, reasoning=None, context=None, session_name=None):
-    """argv for a Copilot CLI crew member: tools per `permissions`, no auto-update, optional reasoning effort and
-    context tier, interactive initial prompt."""
+def copilot_command(model, brief, first_message, permissions=None, reasoning=None, context=None, session_name=None,
+                    max_credits=None, usage_file=None):
+    """argv for a Copilot CLI crew member: tools per `permissions`, no auto-update, optional reasoning effort,
+    context tier and AI credit cap (with its usage written to usage_file), interactive initial prompt."""
     cmd = [str(COPILOT_EXE), *permission_flags('copilot', permissions), '--no-auto-update', '--model', model]
     if reasoning:
         cmd += ['--reasoning-effort', reasoning]
     if context:
         cmd += ['--context', context]
+    if max_credits:
+        cmd += ['--max-ai-credits', str(max_credits)]
+        if usage_file:
+            cmd += ['--usage-output-file', str(usage_file)]
     if session_name is not None:
         cmd += ['--name', session_name]
     return cmd + ['-i', brief + '\n\n' + first_message]
 
 
 def tool_command(tool, model, brief, first_message, permissions=None, reasoning=None, context=None,
-                 session_name=None):
+                 session_name=None, max_credits=None, usage_file=None):
     """argv for a non-Claude crew member (agy, codex or copilot), as pane() runs it and start --dry-run shows it."""
     if tool == 'agy':
         return agy_command(model, brief, first_message, permissions=permissions)
     if tool == 'codex':
         return codex_command(model, brief, first_message, reasoning=reasoning, permissions=permissions)
     return copilot_command(model, brief, first_message, permissions=permissions, reasoning=reasoning, context=context,
-                           session_name=session_name)
+                           session_name=session_name, max_credits=max_credits, usage_file=usage_file)
+
+
+def usage_file(state_dir, label):
+    """<state_dir>/<label>-usage.json: where a credit-capped Copilot pane writes its final usage (for result.json)."""
+    return Path(state_dir, f'{label}-usage.json').resolve().as_posix()
 
 
 def register_name(pid, identity):
@@ -459,32 +492,70 @@ def register_name(pid, identity):
         pass
 
 
-def accept_trust_prompt(child):
-    """Answer Claude Code's "trust this folder?" dialog in this pane, if it appears (owner decision 15 Oct).
+# Each CLI's own "trust this folder?" dialog (NGH-041): (text proving the dialog is on screen, the highlighted
+# option that accepts it, text proving the CLI is already past it or None). Claude's as before; agy's from the
+# agents-cli fixtures of its dialog; Codex's and Copilot's from the strings in their installed binaries (codex.exe,
+# @github/copilot index.js) on 16 Oct 2026. Copilot numbers its options and marks the highlighted one with ❯.
+TRUST_PROMPTS = {
+    'claude': ('Yes, I trust this folder', r'❯\s*Yes, I trust this folder', 'Claude Code v'),
+    'agy': ('Do you trust the contents of this project?', r'[>❯›]\s*Yes, I trust this folder', None),
+    'codex': ('Trust this folder? Codex can read', r'[›❯>]\s*(?:\d+\.\s*)?Trust and continue', None),
+    'copilot': ('Do you trust the files in this folder?', r'❯\s*1\. Yes(?![,\w])', None),
+}
+# Codex, started in a subdirectory of a repository, offers to trust the repository root instead: not the shift's folder.
+TRUST_ELSEWHERE = ('Trusting will apply to the repository root',)
 
-    Only acts when the dialog text is actually on screen; otherwise it gives up after ~20s.
+
+def trust_screen(pid):
+    """The pane's visible lines for the trust check, from agents-cli peek JSON or, failing that, its raw text."""
+    peek = subprocess.run(['agents-cli', '_attach', 'peek', str(pid), '0'], capture_output=True, timeout=10)
+    raw = (peek.stdout or b'').decode('utf-8', 'replace')
+    try:
+        lines = json.loads(raw).get('lines')
+    except (ValueError, AttributeError):
+        lines = None
+    return '\n'.join(str(line) for line in lines) if isinstance(lines, list) else raw
+
+
+def trust_prompt_state(tool, screen):
+    """'accept' when the tool's trust dialog is up with its accepting option highlighted, 'dialog' when it is up
+    with another option highlighted, 'past' when the tool is already past it, None otherwise (keep polling)."""
+    text, accept, past = TRUST_PROMPTS[tool]
+    flat = ' '.join(re.sub('[│┃║]', ' ', screen).split())   # a narrow pane wraps the sentence, inside a box
+    if text in flat:
+        if any(other in flat for other in TRUST_ELSEWHERE):
+            return 'past'   # never trust a folder other than the pane's own: leave the dialog to the human
+        return 'accept' if re.search(accept, screen) else 'dialog'
+    return 'past' if past and past in screen else None
+
+
+def accept_trust_prompt(child, tool='claude'):
+    """Answer the tool's own "trust this folder?" dialog in this pane, if it appears (owner decisions 15 and 16 Oct).
+
+    The pane runs its CLI in the shift's own folder, so the dialog asks about that folder; it is answered only when
+    the tool's literal dialog text is on screen, otherwise this gives up after ~20s.
     """
+    if tool not in TRUST_PROMPTS:
+        return
     for _ in range(40):
         if child.poll() is not None:
             return
         try:
-            peek = subprocess.run(['agents-cli', '_attach', 'peek', str(child.pid), '0'],
-                                  capture_output=True, timeout=10)
-            screen = (peek.stdout or b'').decode('utf-8', 'replace')
-            if 'Yes, I trust this folder' in screen:
-                # Press Enter only once the "Yes" line is the highlighted one, else Enter picks "No, exit".
+            state = trust_prompt_state(tool, trust_screen(child.pid))
+            if state in ('accept', 'dialog'):
+                # Press Enter only once the accepting line is the highlighted one, else Enter picks No / Quit.
                 for _attempt in range(6):
-                    if re.search(r'(❯|\\u276f)\s*Yes, I trust this folder', screen):  # peek JSON may escape ❯
+                    if state == 'accept':
                         subprocess.run(['agents-cli', 'key', str(child.pid), 'enter'], capture_output=True, timeout=10)
+                        return
+                    if state != 'dialog':
                         return
                     subprocess.run(['agents-cli', 'key', str(child.pid), 'down'], capture_output=True, timeout=10)
                     time.sleep(1)
-                    peek = subprocess.run(['agents-cli', '_attach', 'peek', str(child.pid), '0'],
-                                          capture_output=True, timeout=10)
-                    screen = (peek.stdout or b'').decode('utf-8', 'replace')
+                    state = trust_prompt_state(tool, trust_screen(child.pid))
                 return
-            if 'Claude Code v' in screen:
-                return  # welcome banner: already past the dialog
+            if state == 'past':
+                return
         except (OSError, subprocess.TimeoutExpired):
             pass
         time.sleep(0.5)
@@ -516,7 +587,9 @@ def inject_command(pid, command, tries=10):
     """
     for _ in range(tries):
         if prompt_is_empty(peek_lines(pid)):
-            subprocess.run(['agents-cli', '_attach', 'inject', str(pid), '1', command], capture_output=True, timeout=10)
+            # agents-cli _attach inject takes PID and ENTER as argv and the text on stdin (as spawn types its line)
+            subprocess.run(['agents-cli', '_attach', 'inject', str(pid), '1'], input=command.encode('utf-8'),
+                           capture_output=True, timeout=10)
             return True
         time.sleep(1)
     return False
@@ -578,7 +651,8 @@ def set_codex_role_name(child, role, identity, tries=30):
                     if child.poll() is not None or time.monotonic() >= deadline:
                         return False
                     sent = subprocess.run(
-                        ['agents-cli', '_attach', 'inject', str(child.pid), '1', f'/rename {role} ({identity})'],
+                        ['agents-cli', '_attach', 'inject', str(child.pid), '1'],
+                        input=f'/rename {role} ({identity})'.encode('utf-8'),
                         capture_output=True, timeout=min(10, deadline - time.monotonic()))
                     return sent.returncode == 0  # never retry an uncertain submission
         except (OSError, subprocess.TimeoutExpired):
@@ -701,7 +775,7 @@ def foreman_claude_settings(cwd):
 def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/nightshift', crew=None, slot=None):
     if live or start:
         model, permission_mode, tool = MODEL, START_PERMISSION_MODE, 'claude'
-        reasoning, context, account = None, None, None
+        reasoning, context, account, max_credits = None, None, None, None
         colour = 'red' if role == 'Foreman' else 'green'
         shift = Path(state_dir).name
         peer = 'Coder' if role == 'Foreman' else 'Foreman'
@@ -746,6 +820,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             identity, peer_name, colour = member['identity'], member['peer'], member['colour']
             model, tool = member['model'], member['tool']
             reasoning, context, account = member.get('reasoning'), member.get('context'), member.get('account')
+            max_credits = member.get('max_credits')
             # a role's own permissions: (skip | auto | default) wins over the crew-level permission_mode
             permission_mode = member.get('permissions') or permission_mode or START_PERMISSION_MODE
             first_message = opening_message(member, state_dir)
@@ -755,7 +830,8 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
         if tool in TOOL_EXES:
             session_name = f'{role} ({identity})'
             command = tool_command(tool, model, brief, first_message, permission_mode, reasoning, context,
-                                   session_name=session_name)
+                                   session_name=session_name, max_credits=max_credits,
+                                   usage_file=usage_file(state_dir, role))
         else:
             exe = Path('C:/nvm4w/nodejs/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
             command = [str(exe), '--name', identity, '--model', model,
@@ -784,7 +860,8 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                 kept = {k: v for k, v in (read_slot(state_dir, slot) or {}).items() if k != 'slot'}
                 write_slot(state_dir, slot, **{**kept, 'role': role, 'identity': identity, 'wrapper_pid': os.getpid()})
             if tool != 'claude':
-                register_name(child.pid, identity)   # the trust dialog and /color are Claude-only
+                register_name(child.pid, identity)   # /color is Claude-only
+                accept_trust_prompt(child, tool)
                 if tool == 'codex':
                     if isinstance(subprocess.Popen, type) and isinstance(child, subprocess.Popen):
                         threading.Thread(
@@ -1450,11 +1527,14 @@ def start(argv):
                                    **({'reasoning': m['reasoning']} if 'reasoning' in m else {}),
                                    **({'context': m['context']} if 'context' in m else {}),
                                    **({'account': m['account']} if 'account' in m else {}),
+                                   **({'max_credits': m['max_credits']} if 'max_credits' in m else {}),
                                    # the argv pane() will run, with placeholders for the brief and opening message
                                    **({'command': tool_command(m['tool'], m['model'], '<brief>', '<first message>',
                                                                m.get('permissions') or crew['permission_mode'],
                                                                m.get('reasoning'), m.get('context'),
-                                                               session_name=f"{m['label']} ({m['identity']})")}
+                                                               session_name=f"{m['label']} ({m['identity']})",
+                                                               max_credits=m.get('max_credits'),
+                                                               usage_file=usage_file(state_dir, m['label']))}
                                       if m['tool'] != 'claude' else {}),
                                    'permission_flags': permission_flags(
                                        m['tool'], m.get('permissions') or crew['permission_mode'])}
@@ -1469,6 +1549,8 @@ def start(argv):
             plan['worktree'] = worktree
         if crew['name'] != 'default':
             plan['crew'] = crew['name']   # the default crew's plan stays exactly as it was before manifests
+        if 'max_credits' in crew:
+            plan = {'max_credits': crew['max_credits'], **plan}   # the shift's Copilot budget, shown first
         if ticket:
             plan['requires'] = required   # free-text plans stay as they were
         print(json.dumps(plan, indent=2, ensure_ascii=False))
@@ -1484,7 +1566,9 @@ def start(argv):
     (state_dir / 'requires.txt').write_text(required, encoding='utf-8')
     (state_dir / 'crew.json').write_text(json.dumps({'crew': crew['name'], 'members': members, 'slots': crew['slots'],
                                                      'permission_mode': crew['permission_mode'], 'model': crew['model'],
-                                                     'cwd': cwd}, indent=2), encoding='utf-8')
+                                                     'cwd': cwd, **({'max_credits': crew['max_credits']}
+                                                                    if 'max_credits' in crew else {})},
+                                                    indent=2), encoding='utf-8')
     if ticket:
         (state_dir / 'ticket.txt').write_text(ticket, encoding='utf-8')
     bus_append(state_dir, 'start', shift=name, ticket=ticket, cwd=cwd, crew=crew['name'], members=labels)
@@ -1936,7 +2020,7 @@ def spawn(argv):
                           persona=manifest_role.get('persona'), colour=manifest_role['colour'])
             if manifest_role['tool'] == tool:
                 member['model'] = manifest_role['model']
-                for opt in ('reasoning', 'context', 'account', 'permissions'):
+                for opt in ('reasoning', 'context', 'account', 'permissions', 'max_credits'):
                     if opt in manifest_role:
                         member[opt] = manifest_role[opt]
     if existing:
@@ -1948,7 +2032,7 @@ def spawn(argv):
                       colour=existing.get('colour', member['colour']))
         if tool == existing.get('tool', 'claude') and existing.get('model'):
             member['model'] = existing['model']
-            for opt in ('reasoning', 'context', 'account', 'permissions'):
+            for opt in ('reasoning', 'context', 'account', 'permissions', 'max_credits'):
                 if opt in existing:
                     member[opt] = existing[opt]
     if crew_role:
@@ -1958,11 +2042,11 @@ def spawn(argv):
                       colour=crew_role['colour'])
         if not existing:
             member['label'] = crew_role['role']
-        for opt in ('reasoning', 'context', 'account', 'permissions'):
+        for opt in ('reasoning', 'context', 'account', 'permissions', 'max_credits'):
             member.pop(opt, None)
         if crew_role['tool'] == tool:
             member['model'] = crew_role['model']
-            for opt in ('reasoning', 'context', 'account', 'permissions'):
+            for opt in ('reasoning', 'context', 'account', 'permissions', 'max_credits'):
                 if opt in crew_role:
                     member[opt] = crew_role[opt]
     updated = [m for m in members if m is not existing] + [member]
@@ -3273,15 +3357,40 @@ def header_submitted(pid, header):
         and any(header in line for line in lines[:last])
 
 
-def send_header(pid, header):
-    """Only a confirmed submission lets the mailbox advance to sent."""
+def header_in_composer(pid, header):
+    """True when the pane's current composer still holds header unsubmitted and no menu is open."""
+    lines = [line for line in agent_tail(pid).get('lines') or [] if isinstance(line, str) and line.strip()]
+    if not lines:
+        return False
+    footer = lines[-1].lower()
+    if 'enter' in footer and ('select' in footer or 'confirm' in footer):
+        return False   # a picker or permission dialog: Enter would choose in it (agents-cli copilotMenu)
+    prompts = [i for i, line in enumerate(lines) if re.match(r'^\s*[›❯>]', line)]
+    return bool(prompts) and re.sub(r'\s', '', header) in re.sub(r'\s', '', ''.join(lines[prompts[-1]:]))
+
+
+def send_header(pid, header, tool=None):
+    """Only a confirmed submission lets the mailbox advance to sent.
+
+    Copilot can leave a pasted header in its composer with submitted: false (seen live 16 Oct, TECH-225); for a
+    copilot pane a few separate Enter presses follow, each only while the header is still in the composer.
+    """
     try:
         sent = subprocess.run(['agents-cli', 'send', str(pid), header], capture_output=True, timeout=30)
         if sent.returncode != 0:
             return False
         receipt = json.loads(sent.stdout)
         if 'submitted' in receipt:
-            return receipt['submitted'] is True
+            if receipt['submitted'] is True or tool != 'copilot':
+                return receipt['submitted'] is True
+            for _ in range(COPILOT_ENTER_TRIES):
+                if not header_in_composer(pid, header):
+                    break
+                subprocess.run(['agents-cli', 'key', str(pid), 'enter'], capture_output=True, timeout=30)
+                time.sleep(1)
+                if header_submitted(pid, header):
+                    return True
+            return header_submitted(pid, header)
         return receipt.get('enter') is True and receipt.get('sent') == header and header_submitted(pid, header)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
@@ -3305,7 +3414,7 @@ def deliver_pending(state_dir, dry_run=False):
         else:
             attempts[key] = {'pid': info['pid'], 'at': time.time()}
             write_json(attempts_path, attempts)   # a crash or uncertain receipt must not cause a blind resend
-            confirmed = send_header(info['pid'], msg_header(row))
+            confirmed = send_header(info['pid'], msg_header(row), info.get('tool'))
         if confirmed:
             delivered.append(row['id'])
             if not dry_run:
@@ -3343,7 +3452,8 @@ def nudge_idle_foremen(state_dir, dry_run=False):
         return []
     if not dry_run:
         write_json(marker, {'at': time.time()})   # throttle uncertain submissions too
-    if dry_run or send_header(info['pid'], f'Warden: inspect nightshift inbox {state_dir.name} {lead} and continue the active assignment.'):
+    if dry_run or send_header(info['pid'], f'Warden: inspect nightshift inbox {state_dir.name} {lead} and continue the active assignment.',
+                              info.get('tool')):
         return [lead]
     return []
 
