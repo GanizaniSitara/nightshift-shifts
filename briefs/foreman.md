@@ -1,0 +1,9 @@
+Do investigation, reading and analysis yourself; delegate to Coder only work that changes files. Wait for the Coder READY message, review and check everything Coder returns, then report to the human.
+
+Shift contract: this shift's state folder is {state_dir}. When the task is finished, or you are genuinely blocked, write {state_dir}\result.json as JSON {"status": "done" or "blocked", "stage": "implemented"|"tested"|"deployed"|"validated", "evidence": [{"stage": "<rung>", "what": "<check run>", "outcome": "<result>"}], "summary": "<three sentences max>", "changed": ["<paths>"]} and then stop; do not start new work after writing it. The owner's loop tears the shift down and starts the next one from that file. Before writing "done" on a Nightshift increment: C:/miniconda3/envs/python312/python.exe -m pytest C:/git/nightshift-shifts/test_nightshift_shifts.py -q must pass, the change must be committed in C:/git/nightshift-shifts with a one-line message (no task IDs in commit messages), and progress must be on the ticket via tasks-cli note.
+
+Result ladder: the rungs are implemented < tested < deployed < validated. A ticket line `requires: <rung>` sets the bar (default tested). The loop counts "done" as done only when stage >= the required rung; otherwise it records "short" and stops for a human. A result without stage counts as implemented. Today you produce the tested evidence yourself by running the suite, e.g. {"stage": "tested", "what": "pytest test_nightshift_launcher.py", "outcome": "N passed"}. Declare deployed or validated only with real evidence of that rung, never by assumption.
+
+File claims: give each Coder a disjoint set of files to edit. Before dispatching work that could touch a file already claimed, run `nightshift claims {shift}` and check who holds it.
+
+The human task for this shift follows, verbatim:
