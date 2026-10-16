@@ -4,6 +4,7 @@ Run: C:/miniconda3/envs/python312/python.exe -m pytest C:/git/nightshift-shifts/
 Nothing here launches Windows Terminal or Claude: subprocess calls are faked.
 """
 import json
+import os
 import subprocess
 import sys
 import types
@@ -78,7 +79,7 @@ def test_start_dry_run_from_a_ticket_titles_panes_with_it(monkeypatch, tmp_path,
     assert {r: v['pane_title'] for r, v in plan['roles'].items()} == {'Foreman': 'NGH-019 Foreman',
                                                                      'Coder': 'NGH-019 Coder',
                                                                      'Tester': 'NGH-019 Tester'}
-    assert _titles(plan['wt_argv']) == ['NGH-019 Foreman', 'NGH-019 Coder', 'NGH-019 Tester']
+    assert _titles(plan['wt_argv']) == ['NGH-019 Foreman', 'NGH-019 Coder', 'NGH-019 Tester', 'NGH-019 slot 4']
 
 
 @pytest.mark.parametrize('tickets, title', [
@@ -139,7 +140,7 @@ roles:
 def test_default_manifest_is_foreman_coder_tester():
     crew = launcher.load_crew()
     assert crew == {'name': 'default', 'model': 'claude-opus-5-5', 'permission_mode': 'auto',
-                    'contract': 'result.json', 'layout': 'split', 'roles': [
+                    'contract': 'result.json', 'layout': '1x4', 'slots': 4, 'roles': [
                         {'role': 'Foreman', 'brief': 'foreman.md', 'count': 1, 'human_contact': True, 'colour': 'red',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
                         {'role': 'Coder', 'brief': 'coder.md', 'count': 1, 'human_contact': False, 'colour': 'green',
@@ -527,7 +528,7 @@ def _fixed_uuid(monkeypatch):
 
 
 def test_start_dry_run_default_crew_is_the_three_pane_golden(monkeypatch, tmp_path, capsys):
-    """Golden for the three-pane default crew (Foreman, Coder, Tester; NGH-024): its plan must not move."""
+    """Golden for the default crew (Foreman, Coder, Tester; NGH-024) in the 1x4 container (NGH-025): must not move."""
     _fixed_uuid(monkeypatch)
     work = tmp_path / 'work'
     work.mkdir()
@@ -539,9 +540,9 @@ def test_start_dry_run_default_crew_is_the_three_pane_golden(monkeypatch, tmp_pa
     cwd = str(work.resolve())
     py, script = sys.executable, str(Path(launcher.__file__).resolve())
 
-    def pane_args(role):
+    def pane_args(role, slot):
         return ['--profile', 'Nightshift Crew', '--title', f'{shift} {role}', '--suppressApplicationTitle', '-d', '%USERPROFILE%',
-                py, script, '--pane', role, '--state-dir', state, '--start', '--cwd', cwd]
+                py, script, '--pane', role, '--state-dir', state, '--start', '--cwd', cwd, '--slot', str(slot)]
     assert plan == {
         'dry_run': True, 'shift': shift, 'state_dir': state, 'cwd': cwd, 'ticket': None,
         'prompt_file': str(Path(state) / 'prompt.txt'), 'model': 'claude-opus-5-5', 'profile': 'Nightshift Crew',
@@ -559,12 +560,20 @@ def test_start_dry_run_default_crew_is_the_three_pane_golden(monkeypatch, tmp_pa
                        'receives_prompt': False,
                        'first_message': 'Begin your Tester role: send READY to Foreman and await verification '
                                         'assignments.'}},
-        'wt_argv': ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized', 'new-tab', *pane_args('Foreman'),
-                    ';', 'split-pane', '-V', '-s', '0.6667', *pane_args('Coder'),
-                    ';', 'split-pane', '-V', '-s', '0.5', *pane_args('Tester'), ';', 'focus-pane', '-t', '0'],
+        'slots': [{'slot': 1, 'role': 'Foreman', 'pane_title': f'{shift} Foreman'},
+                  {'slot': 2, 'role': 'Coder', 'pane_title': f'{shift} Coder'},
+                  {'slot': 3, 'role': 'Tester', 'pane_title': f'{shift} Tester'},
+                  {'slot': 4, 'role': None, 'pane_title': f'{shift} slot 4'}],
+        'wt_argv': ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized', 'new-tab', *pane_args('Foreman', 1),
+                    ';', 'split-pane', '-V', '-s', '0.75', *pane_args('Coder', 2),
+                    ';', 'split-pane', '-V', '-s', '0.6667', *pane_args('Tester', 3),
+                    ';', 'split-pane', '-V', '-s', '0.5', '--profile', 'Nightshift Crew', '--title', f'{shift} slot 4',
+                    '--suppressApplicationTitle', '-d', '%USERPROFILE%', 'cmd.exe', '/k', py, script,
+                    '--slot', '4', '--state-dir', state,
+                    ';', 'focus-pane', '-t', '0'],
         'prompt': 'task'}
     assert list(plan) == ['dry_run', 'shift', 'state_dir', 'cwd', 'ticket', 'prompt_file', 'model', 'profile',
-                          'permission_mode', 'lock', 'roles', 'wt_argv', 'prompt']   # key order too
+                          'permission_mode', 'lock', 'roles', 'slots', 'wt_argv', 'prompt']   # key order too
 
 
 def test_start_rejects_empty_prompt(monkeypatch, tmp_path):
@@ -727,7 +736,7 @@ def test_down_writes_handover_kills_crew_and_closes_only_its_window(monkeypatch,
     monkeypatch.setattr(launcher.subprocess, 'run', run)
     monkeypatch.setattr(launcher, 'terminal_windows', lambda: {777: 'Foreman', 888: 'other'})
     monkeypatch.setattr(launcher.ctypes.windll.user32, 'PostMessageW', lambda h, m, w, l: closed.append((h.value, m)))
-    launcher.down(['dead0001'])
+    launcher.down(['dead0001', '--close'])
     out = json.loads(capsys.readouterr().out)
     handover = (d / 'handover.md').read_text(encoding='utf-8')
     assert 'last words of 501' in handover and 'last words of 502' in handover and 'Ticket X: do it' in handover
@@ -769,7 +778,7 @@ def test_down_without_hwnd_falls_back_to_this_shifts_titles(monkeypatch, tmp_pat
     monkeypatch.setattr(launcher, 'terminal_windows', lambda: windows)
     closed = []
     monkeypatch.setattr(launcher.ctypes.windll.user32, 'PostMessageW', lambda h, m, w, l: closed.append(h.value))
-    launcher.down(['titl0001'])
+    launcher.down(['titl0001', '--close'])
     out = json.loads(capsys.readouterr().out)
     assert closed == ([expected] if expected else []) and out['window_closed'] is bool(expected)
 
@@ -2147,3 +2156,548 @@ def test_powershell_launcher_parses_without_errors(name):
                             capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == '', f'{name} parse errors:\n{result.stdout}'
+
+
+# ── 1x4 container (NGH-025): slots, empty slot shells, spawn, down --hold/--close ──────
+# Nothing here launches wt.exe, a cmd shell, agents-cli or Claude: every call out is faked.
+
+CONT_SHIFT = 'Nightshift-shift-cont0001'
+
+
+@pytest.fixture
+def _container_isolated(monkeypatch, tmp_path):
+    """No test touches the real locks or shifts folders, and nothing reaches a real process."""
+    monkeypatch.setattr(launcher, 'LOCKS_DIR', tmp_path / 'locks')
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'shifts')
+    monkeypatch.setattr(launcher, 'notify_owner', lambda subject, body: {'sent': True, 'draft_id': 'fake'})
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('Popen called'))
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: pytest.fail(f'unexpected subprocess: {argv}'))
+
+
+def _cells(argv):
+    """The wt.exe argv split at ';' into its sub-commands."""
+    cells, cur = [], []
+    for a in argv[6:]:
+        if a == ';':
+            cells.append(cur)
+            cur = []
+        else:
+            cur.append(a)
+    return cells + [cur]
+
+
+PAIR = """\
+name: pair
+layout: 1x4
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true, colour: red}
+  - {role: Coder, brief: coder.md}
+"""
+
+
+# ── load_crew: layouts and slot counts ────────────────────────────────────────
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_default_crew_is_the_1x4_container():
+    crew = launcher.load_crew()
+    assert crew['layout'] == '1x4' and crew['slots'] == 4
+    assert launcher.LAYOUT_SLOTS == {'split': None, '1x4': 4}
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_split_layout_has_no_slots(monkeypatch, tmp_path):
+    _crew_file(monkeypatch, tmp_path, 'flat', PAIR.replace('layout: 1x4', 'layout: split'))
+    assert launcher.load_crew('flat')['slots'] is None
+    _crew_file(monkeypatch, tmp_path, 'bare', PAIR.replace('layout: 1x4\n', ''))
+    crew = launcher.load_crew('bare')
+    assert crew['layout'] == 'split' and crew['slots'] is None
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_1x4_refuses_more_panes_than_slots(monkeypatch, tmp_path):
+    _crew_file(monkeypatch, tmp_path, 'big', PAIR.replace('{role: Coder, brief: coder.md}',
+                                                          '{role: Coder, brief: coder.md, count: 4}'))
+    with pytest.raises(SystemExit, match='5 panes do not fit layout 1x4 \\(4 slots\\)'):
+        launcher.load_crew('big')
+    _crew_file(monkeypatch, tmp_path, 'four', PAIR.replace('{role: Coder, brief: coder.md}',
+                                                           '{role: Coder, brief: coder.md, count: 3}'))
+    assert launcher.load_crew('four')['slots'] == 4   # exactly full is fine
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_unknown_layout_names_the_supported_ones(monkeypatch, tmp_path):
+    _crew_file(monkeypatch, tmp_path, 'odd', PAIR.replace('layout: 1x4', 'layout: 2x2'))
+    with pytest.raises(SystemExit, match="'2x2' is not supported; use one of: split, 1x4"):
+        launcher.load_crew('odd')
+
+
+# ── wt_command with slots ─────────────────────────────────────────────────────
+
+def _slot_argv(members, ticket='NGH-025'):
+    return launcher.wt_command(CONT_SHIFT, Path('C:/x/state'), agents=True, mode_flag='--start', cwd='C:/w',
+                               members=members, ticket=ticket, slots=4)
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_wt_three_members_fill_slots_1_to_3_and_slot_4_is_an_empty_shell():
+    argv = _slot_argv(['Foreman', 'Coder', 'Tester'])
+    assert _titles(argv) == ['NGH-025 Foreman', 'NGH-025 Coder', 'NGH-025 Tester', 'NGH-025 slot 4']
+    cells = _cells(argv)
+    assert [c[0] for c in cells] == ['new-tab', 'split-pane', 'split-pane', 'split-pane', 'focus-pane']
+    assert [c[c.index('-s') + 1] for c in cells[1:4]] == ['0.75', '0.6667', '0.5']   # four equal columns
+    for n, cell in enumerate(cells[:3], 1):
+        assert cell[cell.index('--slot') + 1] == str(n) and '--pane' in cell
+    empty = cells[3]
+    script = str(Path(launcher.__file__).resolve())
+    i = empty.index('cmd.exe')
+    assert empty[i:] == ['cmd.exe', '/k', sys.executable, script, '--slot', '4', '--state-dir', str(Path('C:/x/state'))]
+    assert '--pane' not in empty and '--profile' in empty and '--suppressApplicationTitle' in empty
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_wt_two_members_get_two_empty_slots_not_the_two_pane_layout():
+    argv = _slot_argv(['Foreman', 'Coder'], ticket=None)
+    assert _titles(argv) == [f'{CONT_SHIFT} Foreman', f'{CONT_SHIFT} Coder', f'{CONT_SHIFT} slot 3', f'{CONT_SHIFT} slot 4']
+    cells = _cells(argv)
+    assert 'move-focus' not in argv and cells[-1][:3] == ['focus-pane', '-t', '0']
+    assert [c[c.index('--slot') + 1] for c in cells[:4]] == ['1', '2', '3', '4']
+    assert [('--pane' in c) for c in cells[:4]] == [True, True, False, False]
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_wt_without_slots_has_no_slot_args():
+    argv = launcher.wt_command(CONT_SHIFT, Path('C:/x'), agents=True, mode_flag='--start', cwd='C:/w',
+                               members=['Foreman', 'Coder', 'Tester'])
+    assert '--slot' not in argv and len(_titles(argv)) == 3
+
+
+# ── start --dry-run shows the slots ───────────────────────────────────────────
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_dry_run_default_crew_shows_three_crew_and_one_empty_slot(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    launcher.start(['--dry-run', 'task'])
+    plan = json.loads(capsys.readouterr().out)
+    s = 'Nightshift-shift-12345678'
+    assert plan['slots'] == [{'slot': 1, 'role': 'Foreman', 'pane_title': f'{s} Foreman'},
+                             {'slot': 2, 'role': 'Coder', 'pane_title': f'{s} Coder'},
+                             {'slot': 3, 'role': 'Tester', 'pane_title': f'{s} Tester'},
+                             {'slot': 4, 'role': None, 'pane_title': f'{s} slot 4'}]
+    assert list(plan)[-2:] == ['wt_argv', 'prompt'] or 'wt_argv' in plan
+    assert not (tmp_path / 'shifts').exists()
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_dry_run_two_role_crew_shows_two_crew_and_two_empty_slots(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    _crew_file(monkeypatch, tmp_path, 'pair', PAIR)
+    monkeypatch.chdir(tmp_path)
+    launcher.start(['--dry-run', '--crew', 'pair', 'NGH-025-free-text'])
+    plan = json.loads(capsys.readouterr().out)
+    assert [(c['slot'], c['role']) for c in plan['slots']] == [(1, 'Foreman'), (2, 'Coder'), (3, None), (4, None)]
+    assert _titles(plan['wt_argv'])[2:] == [c['pane_title'] for c in plan['slots'][2:]]
+    assert plan['crew'] == 'pair'
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_dry_run_split_crew_has_no_slots_key(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    _crew_file(monkeypatch, tmp_path, 'flat', PAIR.replace('layout: 1x4', 'layout: split'))
+    monkeypatch.chdir(tmp_path)
+    launcher.start(['--dry-run', '--crew', 'flat', 'task'])
+    assert 'slots' not in json.loads(capsys.readouterr().out)
+
+
+# ── slot records ──────────────────────────────────────────────────────────────
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_write_and_read_slot(tmp_path):
+    assert launcher.read_slot(tmp_path, 1) is None
+    launcher.write_slot(tmp_path, 1, cmd_pid=99)
+    record = launcher.read_slot(tmp_path, 1)
+    assert record['slot'] == 1 and record['cmd_pid'] == 99 and record['role'] is None and 'started' in record
+    launcher.write_slot(tmp_path, 1, role='Advisor')
+    assert launcher.read_slot(tmp_path, 1)['role'] == 'Advisor'
+    (tmp_path / 'slots' / '2.json').write_text('{broken', encoding='utf-8')
+    assert launcher.read_slot(tmp_path, 2) is None
+    (tmp_path / 'slots' / '3.json').write_text('[1, 2]', encoding='utf-8')
+    assert launcher.read_slot(tmp_path, 3) is None
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_slot_shell_records_its_parent_cmd(tmp_path):
+    launcher.slot_shell(4, str(tmp_path))
+    record = launcher.read_slot(tmp_path, 4)
+    assert record['cmd_pid'] == os.getppid() and record['role'] is None and record['slot'] == 4
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_main_with_only_slot_runs_the_slot_shell(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(launcher, 'slot_shell', lambda slot, state_dir: seen.append((slot, state_dir)))
+    monkeypatch.setattr(launcher, 'pane', lambda *a, **k: pytest.fail('pane called'))
+    monkeypatch.setattr(sys, 'argv', ['nightshift_shifts.py', '--slot', '4', '--state-dir', str(tmp_path)])
+    launcher.main()
+    assert seen == [(4, str(tmp_path))]
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_main_passes_slot_to_the_pane_wrapper(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(launcher, 'pane', lambda *a: seen.append(a))
+    monkeypatch.setattr(launcher, 'slot_shell', lambda *a: pytest.fail('slot_shell called'))
+    monkeypatch.setattr(sys, 'argv', ['nightshift_shifts.py', '--pane', 'Coder', '--state-dir', str(tmp_path),
+                                      '--start', '--slot', '2'])
+    launcher.main()
+    assert seen and seen[0][0] == 'Coder' and seen[0][-1] == 2
+
+
+# ── pane() reads crew.json (spawned members) ─────────────────────────────────
+
+def _member(shift, role, label=None, human=False, colour='green', peer=None, tool='claude', model='claude-opus-5-5'):
+    label = label or role
+    return {'role': role, 'label': label, 'identity': f'{shift}-{label.lower()}', 'brief': f'{role.lower()}.md'
+            if role in ('Foreman', 'Coder', 'Tester') else 'coder.md', 'colour': colour, 'human_contact': human,
+            'tool': tool, 'model': model, 'peer': peer or f'{shift}-foreman'}
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_pane_start_takes_a_spawned_member_from_crew_json(monkeypatch, tmp_path):
+    state = tmp_path / CONT_SHIFT
+    state.mkdir()
+    (state / 'prompt.txt').write_text('THE TASK', encoding='utf-8')
+    members = [_member(CONT_SHIFT, 'Foreman', human=True, colour='red', peer=f'{CONT_SHIFT}-coder'), _member(CONT_SHIFT, 'Coder'),
+               _member(CONT_SHIFT, 'Advisor', colour='yellow', model='claude-sonnet-5-5')]
+    (state / 'crew.json').write_text(json.dumps({'crew': 'default', 'members': members, 'slots': 4,
+                                                 'permission_mode': 'plan'}), encoding='utf-8')
+    seen = {}
+
+    class Child:
+        pid = 42
+
+        def wait(self):
+            return 0
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.setdefault('colour', colour))
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    monkeypatch.setattr(launcher, 'load_crew', lambda *a, **k: pytest.fail('manifest read despite crew.json'))
+    launcher.pane('Advisor', str(state), start=True, cwd=str(tmp_path), slot=3)
+    cmd = seen['cmd']
+    assert cmd[cmd.index('--name') + 1] == f'{CONT_SHIFT}-advisor' and cmd[cmd.index('--model') + 1] == 'claude-sonnet-5-5'
+    assert cmd[cmd.index('--permission-mode') + 1] == 'plan' and seen['colour'] == 'yellow'
+    slot = launcher.read_slot(state, 3)
+    assert slot['role'] == 'Advisor' and slot['identity'] == f'{CONT_SHIFT}-advisor' and slot['wrapper_pid'] == os.getpid()
+    with pytest.raises(SystemExit, match='not a member of crew default'):
+        launcher.pane('Nobody', str(state), start=True, cwd=str(tmp_path))
+
+
+# ── spawn ─────────────────────────────────────────────────────────────────────
+
+def _container(tmp_path, members=('Foreman', 'Coder'), slots=4, hwnd=777, free=(3, 4), extra_slots=None):
+    """A live 1x4 shift: crew.json, launch.json, a <Role>.json and slot record per member, empty slots in `free`."""
+    d = tmp_path / 'shifts' / CONT_SHIFT
+    d.mkdir(parents=True)
+    crew = [_member(CONT_SHIFT, r, human=(r == 'Foreman'), colour='red' if r == 'Foreman' else 'green') for r in members]
+    (d / 'crew.json').write_text(json.dumps({'crew': 'default', 'members': crew, 'slots': slots,
+                                             'permission_mode': 'auto', 'model': 'claude-opus-5-5',
+                                             'cwd': 'C:/git/proj'}), encoding='utf-8')
+    (d / 'launch.json').write_text(json.dumps({'argv': [], 'hwnd': hwnd}), encoding='utf-8')
+    for n, role in enumerate(members, 1):
+        (d / f'{role}.json').write_text(json.dumps({'pid': 500 + n, 'wrapper_pid': 1500 + n, 'started': 1.0,
+                                                    'name': f'{CONT_SHIFT}-{role.lower()}', 'cwd': 'C:/git/proj'}),
+                                        encoding='utf-8')
+        launcher.write_slot(d, n, role=role, cmd_pid=2500 + n)
+    for n in free:
+        launcher.write_slot(d, n, cmd_pid=2500 + n)
+    for n, fields in (extra_slots or {}).items():
+        launcher.write_slot(d, n, **fields)
+    return d
+
+
+@pytest.fixture
+def injected(monkeypatch):
+    """Fake the outside world for spawn: window 777 open, every cmd pid running, crew pids alive, inject ok."""
+    class Calls(list):
+        rc, err = 0, b''
+    calls = Calls()
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: {777: 'NGH-025 Foreman'})
+    monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: True)
+
+    def run(argv, **k):
+        calls.append(argv)
+        assert argv[:3] == ['agents-cli', '_attach', 'inject'], argv
+        return subprocess.CompletedProcess(argv, calls.rc, b'', calls.err)
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    return calls
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_into_slot_3_of_a_two_role_crew(tmp_path, injected, capsys):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Tester', '--slot', '3'])
+    out = json.loads(capsys.readouterr().out)
+    assert out == {'shift': CONT_SHIFT, 'slot': 3, 'role': 'Tester', 'identity': f'{CONT_SHIFT}-tester', 'tool': 'claude'}
+    crew = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    assert [m['label'] for m in crew['members']] == ['Foreman', 'Coder', 'Tester']
+    tester = crew['members'][-1]
+    assert tester['brief'] == 'tester.md' and tester['peer'] == f'{CONT_SHIFT}-foreman' and tester['human_contact'] is False
+    assert tester['model'] == 'claude-opus-5-5' and crew['slots'] == 4 and crew['cwd'] == 'C:/git/proj'
+    assert len(injected) == 1
+    argv = injected[0]
+    assert argv[3:5] == ['2503', '1']   # slot 3's cmd pid
+    assert argv[5] == (f'"{sys.executable}" "{Path(launcher.__file__).resolve()}" --pane Tester --state-dir "{d}" '
+                       '--start --cwd "C:/git/proj" --slot 3')
+    slot = launcher.read_slot(d, 3)
+    assert slot['role'] == 'Tester' and slot['identity'] == f'{CONT_SHIFT}-tester' and slot['cmd_pid'] == 2503
+    assert launcher.read_slot(d, 4)['role'] is None
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_takes_the_first_free_slot(tmp_path, injected, capsys):
+    d = _container(tmp_path, members=('Foreman', 'Coder', 'Tester'), free=(4,))
+    launcher.spawn([CONT_SHIFT, '--role', 'Advisor'])
+    out = json.loads(capsys.readouterr().out)
+    assert out['slot'] == 4 and injected[0][3] == '2504'
+    advisor = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert advisor['brief'] == 'coder.md' and advisor['colour'] == 'yellow'   # no advisor.md brief yet
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_gemini_runs_agy(tmp_path, injected, capsys):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Coder2', '--cli', 'gemini'])
+    assert json.loads(capsys.readouterr().out)['tool'] == 'agy'
+    member = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert member['tool'] == 'agy' and member['model'] == launcher.AGY_MODEL
+
+
+@pytest.mark.usefixtures('_container_isolated')
+@pytest.mark.parametrize('cli', ['codex', 'copilot', 'opencode'])
+def test_spawn_refuses_unwired_clis(tmp_path, injected, cli):
+    d = _container(tmp_path)
+    before = (d / 'crew.json').read_text(encoding='utf-8')
+    with pytest.raises(SystemExit, match=f'--cli {cli} is not yet wired'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Helper', '--cli', cli])
+    assert (d / 'crew.json').read_text(encoding='utf-8') == before and injected == []
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_refuses_when_the_window_is_gone(tmp_path, injected, monkeypatch):
+    _container(tmp_path)
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: {888: 'other'})
+    with pytest.raises(SystemExit, match='window is gone'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
+    assert injected == []
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_refuses_without_launch_json(tmp_path, injected):
+    d = _container(tmp_path)
+    (d / 'launch.json').unlink()
+    with pytest.raises(SystemExit, match='window is gone'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_refuses_a_shift_without_a_slot_grid(tmp_path, injected):
+    _container(tmp_path, slots=None)
+    with pytest.raises(SystemExit, match='no slot grid'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_refuses_when_no_slot_is_free(tmp_path, injected):
+    _container(tmp_path, members=('Foreman', 'Coder'), free=(), extra_slots={3: {'role': 'Tester', 'cmd_pid': 2503},
+                                                                         4: {'role': 'Advisor', 'cmd_pid': 2504}})
+    with pytest.raises(SystemExit, match='no free slot in shift .* \\(4 slots, all taken\\)'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Helper'])
+    assert injected == []
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_refuses_a_taken_or_out_of_range_slot(tmp_path, injected):
+    _container(tmp_path)
+    with pytest.raises(SystemExit, match='slot 2 is taken'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Tester', '--slot', '2'])
+    with pytest.raises(SystemExit, match='slot 5 is not in 1..4'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Tester', '--slot', '5'])
+    assert injected == []
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_skips_a_slot_whose_cmd_has_exited(tmp_path, injected, monkeypatch, capsys):
+    _container(tmp_path)
+    monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: pid != 2503)
+    launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
+    assert json.loads(capsys.readouterr().out)['slot'] == 4
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_refuses_a_live_role_in_any_case(tmp_path, injected):
+    _container(tmp_path)
+    with pytest.raises(SystemExit, match='role Coder is already live .*pid 502'):
+        launcher.spawn([CONT_SHIFT, '--role', 'coder'])
+    assert injected == []
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_refuses_a_role_still_starting_in_a_slot(tmp_path, injected):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Tester'])   # slot 3; Tester.json not written yet
+    with pytest.raises(SystemExit, match='already live .*starting in slot 3'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
+    assert len(injected) == 1 and not (d / 'Tester.json').exists()
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_restarts_a_gone_member_under_its_own_label(tmp_path, injected, monkeypatch, capsys):
+    d = _container(tmp_path)
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: pid != 502)   # Coder has exited
+    launcher.spawn([CONT_SHIFT, '--role', 'coder'])
+    out = json.loads(capsys.readouterr().out)
+    assert out['role'] == 'Coder' and out['slot'] == 3
+    labels = [m['label'] for m in json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members']]
+    assert labels == ['Foreman', 'Coder']   # replaced, not duplicated
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_rejects_a_bad_role_name(tmp_path, injected):
+    _container(tmp_path)
+    with pytest.raises(SystemExit, match='must be letters, digits or _'):
+        launcher.spawn([CONT_SHIFT, '--role', 'x; del *'])
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_inject_failure_leaves_crew_and_slot_as_they_were(tmp_path, injected):
+    d = _container(tmp_path)
+    before = (d / 'crew.json').read_text(encoding='utf-8')
+    injected.rc, injected.err = 3, b'no console'
+    with pytest.raises(SystemExit, match='could not type into slot 3 \\(cmd pid 2503\\): no console'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
+    assert (d / 'crew.json').read_text(encoding='utf-8') == before
+    assert launcher.read_slot(d, 3)['role'] is None
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_non_default_crew_passes_crew_to_the_wrapper(tmp_path, injected):
+    d = _container(tmp_path)
+    saved = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    (d / 'crew.json').write_text(json.dumps({**saved, 'crew': 'pair'}), encoding='utf-8')
+    launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
+    assert injected[0][5].endswith('--slot 3 --crew pair')
+
+
+# ── down: --hold / --close and kill ordering ─────────────────────────────────
+
+@pytest.fixture
+def down_world(monkeypatch, tmp_path):
+    """A 1x4 shift with Foreman/Coder/Tester live; records taskkill, release, print and WM_CLOSE in order."""
+    d = _container(tmp_path, members=('Foreman', 'Coder', 'Tester'), free=(4,))
+    (d / 'prompt.txt').write_text('Ticket NGH-025: container', encoding='utf-8')
+    events = []
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: True)
+    monkeypatch.setattr(launcher, 'pane_tail', lambda pid, lines=40: ['tail'])
+    monkeypatch.setattr(launcher, 'suite_result', lambda *a, **k: ('passed', '1 passed'))
+    monkeypatch.setattr(launcher, 'shift_commits', lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: {777: 'NGH-025 Foreman'})
+    monkeypatch.setattr(launcher, 'own_ancestors', lambda: {os.getpid(), 1501, 9999})   # we run in Foreman's wrapper
+
+    def run(argv, **k):
+        if argv[0] == 'taskkill':
+            events.append(('kill', int(argv[-1])))
+        return subprocess.CompletedProcess(argv, 0, b'', b'')
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    real_release = launcher.release_lock
+    monkeypatch.setattr(launcher, 'release_lock', lambda name: events.append(('release',)) or real_release(name))
+    monkeypatch.setattr(launcher, 'print', lambda *a, **k: events.append(('print', a[0])), raising=False)
+    monkeypatch.setattr(launcher.ctypes.windll.user32, 'PostMessageW',
+                        lambda h, m, w, l: events.append(('close', h.value, m)))
+    return d, events
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_down_defaults_to_hold_and_kills_its_own_tree_last(down_world):
+    d, events = down_world
+    launcher.down([CONT_SHIFT])
+    kinds = [e[0] for e in events]
+    assert 'close' not in kinds
+    printed = json.loads(next(e[1] for e in events if e[0] == 'print'))
+    assert printed['held'] is True and printed['window_closed'] is False
+    assert sorted(printed['stopped']) == ['Coder', 'Foreman', 'Tester']
+    first_kills = events[:kinds.index('release')]
+    assert sorted(p for _, p in first_kills) == [502, 503, 1502, 1503]   # Coder and Tester, claude + wrapper
+    assert events[kinds.index('release') + 1][0] == 'print'
+    assert events[kinds.index('print') + 1:] == [('kill', 501), ('kill', 1501)]   # Foreman's tree, after the output
+    assert (d / 'handover.md').exists()
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_down_close_posts_wm_close_after_output_before_own_kill(down_world):
+    _, events = down_world
+    launcher.down([CONT_SHIFT, '--close'])
+    kinds = [e[0] for e in events]
+    printed = json.loads(events[kinds.index('print')][1])
+    assert printed['held'] is False and printed['window_closed'] is True
+    assert kinds.index('release') < kinds.index('print') < kinds.index('close') < kinds.index('kill', kinds.index('print'))
+    assert ('close', 777, 0x10) in events
+    assert events[-2:] == [('kill', 501), ('kill', 1501)]
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_down_from_outside_the_crew_kills_everyone_before_output(down_world, monkeypatch):
+    _, events = down_world
+    monkeypatch.setattr(launcher, 'own_ancestors', lambda: {os.getpid()})
+    launcher.down([CONT_SHIFT, '--hold'])
+    kinds = [e[0] for e in events]
+    assert kinds[-1] == 'print' and kinds.count('kill') == 6 and kinds.index('release') > 5
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_down_close_with_window_already_gone(down_world, monkeypatch):
+    _, events = down_world
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: {})
+    launcher.down([CONT_SHIFT, '--close'])
+    printed = json.loads(next(e[1] for e in events if e[0] == 'print'))
+    assert printed['window_closed'] is False and printed['held'] is False
+    assert 'close' not in [e[0] for e in events]
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_down_hold_and_close_are_exclusive(down_world):
+    with pytest.raises(SystemExit):
+        launcher.down([CONT_SHIFT, '--hold', '--close'])
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_loop_ends_each_shift_with_down_close(monkeypatch, tmp_path):
+    d = tmp_path / 'shifts' / 'shift-NGH-040'
+    d.mkdir(parents=True)
+    downs = []
+    monkeypatch.setattr(launcher.ctypes.windll.kernel32, 'SetConsoleTitleW', lambda t: None)
+    monkeypatch.setattr(launcher, 'close_terminal_windows', lambda prefix: None)
+    monkeypatch.setattr(launcher, 'start', lambda argv: d)
+    monkeypatch.setattr(launcher, 'wait_for_result', lambda state_dir, stall, **kw: {'status': 'done', 'stage': 'tested'})
+    monkeypatch.setattr(launcher, 'down', lambda argv: downs.append(argv))
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: subprocess.CompletedProcess([], 0, b'', b''))
+    launcher.loop(['NGH-040', '--no-notify'])
+    assert downs == [['shift-NGH-040', '--close']]
+
+
+# ── own_ancestors ─────────────────────────────────────────────────────────────
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_own_ancestors_walks_parents_and_stops_on_a_cycle(monkeypatch):
+    me = os.getpid()
+    monkeypatch.setattr(launcher, 'parent_pids', lambda: {me: 20, 20: 30, 30: 20, 40: me})
+    assert launcher.own_ancestors() == {me, 20, 30}
+    monkeypatch.setattr(launcher, 'parent_pids', lambda: {})
+    assert launcher.own_ancestors() == {me}
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_parent_pids_sees_this_process_and_its_parent():
+    parents = launcher.parent_pids()   # read-only Toolhelp snapshot
+    assert parents.get(os.getpid()) == os.getppid()

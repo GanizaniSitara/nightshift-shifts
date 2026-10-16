@@ -11,7 +11,12 @@ mode (--permission-mode auto). Each `start` is a new shift: mesh names are
 window is titled 'Nightshift <first ticket>..<last ticket>', and
 <state_dir>/<Role>.json records pid, name, peer and model. There is no restart or
 resume; a closed pane is not relaunched. `start --dry-run` prints the plan as
-JSON without launching or writing anything. A working folder holds one live shift at a time:
+JSON without launching or writing anything.
+Container (NGH-025): a crew with layout 1x4 fills four equal columns, the crew in the first slots and plain cmd
+shells in the rest (each records <state_dir>/slots/<N>.json); the launcher exits once every pane and slot has
+reported. `spawn SHIFT --role ROLE [--cli claude|gemini] [--slot N]` starts a session in a free slot of that
+window (Foreman's only way to add a crew member), and Foreman ends its own shift with `down` (--hold, the
+default, keeps the tab; --close closes the window, as `loop` does). A working folder holds one live shift at a time:
 start takes a lock (C:/Data/nightshift/locks), refuses with exit code 3 while a live shift holds it,
 and `down` releases it.
 Coders claim files before editing them (`claim`/`release`/`claims`, kept in <state_dir>/claims.json); a file
@@ -69,6 +74,11 @@ AGY_EXE = Path(os.environ.get('LOCALAPPDATA', '')) / 'Microsoft' / 'WinGet' / 'L
 DEFAULT_LABELS = ('Foreman', 'Coder')   # panes of the trial modes and of shifts started before crew.json existed
 STAGES = ('implemented', 'tested', 'deployed', 'validated')   # the result ladder, lowest rung first
 DEFAULT_REQUIRES = 'tested'
+# Crew layouts and their slot counts: 'split' sizes the tab to the crew (no slots); '1x4' is the container (NGH-025):
+# four equal columns, the crew in the first slots and plain cmd shells in the rest, which `spawn` can fill.
+LAYOUT_SLOTS = {'split': None, '1x4': 4}
+SPAWN_CLIS = {'claude': 'claude', 'gemini': 'agy', 'codex': None, 'copilot': None, 'opencode': None}   # None: not wired
+AGY_MODEL = 'gemini-3.8-flash-high'      # model for a spawned agy role when no crew member names one
 
 
 def stage_rank(stage):
@@ -147,14 +157,17 @@ def load_crew(name='default'):
     if not 2 <= panes <= 8:
         raise SystemExit(f'crew {name}: {panes} panes; a crew has 2 to 8')
     layout = data.get('layout', 'split')
-    if layout != 'split':
-        raise SystemExit(f"crew {name}: layout {layout!r} is not supported; use 'split'")
+    if layout not in LAYOUT_SLOTS:
+        raise SystemExit(f"crew {name}: layout {layout!r} is not supported; use one of: {', '.join(LAYOUT_SLOTS)}")
+    slots = LAYOUT_SLOTS[layout]
+    if slots is not None and panes > slots:
+        raise SystemExit(f'crew {name}: {panes} panes do not fit layout {layout} ({slots} slots)')
     model = str(data.get('model') or MODEL)
     for r in checked:
         r['model'] = r['model'] or model   # a role without its own model: runs the crew model
     return {'name': name, 'model': model,
             'permission_mode': str(data.get('permission_mode') or START_PERMISSION_MODE),
-            'contract': str(data.get('contract') or 'result.json'), 'layout': layout, 'roles': checked}
+            'contract': str(data.get('contract') or 'result.json'), 'layout': layout, 'slots': slots, 'roles': checked}
 
 
 def crew_members(crew, shift):
@@ -314,7 +327,37 @@ def set_role_colour(child, colour, cwd):
         time.sleep(0.5)
 
 
-def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/nightshift', crew=None):
+def read_crew_json(state_dir):
+    """<state_dir>/crew.json as a dict with a members list, None when missing or unreadable."""
+    try:
+        saved = json.loads(Path(state_dir, 'crew.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    return saved if isinstance(saved, dict) and isinstance(saved.get('members'), list) else None
+
+
+def write_slot(state_dir, slot, **fields):
+    """Record <state_dir>/slots/<slot>.json: {slot, started, role: None, ...fields} (fields win)."""
+    slots_dir = Path(state_dir) / 'slots'
+    slots_dir.mkdir(parents=True, exist_ok=True)
+    write_json(slots_dir / f'{slot}.json', {'started': time.time(), 'role': None, **fields, 'slot': slot})
+
+
+def read_slot(state_dir, slot):
+    """<state_dir>/slots/<slot>.json as a dict, None when missing or unreadable."""
+    try:
+        record = json.loads((Path(state_dir) / 'slots' / f'{slot}.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def slot_shell(slot, state_dir):
+    """The --slot step of an empty slot: record the cmd.exe that runs it (our parent) and exit to its prompt."""
+    write_slot(state_dir, slot, cmd_pid=os.getppid())
+
+
+def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/nightshift', crew=None, slot=None):
     if live or start:
         model, permission_mode, tool = MODEL, START_PERMISSION_MODE, 'claude'
         colour = 'red' if role == 'Foreman' else 'green'
@@ -345,13 +388,22 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                      'Foreman delegates implementation to Coder, reviews and checks the result, then reports. '
                      'Do not spawn additional agents.\n' + Path(brief_file).read_text(encoding='utf-8'))
         if start:
-            # `role` is the pane label (Foreman, Coder-2, ...); everything else comes from the crew manifest.
-            crew_def = load_crew(crew or 'default')
-            member = next((m for m in crew_members(crew_def, shift) if m['label'] == role), None)
+            # `role` is the pane label (Foreman, Coder-2, ...); everything else comes from <state_dir>/crew.json
+            # (which also holds members added by `spawn`), else from the crew manifest.
+            saved = read_crew_json(state_dir)
+            if saved:
+                members = saved['members']
+                crew_name, permission_mode = saved.get('crew', 'default'), saved.get('permission_mode')
+            else:
+                crew_def = load_crew(crew or 'default')
+                members = crew_members(crew_def, shift)
+                crew_name, permission_mode = crew_def['name'], crew_def['permission_mode']
+            member = next((m for m in members if m['label'] == role), None)
             if member is None:
-                raise SystemExit(f"pane {role} is not a member of crew {crew_def['name']}")
+                raise SystemExit(f'pane {role} is not a member of crew {crew_name}')
             identity, peer_name, colour = member['identity'], member['peer'], member['colour']
-            model, permission_mode, tool = member['model'], crew_def['permission_mode'], member['tool']
+            model, tool = member['model'], member['tool']
+            permission_mode = permission_mode or START_PERMISSION_MODE
             first_message = opening_message(member)
             brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'])
             if member['human_contact']:
@@ -368,6 +420,10 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
         if start:
             record['tool'] = tool
         Path(state_dir, role + '.json').write_text(json.dumps(record), encoding='utf-8')
+        if slot:
+            # keep what is already there (a spawned slot's cmd_pid) and add who runs in it
+            kept = {k: v for k, v in (read_slot(state_dir, slot) or {}).items() if k != 'slot'}
+            write_slot(state_dir, slot, **{**kept, 'role': role, 'identity': identity, 'wrapper_pid': os.getpid()})
         if tool == 'agy':
             register_name(child.pid, identity)   # the trust dialog and /color are Claude-only
         else:
@@ -441,14 +497,35 @@ def loop_title(tickets):
 
 
 def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=None, members=DEFAULT_LABELS,
-               crew='default', ticket=None):
+               crew='default', ticket=None, slots=None):
     """wt.exe argv for one tab holding `members` (pane labels, in order).
 
     2 panes: side by side, focus left (unchanged since the first crew). 3-4: one row of equal columns,
     each new pane split off the last. 5-8: top row ceil(n/2) panes, bottom row the rest.
+    With `slots` (a 1x4 crew) the tab has that many cells: members fill slots 1..k (each wrapper gets
+    --slot N) and slots k+1.. run `cmd.exe /k <python> <script> --slot N`, an empty shell `spawn` can fill.
     """
     command = ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized']
     script = str(Path(__file__).resolve())
+
+    def add_empty(parts, slot):
+        if len(command) > 6:
+            command.append(';')
+        command.extend(parts)
+        if agents:
+            command.extend(['--profile', PROFILE])
+        command.extend(['--title', pane_title(ticket or name, f'slot {slot}'), '--suppressApplicationTitle',
+                        '-d', '%USERPROFILE%', 'cmd.exe', '/k', sys.executable, script,
+                        '--slot', str(slot), '--state-dir', str(state_dir)])
+
+    def place(parts, i):
+        """Cell i (0-based): a crew member, or an empty slot past the last member."""
+        if i < len(members):
+            add(parts, members[i])
+            if slots:
+                command.extend(['--slot', str(i + 1)])
+        else:
+            add_empty(parts, i + 1)
 
     def add(parts, role=None):
         if len(command) > 6:
@@ -470,27 +547,27 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
             if crew != 'default':
                 command.extend(['--crew', crew])
 
-    def columns(labels):
+    def columns(cells):
         # Each new pane takes (remaining-1)/remaining of the last one, so all end up equal.
-        for i, label in enumerate(labels, 1):
-            left = len(labels) + 1 - i
-            add(['split-pane', '-V', '-s', f'{left / (left + 1):.4g}'], label)
+        for i, cell in enumerate(cells, 1):
+            left = len(cells) + 1 - i
+            place(['split-pane', '-V', '-s', f'{left / (left + 1):.4g}'], cell)
 
-    n = len(members)
-    add(['new-tab'], members[0])
+    n = slots or len(members)
+    place(['new-tab'], 0)
     if n == 2:
-        add(['split-pane', '-V', '-s', '0.5'], members[1])
+        place(['split-pane', '-V', '-s', '0.5'], 1)
         add(['move-focus', 'left'])
         return command
     if n <= 4:
-        columns(members[1:])
+        columns(range(1, n))
     else:
         top = math.ceil(n / 2)
-        add(['split-pane', '-H', '-s', '0.5'], members[top])
+        place(['split-pane', '-H', '-s', '0.5'], top)
         add(['move-focus', 'up'])
-        columns(members[1:top])
+        columns(range(1, top))
         add(['move-focus', 'down'])
-        columns(members[top + 1:])
+        columns(range(top + 1, n))
     add(['focus-pane', '-t', '0'])
     return command
 
@@ -539,7 +616,9 @@ def close_terminal_windows(title_prefix):
     return len(hwnds)
 
 
-def launch(command, name, state_dir, extra, labels=DEFAULT_LABELS):
+def launch(command, name, state_dir, extra, labels=DEFAULT_LABELS, slots=None):
+    """Run wt.exe, remember the new window, wait for every pane to report, print, return. The launcher then
+    exits: nothing polls the shift afterwards (NGH-025); with `slots`, every slots/<N>.json must report too."""
     before = set(terminal_windows())
     human_window = ctypes.windll.user32.GetForegroundWindow()
     (state_dir / 'launch.json').write_text(json.dumps({'argv': command, 'launcher_pid': os.getpid()}), encoding='utf-8')
@@ -556,13 +635,16 @@ def launch(command, name, state_dir, extra, labels=DEFAULT_LABELS):
             break
         time.sleep(0.25)
     # Each pane writes <role>.json once it is running; pane titles are too short to identify the window.
-    pending = list(labels)
+    expected = [(label, state_dir / (label + '.json')) for label in labels]
+    expected += [(f'slot {n}', state_dir / 'slots' / f'{n}.json') for n in range(1, (slots or 0) + 1)]
+    pending = [label for label, _ in expected]
     for _ in range(60):
-        pending = [label for label in labels if not (state_dir / (label + '.json')).exists()]
+        pending = [label for label, path in expected if not path.exists()]
         if not pending:
             break
         time.sleep(0.5)
-    print(json.dumps({'window_name': name, 'state_dir': str(state_dir), 'requested_layout': layout_description(len(labels)),
+    print(json.dumps({'window_name': name, 'state_dir': str(state_dir),
+                      'requested_layout': layout_description(slots or len(labels)),
                       **extra, 'panes_missing': pending}))
     if pending:
         raise SystemExit(f'WT activation returned success, but these panes never reported: {", ".join(pending)}.')
@@ -698,7 +780,7 @@ def start(argv):
     members = crew_members(crew, name)
     labels = [m['label'] for m in members]
     command = wt_command(name, state_dir, agents=True, mode_flag='--start', cwd=cwd, members=labels, crew=crew['name'],
-                         ticket=ticket)
+                         ticket=ticket, slots=crew['slots'])
     if args.dry_run:
         plan = {
             'dry_run': True, 'shift': name, 'state_dir': str(state_dir), 'cwd': cwd, 'ticket': ticket,
@@ -710,8 +792,13 @@ def start(argv):
                                    # Claude roles keep the pre-manifest shape; other tools show what will run
                                    **({'tool': m['tool'], 'model': m['model'], 'exe': str(AGY_EXE)}
                                       if m['tool'] != 'claude' else {})}
-                      for m in members},
-            'wt_argv': command, 'prompt': prompt}
+                      for m in members}}
+        if crew['slots']:
+            # The container (NGH-025): which slot holds which crew pane, and the empty ones `spawn` can fill.
+            cells = labels + [None] * (crew['slots'] - len(labels))
+            plan['slots'] = [{'slot': n, 'role': role, 'pane_title': pane_title(ticket or name, role or f'slot {n}')}
+                             for n, role in enumerate(cells, 1)]
+        plan.update(wt_argv=command, prompt=prompt)
         if crew['name'] != 'default':
             plan['crew'] = crew['name']   # the default crew's plan stays exactly as it was before manifests
         if ticket:
@@ -722,12 +809,14 @@ def start(argv):
     state_dir.mkdir(parents=True)
     (state_dir / 'prompt.txt').write_text(prompt, encoding='utf-8')
     (state_dir / 'requires.txt').write_text(required, encoding='utf-8')
-    (state_dir / 'crew.json').write_text(json.dumps({'crew': crew['name'], 'members': members}, indent=2),
-                                         encoding='utf-8')
+    (state_dir / 'crew.json').write_text(json.dumps({'crew': crew['name'], 'members': members, 'slots': crew['slots'],
+                                                     'permission_mode': crew['permission_mode'], 'model': crew['model'],
+                                                     'cwd': cwd}, indent=2), encoding='utf-8')
     if ticket:
         (state_dir / 'ticket.txt').write_text(ticket, encoding='utf-8')
     install_profile(state_dir)
-    launch(command, name, state_dir, {'mode': 'start', 'prompt_file': str(state_dir / 'prompt.txt')}, labels)
+    launch(command, name, state_dir, {'mode': 'start', 'prompt_file': str(state_dir / 'prompt.txt')}, labels,
+           crew['slots'])
     return state_dir
 
 
@@ -947,26 +1036,42 @@ def handover_report(state_dir, record):
     return lines
 
 
-def down(argv):
-    parser = argparse.ArgumentParser(prog='nightshift down',
-                                     description='Stop a crew: capture each pane, write handover.md, end the sessions, close the window.')
-    parser.add_argument('shift', nargs='?', default='latest', help='shift name, unique suffix, or "latest" (default)')
-    args = parser.parse_args(argv)
-    state_dir = resolve_shift(args.shift)
-    record = shift_record(state_dir)
-    tails = {role: pane_tail(info['pid']) for role, info in record['roles'].items() if info['alive']}
-    record_denials(state_dir, tails)
-    handover = [f"# Handover: {record['shift']}", '', f"Task: {record['task']}", f"Stopped: {time.strftime('%Y-%m-%d %H:%M')}", '']
-    handover += handover_report(state_dir, record)
-    for role, info in record['roles'].items():
-        handover += [f"## {role} ({info['name']}, pid {info['pid']}, {'alive' if info['alive'] else 'gone'})", '',
-                     '```', *(tails.get(role, []) or ['(pane not readable)']), '```', '']
-    (state_dir / 'handover.md').write_text('\n'.join(handover), encoding='utf-8')
-    for role, info in record['roles'].items():
-        for pid in (info['pid'], info.get('wrapper_pid')):
-            if pid:
-                subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, timeout=30)
-    released = release_lock(record['shift'])
+def parent_pids():
+    """{pid: parent pid} for every process, from one Toolhelp snapshot; {} when the snapshot fails."""
+    class Entry(ctypes.Structure):
+        _fields_ = [('dwSize', ctypes.c_ulong), ('cntUsage', ctypes.c_ulong), ('th32ProcessID', ctypes.c_ulong),
+                    ('th32DefaultHeapID', ctypes.c_size_t), ('th32ModuleID', ctypes.c_ulong),
+                    ('cntThreads', ctypes.c_ulong), ('th32ParentProcessID', ctypes.c_ulong),
+                    ('pcPriClassBase', ctypes.c_long), ('dwFlags', ctypes.c_ulong), ('szExeFile', ctypes.c_wchar * 260)]
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)   # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+        return {}
+    parents = {}
+    try:
+        entry = Entry()
+        entry.dwSize = ctypes.sizeof(Entry)
+        ok = kernel32.Process32FirstW(ctypes.c_void_p(snapshot), ctypes.byref(entry))
+        while ok:
+            parents[entry.th32ProcessID] = entry.th32ParentProcessID
+            ok = kernel32.Process32NextW(ctypes.c_void_p(snapshot), ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(snapshot))
+    return parents
+
+
+def own_ancestors():
+    """PIDs of this process and every process above it (parent, grandparent, ...)."""
+    parents, seen, pid = parent_pids(), set(), os.getpid()
+    while pid and pid not in seen:
+        seen.add(pid)
+        pid = parents.get(pid)
+    return seen
+
+
+def close_target(state_dir):
+    """The shift's open Terminal window (hwnd) for `down --close`, or None."""
     launch_record = json.loads((state_dir / 'launch.json').read_text(encoding='utf-8')) if (state_dir / 'launch.json').exists() else {}
     hwnd = launch_record.get('hwnd')
     windows = terminal_windows()
@@ -978,12 +1083,142 @@ def down(argv):
         titles = {pane_title(label, m['label']) for m in crew_roster(state_dir)} | {'Foreman', 'Coder'}
         candidates = [h for h, title in windows.items() if title in titles]
         hwnd = candidates[0] if len(candidates) == 1 else None
-    window_open = bool(hwnd and hwnd in windows)
-    if window_open:
-        ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)   # WM_CLOSE on that window only
+    return hwnd if hwnd and hwnd in windows else None
+
+
+def down(argv):
+    parser = argparse.ArgumentParser(
+        prog='nightshift down',
+        description='Stop a crew: capture each pane, write handover.md, end the sessions and release the folder lock. '
+                    '--hold (default) leaves the tab open; --close also closes the window. When run from inside the '
+                    'crew (Foreman ending its own shift), its own process tree is killed last, after the output.')
+    parser.add_argument('shift', nargs='?', default='latest', help='shift name, unique suffix, or "latest" (default)')
+    keep = parser.add_mutually_exclusive_group()
+    keep.add_argument('--hold', dest='close', action='store_false', help='leave the Terminal tab open (default)')
+    keep.add_argument('--close', dest='close', action='store_true', help="also close the shift's Terminal window")
+    parser.set_defaults(close=False)   # without it the shared dest takes --hold's store_false default (True)
+    args = parser.parse_args(argv)
+    state_dir = resolve_shift(args.shift)
+    record = shift_record(state_dir)
+    tails = {role: pane_tail(info['pid']) for role, info in record['roles'].items() if info['alive']}
+    record_denials(state_dir, tails)
+    handover = [f"# Handover: {record['shift']}", '', f"Task: {record['task']}", f"Stopped: {time.strftime('%Y-%m-%d %H:%M')}", '']
+    handover += handover_report(state_dir, record)
+    for role, info in record['roles'].items():
+        handover += [f"## {role} ({info['name']}, pid {info['pid']}, {'alive' if info['alive'] else 'gone'})", '',
+                     '```', *(tails.get(role, []) or ['(pane not readable)']), '```', '']
+    (state_dir / 'handover.md').write_text('\n'.join(handover), encoding='utf-8')
+    # The member whose process tree runs this `down` (Foreman ending its own shift) is killed last, after the
+    # lock is released and the output printed; killing it first would end `down` half-way.
+    mine = own_ancestors()
+    kills, last = [], []
+    for role, info in record['roles'].items():
+        pids = [pid for pid in (info['pid'], info.get('wrapper_pid')) if pid]
+        (last if any(pid in mine for pid in pids) else kills).extend(pids)
+    for pid in kills:
+        subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, timeout=30)
+    released = release_lock(record['shift'])
+    hwnd = close_target(state_dir) if args.close else None
     print(json.dumps({'shift': record['shift'], 'handover': str(state_dir / 'handover.md'),
                       'stopped': [r for r, i in record['roles'].items() if i['alive']],
-                      'window_closed': window_open, 'lock_released': released}))
+                      'window_closed': bool(hwnd), 'held': not args.close, 'lock_released': released}), flush=True)
+    if hwnd:
+        ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)   # WM_CLOSE on that window only
+    for pid in last:
+        subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, timeout=30)
+
+
+def spawn(argv):
+    parser = argparse.ArgumentParser(
+        prog='nightshift spawn',
+        description="Start a crew session in a free slot of a live shift's own window (1x4 container, NGH-025): "
+                    'adds the role to crew.json and types the pane wrapper into that slot\'s cmd shell. Refused when '
+                    'the window is gone, no slot is free, or the role is already live. Foreman only.')
+    parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
+    parser.add_argument('--role', required=True, help='role label, e.g. Advisor or Coder2 (letters, digits, _)')
+    parser.add_argument('--cli', default='claude', choices=list(SPAWN_CLIS),
+                        help='the CLI to run: claude (default) or gemini (agy); codex/copilot/opencode are not wired yet')
+    parser.add_argument('--slot', type=int, help='slot number (default: the first free one)')
+    args = parser.parse_args(argv)
+    tool = SPAWN_CLIS[args.cli]
+    if tool is None:
+        raise SystemExit(f'--cli {args.cli} is not yet wired (NGH-022)')
+    role = args.role
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', role):
+        raise SystemExit(f'role name {role!r} must be letters, digits or _ (it names files and panes)')
+    state_dir = resolve_shift(args.shift)
+    saved = read_crew_json(state_dir)
+    slots = (saved or {}).get('slots')
+    if not slots:
+        raise SystemExit(f'shift {state_dir.name} has no slot grid (its crew layout is not 1x4); nothing to spawn into')
+    try:
+        hwnd = json.loads((state_dir / 'launch.json').read_text(encoding='utf-8')).get('hwnd')
+    except (OSError, ValueError):
+        hwnd = None
+    if not hwnd or hwnd not in terminal_windows():
+        raise SystemExit(f'window is gone: shift {state_dir.name} has no open Terminal window to spawn into')
+    members = saved['members']
+    existing = next((m for m in members if m['label'].lower() == role.lower()), None)
+    if existing:
+        info = member_info(state_dir, existing['label'])
+        if info.get('pid') and pid_alive(info['pid'], info.get('started')):
+            raise SystemExit(f"role {existing['label']} is already live in shift {state_dir.name} (pid {info['pid']})")
+        starting = [n for n in range(1, slots + 1) if (read_slot(state_dir, n) or {}).get('role') == existing['label']]
+        if starting and not info:
+            # spawned into a slot but its wrapper has not written <label>.json yet: still starting, count it live
+            raise SystemExit(f"role {existing['label']} is already live in shift {state_dir.name} "
+                             f'(starting in slot {starting[0]})')
+    wanted = [args.slot] if args.slot else range(1, slots + 1)
+    if args.slot and not 1 <= args.slot <= slots:
+        raise SystemExit(f'no free slot: slot {args.slot} is not in 1..{slots}')
+    slot = None
+    for n in wanted:
+        record = read_slot(state_dir, n)
+        if record and record.get('role') is None and record.get('cmd_pid') and process_running(record['cmd_pid']):
+            slot = n
+            break
+    if slot is None:
+        raise SystemExit(f'no free slot: slot {args.slot} is taken' if args.slot else
+                         f'no free slot in shift {state_dir.name} ({slots} slots, all taken)')
+    shift = state_dir.name
+    lead = next((m for m in members if m.get('human_contact')), members[0])
+    same_role = next((m for m in members if m['role'] == role), None)
+    same_tool = next((m for m in members if m.get('tool') == tool), None)
+    if same_tool:
+        model = same_tool['model']
+    else:
+        model = (saved.get('model') or MODEL) if tool == 'claude' else AGY_MODEL
+    member = {'role': role, 'label': role, 'identity': f'{shift}-{role.lower()}',
+              'brief': f'{role.lower()}.md' if (BRIEFS_DIR / f'{role.lower()}.md').is_file() else 'coder.md',
+              'colour': same_role['colour'] if same_role else 'yellow', 'human_contact': False, 'tool': tool,
+              'model': model, 'peer': lead['identity']}
+    if existing:
+        member['label'] = existing['label']   # a gone member is restarted under its own label
+    updated = [m for m in members if m is not existing] + [member]
+    cwd = saved.get('cwd') or member_info(state_dir, lead['label']).get('cwd') or os.getcwd()
+    crew_file = state_dir / 'crew.json'
+    before = crew_file.read_text(encoding='utf-8')
+    write_json(crew_file, {**saved, 'members': updated})
+    # Typed at a cmd prompt: every path double-quoted so a folder with spaces survives cmd's parsing.
+    line = (f'"{sys.executable}" "{Path(__file__).resolve()}" --pane {member["label"]} --state-dir "{state_dir}" '
+            f'--start --cwd "{cwd}" --slot {slot}'
+            + (f" --crew {saved['crew']}" if saved.get('crew', 'default') != 'default' else ''))
+    record = read_slot(state_dir, slot)
+    try:
+        typed = subprocess.run(['agents-cli', '_attach', 'inject', str(record['cmd_pid']), '1', line],
+                               capture_output=True, timeout=30)
+        failed = None if typed.returncode == 0 else \
+            (typed.stderr or b'').decode('utf-8', 'replace').strip() or f'exit {typed.returncode}'
+    except (OSError, subprocess.TimeoutExpired) as err:
+        failed = str(err)
+    if failed:
+        crew_file.write_text(before, encoding='utf-8')   # nothing was started: leave the crew as it was
+        raise SystemExit(f'could not type into slot {slot} (cmd pid {record["cmd_pid"]}): {failed}')
+    # re-read: the wrapper may already have added its wrapper_pid
+    kept = {k: v for k, v in (read_slot(state_dir, slot) or record).items() if k != 'slot'}
+    write_slot(state_dir, slot, **{**kept, 'role': member['label'], 'identity': member['identity']})
+    print(json.dumps({'shift': shift, 'slot': slot, 'role': member['label'], 'identity': member['identity'],
+                      'tool': tool}))
 
 
 class FileClaimed(FolderLocked):
@@ -1682,7 +1917,7 @@ def loop(argv, continue_from=None):
                     # Done below the ticket's rung is not done: it stops the loop for a human, like blocked.
                     result = {**result, 'status': 'short', 'stage': stage, 'requires': rung,
                               'summary': f'stage {stage} below required {rung}: ' + str(result.get('summary', ''))}
-            down([state_dir.name])
+            down([state_dir.name, '--close'])
             note = (f"Nightshift loop: shift {state_dir.name} (attempt {attempt}) ended with status "
                     f"{result.get('status')}: {result.get('summary', '')}")
             if result.get('stage'):
@@ -1796,7 +2031,7 @@ def resume(argv):
 
 
 def main():
-    commands = {'start': start, 'status': status, 'down': down, 'loop': loop, 'resume': resume,
+    commands = {'start': start, 'status': status, 'down': down, 'spawn': spawn, 'loop': loop, 'resume': resume,
                 'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack,
                 'build': build}
     if len(sys.argv) > 1 and sys.argv[1] in commands:
@@ -1807,8 +2042,11 @@ def main():
         epilog='Commands:\n  start "task"|TICKET [--dry-run] [--cwd D] [--crew NAME]\n'
                '                                              start a crew (manifest crews/NAME.yaml)\n'
                '  status [--all]                              shifts and whether their crews are alive\n'
-               '  down [SHIFT|latest]                         capture panes, write handover.md, stop the crew, close its window\n'
-               '  loop TICKET [TICKET...] [--stall-minutes N] one shift per ticket: start, wait for result.json, down, next\n'
+               '  down [SHIFT|latest] [--hold|--close]        capture panes, write handover.md, stop the crew; --hold (default)\n'
+               '                                              keeps the tab open, --close closes its window\n'
+               '  spawn SHIFT --role ROLE [--cli claude|gemini] [--slot N]\n'
+               "                                              start a session in a free slot of the shift's 1x4 window\n"
+               '  loop TICKET [TICKET...] [--stall-minutes N] optional batch runner: start, wait for result.json, down --close, next\n'
                '  loop --project PREFIX [--max N]             same over a project\'s backlog, lowest number first\n'
                '  resume [--project PREFIX] [--dry-run]       rerun tickets whose latest shift never reached done (--continue-from it)\n'
                '  claim SHIFT ROLE PATH...                    claim files before editing; exit 4 if another role holds one\n'
@@ -1827,11 +2065,15 @@ def main():
     parser.add_argument('--start', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--cwd', default='C:/git/nightshift', help=argparse.SUPPRESS)
     parser.add_argument('--crew', help=argparse.SUPPRESS)
+    parser.add_argument('--slot', type=int, help=argparse.SUPPRESS)
     parser.add_argument('--live', action='store_true', help='diagnostic ping/pong communication trial with live agents')
     parser.add_argument('--brief-file', help='with --live: replace the trial brief with this assignment file')
     args = parser.parse_args()
     if args.pane:
-        pane(args.pane, args.state_dir, args.live, args.brief_file, args.start, args.cwd, args.crew)
+        pane(args.pane, args.state_dir, args.live, args.brief_file, args.start, args.cwd, args.crew, args.slot)
+        return
+    if args.slot:
+        slot_shell(args.slot, args.state_dir)   # an empty container slot: record it, leave a plain cmd prompt
         return
     name = 'Nightshift-trial-' + uuid.uuid4().hex[:8]
     state_dir = TRIALS_DIR / name

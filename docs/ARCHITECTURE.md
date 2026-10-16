@@ -19,9 +19,37 @@ shells. From then on **Foreman owns the container**: it may fill an empty slot t
 session into a tab slot, agents-cli only drives consoles), and when the ticket is tested and
 deployed it writes the records and runs `nightshift down` itself. If Foreman dies, the shift is
 dead until a human looks; there is no watcher of watchers. The `loop` below is kept as an
-optional batch runner and is no longer the default path. Everything under "A shift, step by
-step" that says the loop starts, polls or tears down a shift is superseded by this section
-once NGH-025 lands.
+optional batch runner and is no longer the default path.
+
+As built (NGH-025):
+
+- **Layout.** A manifest says `layout: 1x4` (the default and gemini-coder crews) or `layout: split`
+  (the tab sized to the crew, 2-8 panes, unchanged). `load_crew` exposes `slots` (4 for 1x4, None
+  for split) and refuses a crew that does not fit. `wt_command` lays out four equal columns: crew
+  panes in slots 1..k (their wrappers get `--slot N`), and slots k+1..4 run
+  `cmd.exe /k <python> nightshift_shifts.py --slot N --state-dir <dir>`, titled `<ticket or shift> slot N`.
+- **slots/.** Every slot records `<state_dir>/slots/<N>.json`: an empty slot writes
+  `{slot, cmd_pid, started, role: null}` (cmd_pid = the cmd.exe that ran it) and exits to a plain
+  prompt; a crew pane writes `{slot, role, identity, wrapper_pid}`. `start --dry-run` shows
+  `slots: [{slot, role|null, pane_title}]`.
+- **Launcher exits.** `launch` waits for every `<Role>.json` and every slot record, prints, and
+  returns. Nothing polls the shift after that.
+- **spawn.** `nightshift spawn SHIFT --role ROLE [--cli claude|gemini] [--slot N]` is the only way a
+  crew session starts after launch, and only Foreman runs it. It refuses (non-zero, plain message) when
+  the shift's window (`launch.json` hwnd) is gone, when no slot is free or the requested one is taken,
+  or when the role is already live (or still starting in a slot). `--cli gemini` runs agy; codex,
+  copilot and opencode are refused as not yet wired (NGH-022). It appends the member to `crew.json`
+  (identity `<shift>-<role>`, brief `<role>.md` if it exists else `coder.md`, the colour of a member
+  with the same role else yellow, peer = the human contact; Foreman's own peer list is not rewritten),
+  types the pane wrapper line (paths double-quoted, `--slot N`) into that slot's cmd with
+  `agents-cli _attach inject`, and marks the slot with the role. A start-mode pane reads its member
+  from `crew.json` (falling back to the manifest), so spawned roles run like launched ones; `status`,
+  `down` and the mailbox pick them up from `crew.json`.
+- **down --hold / --close.** Both write the handover, kill the crew and release the folder lock.
+  `--hold` (default) leaves the tab open; `--close` also closes the window (the loop uses it). The
+  member whose process tree is running `down` (Foreman ending its own shift) is killed last, after the
+  lock is released and the JSON (with `held`) is printed. Foreman's brief makes `down` its last act
+  after writing `result.json`.
 
 ## The four identities (owner, 16 Oct 2026)
 
@@ -41,7 +69,7 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
 
 | Piece | Role | Where |
 |---|---|---|
-| `nightshift_shifts.py` | the launcher and loop: `start`, `status`, `down`, `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020) | this repo |
+| `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--hold`/`--close`), `spawn` (NGH-025), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020) | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (claude or agy) and `model`, pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `coder.md`, `tester.md`; placeholders filled in); the task text is appended for Foreman | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
@@ -67,20 +95,22 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
    launched from inside a Claude session is not a child session of it. The human's foreground
    window is restored once the crew window exists.
 3. The crew works. Foreman is the only member that talks to the human; Coder and Tester act only
-   on Foreman's assignments (handoff below). Rules the briefs enforce: never launch sessions/windows/agents (write
-   the command for the human instead); claim files before editing (`claims.json`, exit 4 on
+   on Foreman's assignments (handoff below). Rules the briefs enforce: never launch sessions/windows/agents
+   yourself; the only way a session starts is Foreman's `nightshift spawn` into a free slot (anything else:
+   write the command for the human); claim files before editing (`claims.json`, exit 4 on
    conflict); record messages in the mailbox before sending them (NGH-019).
 4. Foreman ends the shift by writing `result.json`: `status` done|blocked, `stage`
    implemented|tested|deployed|validated, `evidence` per rung, `summary`, `changed`. A ticket may
    say `requires: <rung>` (default tested); done below the bar is recorded as `short`.
-5. `nightshift down` captures the last lines of each pane, writes `handover.md` (result,
-   commits since start, test outcome, denials, claims, pane tails), kills the crew processes,
-   releases the lock and closes only that shift's Terminal window.
+5. Foreman then runs `nightshift down` itself: it captures the last lines of each pane, writes
+   `handover.md` (result, commits since start, test outcome, denials, claims, pane tails), kills the
+   crew processes (Foreman's own tree last), releases the lock, and keeps the tab open (`--hold`,
+   default) or closes only that shift's Terminal window (`--close`).
 
 ## The default crew: Foreman, Coder, Tester (NGH-024)
 
-- `crews/default.yaml` is Foreman (red), Coder (green), Tester (blue, `tester.md`): three equal
-  columns in the split layout. Foreman's peers are `<shift>-coder, <shift>-tester`; Coder's and
+- `crews/default.yaml` is Foreman (red), Coder (green), Tester (blue, `tester.md`) in slots 1-3 of
+  the 1x4 container; slot 4 is an empty shell for `spawn`. Foreman's peers are `<shift>-coder, <shift>-tester`; Coder's and
   Tester's peer is `<shift>-foreman`. Other crews (`--crew NAME`) are unaffected.
 - Handoff is Coder -> Foreman -> Tester. Coder reports an assignment done; Foreman reviews it and
   assigns verification to Tester with its own `--asg` id, saying what changed and what was asked.
@@ -121,6 +151,7 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
   `--suppressApplicationTitle` keeps the CLI from overwriting it, and the window shows the
   focused pane's title. One helper (`pane_title`) builds it for `wt_command`, the dry-run plan
   and `down`.
+- Empty container slots are titled `<ticket or shift> slot N` (NGH-025).
 - The legacy trial modes keep `Nightshift | <Role> | <trial>`.
 - `loop` sets its own console title to `Nightshift <first>..<last>` (`Nightshift NGH-019` for one
   ticket; `loop_title`), and a finished loop closes the Terminal window with that title.
@@ -133,6 +164,7 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
 C:\Data\nightshift\shifts\<shift>\
   prompt.txt       the task as given to Foreman        ticket.txt   ticket id (when started from one)
   launch.json      wt argv, launcher pid, window hwnd   Foreman.json / Coder.json / Tester.json   pid, name, start time, cwd
+  crew.json        members (incl. spawned), slots, cwd  slots/<N>.json  what each container slot holds (NGH-025)
   result.json      the shift contract (above)           handover.md  written by down
   claims.json      file claims per role                 denials.json auto-mode classifier refusals seen
   mailbox.sqlite3  messages: stored → sent → acknowledged, with sender/recipient incarnation (NGH-019)
@@ -140,11 +172,12 @@ C:\Data\nightshift\shifts\<shift>\
 Anything that needs to survive a dead pane, a restart or a different CLI lives here, not in a
 process. `status` and `resume` are computed from it.
 
-## The loop
+## The loop (optional batch runner)
 
-`nightshift loop T1 T2 …` (or `--project NGH [--max N]`) is deterministic Python, no model:
-start a shift → poll for `result.json`, crew death, a 20-minute idle stall, and classifier
-denials → `down` → note the ticket → next. A died/stalled shift is rerun with a fresh crew
+Since NGH-025 a shift ends itself (Foreman runs `down`); the loop is an optional way to run
+several tickets unattended. `nightshift loop T1 T2 …` (or `--project NGH [--max N]`) is deterministic
+Python, no model: start a shift → poll for `result.json`, crew death, a 20-minute idle stall, and
+classifier denials → `down --close` → note the ticket → next. A died/stalled shift is rerun with a fresh crew
 that gets the previous handover (`--retries`, default 2); `blocked` stops the loop for a human.
 It emails the owner through Mailkeep when it halts or finishes (NGH-016) and closes its own
 window on success. `nightshift resume` reruns tickets whose last shift never reached done
@@ -181,7 +214,7 @@ revision-bound evidence. No worktrees per shift (owner: not needed).
 | Second coder, heterogeneous CLIs later | claims ready; per-role `tool:` with an agy Gemini Coder crew (NGH-012, not yet run live); Copilot (NGH-022) | in progress |
 | "Portable package", CLI language open | Python in its own repo; binary decision NGH-021 | open |
 | — (not in the design) | loop, result ladder, crew manifest, email on halt, denial capture | additions |
-| — (owner, 16 Oct) | container with slot grid, `spawn`, Foreman-owned `down`, launcher exits; loop optional | NGH-025, not started |
+| — (owner, 16 Oct) | container with slot grid (1x4), `slots/`, `spawn`, Foreman-owned `down --hold/--close`, launcher exits; loop optional | NGH-025, built |
 
 ## Not decided / not built
 

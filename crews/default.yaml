@@ -1,11 +1,12 @@
 # Nightshift crew manifest: `nightshift start` uses this one; `nightshift start --crew NAME`
 # reads nightshift-crews/NAME.yaml instead. Briefs are files in nightshift-briefs/ (common.md
 # always comes first). Exactly one role has human_contact: true and count 1; 2 to 8 panes in all.
-# The default crew is Foreman, Coder and Tester: three equal columns in the split layout.
+# The default crew is Foreman, Coder and Tester in slots 1-3 of the 1x4 container; slot 4 is an empty shell.
+# layout: split instead sizes the tab to the crew (2-8 panes, a second row above 4).
 name: default
 permission_mode: auto        # Claude --permission-mode for every pane
 model: claude-opus-5-5
-layout: split                # one Terminal window; panes left-to-right, a second row above 4
+layout: 1x4                  # the container: four equal columns, crew in the first slots, empty cmd shells after (spawn fills them)
 contract: result.json        # the file Foreman writes in the shift folder when the shift ends
 roles:
   - role: Foreman
