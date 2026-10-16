@@ -1854,6 +1854,13 @@ def test_main_dispatches_build(monkeypatch, tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)['status'] == 'passed'
 
 
+def test_process_start_epoch_survives_wmic_timeout(monkeypatch):
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired(a[0], k.get('timeout'))
+    monkeypatch.setattr(launcher.subprocess, 'run', slow)
+    assert launcher.process_start_epoch(1234) is None
+
+
 # ── PowerShell launchers parse ────────────────────────────────────────────────
 
 @pytest.mark.parametrize('name', ['launch.ps1', 'launch-safe.ps1', 'lib-session-window.ps1'])

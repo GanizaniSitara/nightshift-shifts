@@ -681,9 +681,16 @@ def start(argv):
 
 
 def process_start_epoch(pid):
-    """Creation time of a process as epoch seconds (local clock), or None if it does not exist."""
-    out = subprocess.run(['wmic', 'process', 'where', f'processid={pid}', 'get', 'creationdate'],
-                         capture_output=True, timeout=15).stdout.decode('utf-8', 'replace').replace('\x00', '')
+    """Creation time of a process as epoch seconds (local clock), or None if it does not exist.
+
+    None also when wmic does not answer in time: the loop died on 16 Oct from an uncaught
+    TimeoutExpired here, and an unknown start time must mean "cannot verify", not "crash".
+    """
+    try:
+        out = subprocess.run(['wmic', 'process', 'where', f'processid={pid}', 'get', 'creationdate'],
+                             capture_output=True, timeout=15).stdout.decode('utf-8', 'replace').replace('\x00', '')
+    except subprocess.TimeoutExpired:
+        return None
     match = re.search(r'(\d{14})\.\d+', out)
     if not match:
         return None
