@@ -272,12 +272,20 @@ def crew_members(crew, shift):
     return members
 
 
-def opening_message(member):
+def opening_message(member, state_dir=None):
     """The opening user message for a pane: the task pointer for the human contact, else a READY instruction."""
-    if member['human_contact']:
-        return START_MESSAGES['Foreman']
-    return START_MESSAGES.get(member['role']) or \
+    message = START_MESSAGES['Foreman'] if member['human_contact'] else START_MESSAGES.get(member['role']) or \
         f"Begin your {member['role']} role: send READY to Foreman and await assignments."
+    if member.get('replacement') and state_dir:
+        command = f'{SUITE_PYTHON} {(REPO_DIR / "nightshift_shifts.py").as_posix()}'
+        recovery = ('Re-dispatch stale unfinished assignments to the current members.'
+                    if member['role'].lower() == 'foreman' else
+                    'Report the unfinished assignment IDs to Foreman with READY.')
+        message = (f'You are a replacement incarnation. First read "{Path(state_dir).resolve().as_posix()}/handover.md" '
+                   f'if present and run `{command} inbox {Path(state_dir).name} {member["label"]}`. '
+                   'Recover acked but unfinished assignments from active_assignments; stale assignments must be '
+                   're-dispatched by Foreman to this incarnation before acting. ' + recovery + '\n\n' + message)
+    return message
 
 
 def default_persona(role):
@@ -344,7 +352,23 @@ def role_brief(role, identity, peer_name, state_dir='', brief=None, persona=None
     return text
 
 
-def crew_env(environ, tool='claude', account=None):
+def compaction_control(tool, role):
+    """Launch-scoped controls only; unsupported CLIs must not be advertised as protected (NGH-030)."""
+    if role.lower() == 'foreman':
+        return {'automatic': 'permitted', 'environment':
+                {'DISABLE_AUTO_COMPACT': '0', 'DISABLE_COMPACT': '0'} if tool == 'claude' else {}}
+    if tool == 'claude':
+        # https://code.claude.com/docs/en/env-vars#disable_auto_compact
+        return {'automatic': 'disabled', 'environment': {'DISABLE_AUTO_COMPACT': '1'}}
+    return {'automatic': 'unsupported', 'environment': {},
+            'reason': {
+                'codex': 'model_auto_compact_token_limit is a threshold; no verified disable equivalent.',
+                'copilot': 'Compaction thresholds do not prevent forced compaction after a context-limit error.',
+                'agy': 'No verified disable switch in installed Antigravity help or official CLI documentation.',
+            }[tool]}
+
+
+def crew_env(environ, tool='claude', account=None, role=None):
     """Environment for a crew member's CLI process.
 
     Drops inherited Claude Code markers: when start is run from inside a Claude session the crew
@@ -366,6 +390,8 @@ def crew_env(environ, tool='claude', account=None):
         env['COPILOT_DISABLE_TERMINAL_TITLE'] = '1'
         # The startup "Set up terminal for multi-line input" prompt must never block a pane.
         env['COPILOT_SETUP_TERMINAL'] = 'false'
+    if role is not None:
+        env.update(compaction_control(tool, role)['environment'])
     return env
 
 
@@ -721,7 +747,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             reasoning, context, account = member.get('reasoning'), member.get('context'), member.get('account')
             # a role's own permissions: (skip | auto | default) wins over the crew-level permission_mode
             permission_mode = member.get('permissions') or permission_mode or START_PERMISSION_MODE
-            first_message = opening_message(member)
+            first_message = opening_message(member, state_dir)
             brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'], member.get('persona'))
             if member['human_contact']:
                 brief += Path(state_dir, 'prompt.txt').read_text(encoding='utf-8')
@@ -738,7 +764,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             if reasoning:
                 command += ['--effort', reasoning]
             command.append(first_message)
-        env = crew_env(os.environ) if tool == 'claude' and not account else crew_env(os.environ, tool=tool, account=account)
+        env = crew_env(os.environ, tool=tool, account=account, role=member['role'] if start else role)
         set_pane_background(ROLE_BACKGROUNDS.get(colour, CAMPBELL_BACKGROUND)
                             if tool in ('codex', 'copilot') else CAMPBELL_BACKGROUND)
         try:
@@ -1173,6 +1199,7 @@ def start(argv):
             'roles': {m['label']: {'session_name': m['identity'], 'pane_title': pane_title(ticket or name),
                                    'peer': m['peer'],
                                    'receives_prompt': m['human_contact'], 'first_message': opening_message(m),
+                                    'compaction': compaction_control(m['tool'], m['role']),
                                    # Claude roles on the crew model keep the pre-manifest shape; a Claude role on
                                    # another model (the Fable Advisor) shows it; other tools show what will run
                                    **({'tool': m['tool'], 'model': m['model'], 'exe': str(TOOL_EXES[m['tool']])}
@@ -1663,6 +1690,7 @@ def spawn(argv):
                         member[opt] = manifest_role[opt]
     if existing:
         # a gone member is restarted with its own role, label, identity, brief, colour and (on the same tool) model
+        member['replacement'] = True
         member.update(role=existing.get('role', existing['label']), label=existing['label'],
                       identity=existing.get('identity', f"{shift}-{existing['label'].lower()}"),
                       brief=existing.get('brief', member['brief']), persona=existing.get('persona', member['persona']),
@@ -1698,10 +1726,16 @@ def spawn(argv):
     record = read_slot(state_dir, slot)
     spawned = time.time()   # before typing: the wrapper's <role>.json 'started' comes after it
     try:
-        typed = subprocess.run(['agents-cli', '_attach', 'inject', str(record['cmd_pid']), '1', line],
-                               capture_output=True, timeout=30)
+        typed = subprocess.run(['agents-cli', '_attach', 'inject', str(record['cmd_pid']), '1'],
+                               input=line.encode('utf-8'), capture_output=True, timeout=30)
         failed = None if typed.returncode == 0 else \
-            (typed.stderr or b'').decode('utf-8', 'replace').strip() or f'exit {typed.returncode}'
+            '\n'.join(out.decode('utf-8', 'replace').strip() for out in (typed.stdout, typed.stderr) if out) \
+            or f'exit {typed.returncode}'
+        if not failed:
+            with contextlib.suppress(ValueError):
+                reply = json.loads(typed.stdout or b'{}')
+                if isinstance(reply, dict) and reply.get('error'):
+                    failed = json.dumps(reply['error'])
     except (OSError, subprocess.TimeoutExpired) as err:
         failed = str(err)
     if failed:

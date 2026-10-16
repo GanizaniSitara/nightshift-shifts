@@ -453,6 +453,8 @@ def test_start_dry_run_custom_crew(monkeypatch, tmp_path, capsys):
     assert plan['roles']['Foreman']['peer'] == f'{s}-coder-1, {s}-coder-2, {s}-coder-3'
     assert plan['roles']['Coder-2'] == {'session_name': f'{s}-coder-2', 'pane_title': f'{s} shift', 'peer': f'{s}-foreman',
                                         'receives_prompt': False, 'first_message': launcher.START_MESSAGES['Coder'],
+                                        'compaction': {'automatic': 'disabled',
+                                                       'environment': {'DISABLE_AUTO_COMPACT': '1'}},
                                         'permission_flags': ['--permission-mode', plan['permission_mode']]}
     assert plan['wt_argv'].count('--crew') == 4 and 'focus-pane' in plan['wt_argv']
 
@@ -983,23 +985,31 @@ def test_start_dry_run_default_crew_is_the_five_pane_golden(monkeypatch, tmp_pat
                         'receives_prompt': True,
                         'first_message': 'Begin the assignment: the task text is at the end of your role instructions, '
                                          'after "The human task for this shift follows, verbatim:".',
+                        'compaction': {'automatic': 'permitted',
+                                       'environment': {'DISABLE_AUTO_COMPACT': '0', 'DISABLE_COMPACT': '0'}},
                         'permission_flags': ['--permission-mode', 'auto']},
             'Advisor': {'session_name': f'{shift}-advisor', 'pane_title': f'{shift} shift', 'peer': f'{shift}-foreman',
                         'receives_prompt': False, 'first_message': launcher.START_MESSAGES['Advisor'],
+                        'compaction': {'automatic': 'disabled', 'environment': {'DISABLE_AUTO_COMPACT': '1'}},
                         'model': 'claude-fable-5-1', 'permission_flags': ['--permission-mode', 'auto']},
             'Coder': {'session_name': f'{shift}-coder', 'pane_title': f'{shift} shift', 'peer': f'{shift}-foreman',
                       'receives_prompt': False,
                       'first_message': 'Begin your Coder role: send READY to Foreman and await assignments.',
+                      'compaction': {'automatic': 'disabled', 'environment': {'DISABLE_AUTO_COMPACT': '1'}},
                       'permission_flags': ['--permission-mode', 'auto']},
             'Tester': {'session_name': f'{shift}-tester', 'pane_title': f'{shift} shift', 'peer': f'{shift}-foreman',
                        'receives_prompt': False,
                        'first_message': 'Begin your Tester role: send READY to Foreman and await verification '
-                                        'assignments.', 'permission_flags': ['--permission-mode', 'auto']},
+                                        'assignments.',
+                       'compaction': {'automatic': 'disabled', 'environment': {'DISABLE_AUTO_COMPACT': '1'}},
+                       'permission_flags': ['--permission-mode', 'auto']},
             'Apprentice': {'session_name': f'{shift}-apprentice', 'pane_title': f'{shift} shift',
                            'peer': f'{shift}-foreman', 'receives_prompt': False,
                            'first_message': 'Begin your Apprentice role: send READY to Foreman and await bounded '
                                             'assignments.',
                            'tool': 'agy', 'model': 'gemini-3.8-flash-high', 'exe': str(launcher.AGY_EXE),
+                           'compaction': {'automatic': 'unsupported', 'environment': {},
+                                          'reason': 'No verified disable switch in installed Antigravity help or official CLI documentation.'},
                            'command': [str(launcher.AGY_EXE), '--model', 'gemini-3.8-flash-high',
                                        '--dangerously-skip-permissions', '-i', '<brief>\n\n<first message>'],
                            'permission_flags': ['--dangerously-skip-permissions']}},
@@ -2964,8 +2974,9 @@ def _container(tmp_path, members=('Foreman', 'Coder'), slots=4, hwnd=777, free=(
 def injected(monkeypatch):
     """Fake the outside world for spawn: window 777 open, every cmd pid running, crew pids alive, inject ok."""
     class Calls(list):
-        rc, err = 0, b''
+        rc, out, err = 0, b'', b''
     calls = Calls()
+    calls.inputs = []
     monkeypatch.setattr(launcher, 'terminal_windows', lambda: {777: 'NGH-025 Foreman'})
     monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
     monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: True)
@@ -2973,7 +2984,10 @@ def injected(monkeypatch):
     def run(argv, **k):
         calls.append(argv)
         assert argv[:3] == ['agents-cli', '_attach', 'inject'], argv
-        return subprocess.CompletedProcess(argv, calls.rc, b'', calls.err)
+        assert len(argv) == 5, 'inject accepts PID and enter only; command text belongs on stdin'
+        assert isinstance(k['input'], bytes)
+        calls.inputs.append(k['input'])
+        return subprocess.CompletedProcess(argv, calls.rc, calls.out, calls.err)
     monkeypatch.setattr(launcher.subprocess, 'run', run)
     return calls
 
@@ -2992,8 +3006,9 @@ def test_spawn_into_slot_3_of_a_two_role_crew(tmp_path, injected, capsys):
     assert len(injected) == 1
     argv = injected[0]
     assert argv[3:5] == ['2503', '1']   # slot 3's cmd pid
-    assert argv[5] == (f'"{sys.executable}" "{Path(launcher.__file__).resolve()}" --pane Tester --state-dir "{d}" '
-                       '--start --cwd "C:/git/proj" --slot 3')
+    assert injected.inputs[0].decode('utf-8') == (
+        f'"{sys.executable}" "{Path(launcher.__file__).resolve()}" --pane Tester --state-dir "{d}" '
+        '--start --cwd "C:/git/proj" --slot 3')
     slot = launcher.read_slot(d, 3)
     assert slot['role'] == 'Tester' and slot['identity'] == f'{CONT_SHIFT}-tester' and slot['cmd_pid'] == 2503
     assert launcher.read_slot(d, 4)['role'] is None
@@ -3134,7 +3149,7 @@ def test_spawn_non_default_crew_passes_crew_to_the_wrapper(tmp_path, injected):
     saved = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
     (d / 'crew.json').write_text(json.dumps({**saved, 'crew': 'pair'}), encoding='utf-8')
     launcher.spawn([CONT_SHIFT, '--role', 'Tester'])
-    assert injected[0][5].endswith('--slot 3 --crew pair')
+    assert injected.inputs[0].decode('utf-8').endswith('--slot 3 --crew pair')
 
 
 # ── slot reuse (NGH-028): dead members' slots, incarnation history, status ───
@@ -5412,3 +5427,248 @@ def test_pane_names_copilot_by_pane_label_and_does_not_inject_rename(monkeypatch
     assert seen['env']['COPILOT_DISABLE_TERMINAL_TITLE'] == '1'
     assert seen['env']['COPILOT_SETUP_TERMINAL'] == 'false'
     assert 'CODEX_HOME' not in seen['env']
+
+
+# NGH-030: context is disposable for members; Foreman owns safe recovery.
+@pytest.mark.parametrize('role,brief_file', [
+    ('Coder', 'coder.md'), ('Coder', 'coder-cli.md'), ('Coder', 'coder-agy.md'),
+    ('Tester', 'tester.md'), ('Tester', 'tester-cli.md'),
+    ('Advisor', 'advisor.md'), ('Advisor', 'advisor-cli.md'),
+    ('Apprentice', 'apprentice.md'),
+])
+def test_member_context_policy_bans_compaction_and_requires_persisted_recovery(role, brief_file):
+    brief = launcher.role_brief(role, f'S-{role.lower()}', 'S-foreman',
+                                'C:/state with spaces/S', brief_file).lower()
+    assert re.search(r'never (?:invoke|run|use)\s+`?/compact', brief)
+    assert 'automatic compaction' in brief
+    assert 'context is exhausted' in brief or 'context exhaustion' in brief
+    for recovery in ('foreman', 'same slot', 'handover.md', 'mailbox/inbox', 'unfinished assignment'):
+        assert recovery in brief, (brief_file, recovery)
+
+
+@pytest.mark.parametrize('brief_file', ['foreman.md', 'foreman-cli.md', 'foreman-agy-coder.md'])
+def test_foreman_compaction_is_permitted_only_with_ordered_handover_and_recovery(brief_file):
+    brief = launcher.role_brief('Foreman', 'S-foreman', 'S-coder, S-tester',
+                                'C:/state with spaces/S', brief_file).lower()
+    assert not re.search(r'never (?:invoke|run|use)\s+`?/compact', brief)
+    before, after = brief.split('before any compaction', 1)[1].split('after compaction', 1)
+    assert before.index('handover.md') < before.index('mailbox/bus note')
+    for saved in ('current assignments', 'acked', 'unfinished work', 'waits'):
+        assert saved in before, (brief_file, saved)
+    positions = [after.index(item) for item in
+                 ('ticket.txt', 'prompt.txt', 'requires.txt', 'result ladder', 'claims', 'inbox', 'handover.md')]
+    assert positions == sorted(positions)
+    assert after.index('handover.md') < after.index('only then continue')
+
+
+def _capture_context_launch(monkeypatch, state, label, *, start=True, live=False, cwd=None, slot=None):
+    """Capture the actual Popen boundary, never start a member or a terminal."""
+    seen = {}
+
+    class Child:
+        pid = 42
+
+        def wait(self):
+            return 0
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(launcher.subprocess, 'Popen',
+                        lambda command, **kw: seen.update(command=command, **kw) or Child())
+    monkeypatch.setattr(launcher.subprocess, 'run',
+                        lambda *a, **kw: pytest.fail('unexpected subprocess.run'))
+    for name in ('accept_trust_prompt', 'set_role_colour', 'register_name', 'set_codex_role_name',
+                 'set_pane_background'):
+        monkeypatch.setattr(launcher, name, lambda *a, **kw: None)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane(label, str(state), start=start, live=live, cwd=str(cwd or state.parent), slot=slot)
+    return seen
+
+
+@pytest.mark.parametrize('label,base_role', [
+    ('Coder', 'Coder'), ('Tester', 'Tester'), ('Advisor', 'Advisor'), ('Apprentice', 'Apprentice'),
+    ('Coder-2', 'Coder'), ('Foreman', 'Coder'), ('Captain', 'Foreman'), ('Foreman', 'Foreman'),
+])
+@pytest.mark.parametrize('inherited', [None, '0', '1'])
+def test_claude_context_control_uses_base_role_and_is_child_only(monkeypatch, tmp_path,
+                                                              label, base_role, inherited):
+    state = tmp_path / 'state with spaces' / 'S'
+    state.mkdir(parents=True)
+    member = _member('S', base_role, label=label, human=base_role == 'Foreman')
+    (state / 'crew.json').write_text(json.dumps({'crew': 'default', 'members': [member]}), encoding='utf-8')
+    (state / 'prompt.txt').write_text('THE TASK', encoding='utf-8')
+    if inherited is None:
+        monkeypatch.delenv('DISABLE_AUTO_COMPACT', raising=False)
+    else:
+        monkeypatch.setenv('DISABLE_AUTO_COMPACT', inherited)
+    monkeypatch.setenv('DISABLE_COMPACT', '1')
+    before = dict(os.environ)
+    seen = _capture_context_launch(monkeypatch, state, label)
+    if base_role == 'Foreman':
+        assert seen['env'].get('DISABLE_AUTO_COMPACT') in (None, '0')
+        assert seen['env'].get('DISABLE_COMPACT') in (None, '0')
+    else:
+        assert seen['env']['DISABLE_AUTO_COMPACT'] == '1'
+    assert dict(os.environ) == before
+    assert seen['env'] is not os.environ
+    assert seen['cwd'] == str(state.parent)
+
+
+@pytest.mark.parametrize('role', ['Foreman', 'Coder'])
+def test_live_communication_route_also_scopes_claude_compaction(monkeypatch, tmp_path, role):
+    state = tmp_path / 'S'
+    state.mkdir()
+    monkeypatch.delenv('DISABLE_AUTO_COMPACT', raising=False)
+    seen = _capture_context_launch(monkeypatch, state, role, start=False, live=True)
+    assert (seen['env'].get('DISABLE_AUTO_COMPACT') == '1') is (role != 'Foreman')
+    assert 'DISABLE_AUTO_COMPACT' not in os.environ
+
+
+@pytest.mark.parametrize('tool', ['codex', 'copilot', 'agy'])
+@pytest.mark.parametrize('role', ['Foreman', 'Coder', 'Tester', 'Advisor', 'Apprentice'])
+def test_unverified_tools_report_limitations_without_inventing_disable_flags(monkeypatch, tmp_path, tool, role):
+    state = tmp_path / 'S'
+    state.mkdir()
+    member = _member('S', role, tool=tool, human=role == 'Foreman')
+    (state / 'crew.json').write_text(json.dumps({'crew': 'default', 'members': [member]}), encoding='utf-8')
+    (state / 'prompt.txt').write_text('THE TASK', encoding='utf-8')
+    for key in ('DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT'):
+        monkeypatch.delenv(key, raising=False)
+    before = dict(os.environ)
+    control = launcher.compaction_control(tool, role)
+    assert control['automatic'] == ('permitted' if role == 'Foreman' else 'unsupported')
+    assert control['environment'] == {}
+    if role != 'Foreman':
+        assert control['reason']
+    seen = _capture_context_launch(monkeypatch, state, role)
+    assert not any('compact' in arg.lower() for arg in seen['command'][:-1])
+    assert 'DISABLE_AUTO_COMPACT' not in seen['env'] and 'DISABLE_COMPACT' not in seen['env']
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize('crew_name', sorted(p.stem for p in launcher.CREWS_DIR.glob('*.yaml')))
+def test_dry_run_reports_actual_role_controls_for_every_installed_crew(monkeypatch, tmp_path, capsys, crew_name):
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'unwritten shifts')
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('dry-run launched a process'))
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda *a, **k: pytest.fail('dry-run ran a command'))
+    before = dict(os.environ)
+    launcher.start(['--dry-run', '--cwd', str(tmp_path), '--crew', crew_name, 'context policy probe'])
+    plan = json.loads(capsys.readouterr().out)
+    members = launcher.crew_members(launcher.load_crew(crew_name), plan['shift'])
+    for member in members:
+        control = plan['roles'][member['label']]['compaction']
+        if member['role'] == 'Foreman':
+            assert control['automatic'] == 'permitted'
+            expected = {'DISABLE_AUTO_COMPACT': '0', 'DISABLE_COMPACT': '0'} if member['tool'] == 'claude' else {}
+        elif member['tool'] == 'claude':
+            assert control['automatic'] == 'disabled'
+            expected = {'DISABLE_AUTO_COMPACT': '1'}
+        else:
+            assert control['automatic'] == 'unsupported' and control['reason']
+            expected = {}
+        assert control['environment'] == expected
+        actual_env = launcher.crew_env({}, tool=member['tool'], role=member['role'])
+        assert all(actual_env[k] == v for k, v in expected.items())
+    assert not (tmp_path / 'unwritten shifts').exists()
+    assert dict(os.environ) == before
+
+
+@pytest.mark.usefixtures('_container_isolated')
+@pytest.mark.parametrize('tool', ['claude', 'codex', 'copilot', 'agy'])
+def test_context_replacement_reuses_slot_and_recovers_acknowledged_unfinished_assignment(
+        monkeypatch, tmp_path, injected, capsys, tool):
+    d = _container(tmp_path, members=('Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice'),
+                   slots=8, free=(6, 7, 8))
+    saved = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    member = saved['members'][-1]
+    member.update(tool=tool, model='original-model', brief='apprentice.md', persona='apprentice.yaml', colour='yellow',
+                  reasoning='high', context='long_context', account=2, permissions='default')
+    (d / 'crew.json').write_text(json.dumps(saved), encoding='utf-8')
+    (d / 'handover.md').write_text('unfinished recovery-task; token RECOVER-42', encoding='utf-8')
+    launcher.msg(['send', d.name, 'Foreman', 'Apprentice', '--kind', 'assignment', '--asg', 'recovery-task',
+                  '--body', 'Read token from handover, then wait.'])
+    launcher.ack([d.name, 'Apprentice', '1'])
+    capsys.readouterr()
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: pid != 505)
+    original_slots = {n: launcher.read_slot(d, n) for n in range(1, 9)}
+    launcher.spawn([d.name, '--role', 'Apprentice'])
+    spawn = json.loads(capsys.readouterr().out)
+    assert spawn['slot'] == 5 and spawn['tool'] == tool
+    assert injected[0][3:5] == ['2505', '1']
+    assert '--slot 5' in injected.inputs[0].decode('utf-8')
+    after = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    replacement = next(m for m in after['members'] if m['label'] == 'Apprentice')
+    assert len(after['members']) == 5 and after['slots'] == 8
+    assert replacement == {**member, 'replacement': True}
+    for n in (1, 2, 3, 4, 6, 7, 8):
+        assert launcher.read_slot(d, n) == original_slots[n]
+    seen = _capture_context_launch(monkeypatch, d, 'Apprentice', slot=5)
+    prompt = seen['command'][-1]
+    assert f'"{d.as_posix()}/handover.md"' in prompt
+    assert f'inbox {d.name} Apprentice' in prompt
+    for recovery in ('replacement incarnation', 'active_assignments', 'stale', 're-dispatched',
+                     'unfinished assignment', 'READY'):
+        assert recovery in prompt
+    info = launcher.member_info(d, 'Apprentice')
+    assert info['pid'] == 42 and info['started'] != 1.0
+    assert info['history'][-1]['pid'] == 505 and info['history'][-1]['started'] == 1.0
+    assert launcher.read_slot(d, 5)['cmd_pid'] == 2505
+    assert launcher.read_slot(d, 5)['role'] == 'Apprentice'
+    if tool == 'claude':
+        assert seen['env']['DISABLE_AUTO_COMPACT'] == '1'
+    view = launcher.inbox_view(d, 'Apprentice')
+    assert view['inbound_unacked'] == []
+    assert [(a['asg'], a['state'], a['stale']) for a in view['active_assignments']] == [
+        ('recovery-task', 'acknowledged', True)]
+    with pytest.raises(launcher.ProtocolViolation) as err:
+        launcher.ack([d.name, 'Apprentice', '1'])
+    assert err.value.code == 5
+    launcher.msg(['send', d.name, 'Foreman', 'Apprentice', '--kind', 'assignment', '--asg', 'recovery-task',
+                  '--body', 'Resume from handover: RECOVER-42'])
+    current = launcher.inbox_view(d, 'Apprentice')['inbound_unacked']
+    assert len(current) == 1 and current[0]['recipient_incarnation'] == info['started']
+    launcher.ack([d.name, 'Apprentice', str(current[0]['id'])])
+    launcher.msg(['send', d.name, 'Apprentice', 'Foreman', '--kind', 'result', '--asg', 'recovery-task',
+                  '--body', 'Completed RECOVER-42'])
+    assert launcher.inbox_view(d, 'Foreman')['active_assignments'] == []
+    assert (d / 'handover.md').read_text(encoding='utf-8') == 'unfinished recovery-task; token RECOVER-42'
+
+
+def test_first_incarnation_keeps_ready_opening_without_recovery_instructions():
+    member = _member('S', 'Apprentice')
+    assert launcher.opening_message(member, 'C:/state/S') == launcher.START_MESSAGES['Apprentice']
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_transports_quoted_unicode_windows_paths_only_on_utf8_stdin(monkeypatch, tmp_path, injected, capsys):
+    d = _container(tmp_path / 'state with spaces & café')
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', d.parent)
+    saved = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    saved['cwd'] = r'C:\repo with spaces & café\worktree'
+    (d / 'crew.json').write_text(json.dumps(saved), encoding='utf-8')
+    launcher.spawn([d.name, '--role', 'Tester'])
+    assert injected[0] == ['agents-cli', '_attach', 'inject', '2503', '1']
+    command = injected.inputs[0].decode('utf-8')
+    assert f'--state-dir "{d}"' in command
+    assert '--cwd "C:\\repo with spaces & café\\worktree"' in command
+    assert command.startswith(f'"{sys.executable}" "{Path(launcher.__file__).resolve()}" ')
+    assert json.loads(capsys.readouterr().out)['slot'] == 3
+
+
+@pytest.mark.usefixtures('_container_isolated')
+@pytest.mark.parametrize('returncode,stdout,stderr,reason', [
+    (1, b'{"error":"inject needs text on stdin"}', b'', 'inject needs text on stdin'),
+    (0, b'{"error":{"message":"WriteConsoleInput failed"}}', b'', 'WriteConsoleInput failed'),
+    (1, b'stdout diagnosis', b'stderr diagnosis', 'stdout diagnosis\nstderr diagnosis'),
+    (1, b'', b'', 'exit 1'),
+])
+def test_spawn_helper_error_preserves_diagnostics_and_rolls_back_all_state(
+        tmp_path, injected, returncode, stdout, stderr, reason):
+    d = _container(tmp_path)
+    before = _floor_snapshot(tmp_path)
+    injected.rc, injected.out, injected.err = returncode, stdout, stderr
+    with pytest.raises(SystemExit) as err:
+        launcher.spawn([d.name, '--role', 'Tester'])
+    assert reason in str(err.value)
+    assert _floor_snapshot(tmp_path) == before

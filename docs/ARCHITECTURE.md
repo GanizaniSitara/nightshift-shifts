@@ -623,6 +623,52 @@ or not a YAML mapping. The persona is carried on each member in `crew.json`; a s
 (`Coder2`, `Helper`, `Advisor2`) gets `<label>.yaml` if it exists, else `coder.yaml`, matching its
 `coder.md` brief fallback.
 
+## Context exhaustion and compaction safety (NGH-030)
+
+Every non-Foreman member brief forbids invoking `/compact` and relying on automatic compaction.
+At the actual child-process launch boundary, `crew_env` uses the member's base role, not its pane
+label. Claude members receive `DISABLE_AUTO_COMPACT=1`; Claude Foreman receives
+`DISABLE_AUTO_COMPACT=0` and `DISABLE_COMPACT=0`, allowing compaction even if the parent inherited
+a ban. These overrides affect only a copied child environment; no global settings are written.
+`start --dry-run` exposes each role's `compaction` status and exact environment overrides using
+the same `compaction_control` helper as the real launch (including the live communication route).
+
+Verified tool support (16 Oct 2026):
+
+- **Claude:** [`DISABLE_AUTO_COMPACT`](https://code.claude.com/docs/en/env-vars) disables automatic
+  compaction, including idle compaction; manual `/compact` remains available but member policy bans it.
+- **Codex:** [configuration reference](https://developers.openai.com/codex/config-reference) documents
+  `model_auto_compact_token_limit` as a threshold; installed `codex.exe --help` confirms `-c` overrides
+  are invocation-scoped. No disable equivalent was verified, so no threshold is represented as a ban.
+- **Copilot:** [context management](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/context-management)
+  documents automatic compaction. Installed `@github/copilot/index.js` reads
+  `COPILOT_BACKGROUND_COMPACTION_THRESHOLD` and `COPILOT_BUFFER_EXHAUSTION_THRESHOLD`, but its
+  `CompactionProcessor.onRequestError` forces compaction after a provider context-limit error,
+  bypassing the background threshold. The SDK's `infiniteSessions` setting is not a verified CLI flag.
+- **agy (Antigravity):** installed `agy.exe --help` and the official
+  [CLI reference](https://antigravity.google/docs/cli/reference) and
+  [settings](https://antigravity.google/docs/settings?tab=cli) expose no verified disable control.
+  The binary contains `AGY_CLI_AUTO_COMPACT_OVERRIDE`, but its semantics are unverified; it is not set.
+
+Non-Claude members remain launchable, with `automatic: unsupported`, a per-tool reason, and empty
+environment overrides in the dry run. Their brief ban is policy only; it is not an enforced runtime
+guarantee. Foreman is shown as `permitted`. Copilot's manifest `context:` tier and Codex's remaining
+context status line are separate from compaction controls.
+
+When a member exhausts context, it stops and Foreman respawns that role in the same slot. The
+replacement is marked in `crew.json`; its opening prompt names the absolute `handover.md` path and
+the exact `inbox SHIFT LABEL` command, requests recovery of acked but unfinished assignments, and
+requires Foreman to re-dispatch stale assignments to the new incarnation before it acts. Existing
+same-slot selection and role/tool/model/brief attributes are preserved. Foreman alone may compact;
+its brief variants require this order around any compaction event: before compaction, write
+`handover.md` with current assignments, acked and unfinished work, and waits, then write a
+mailbox/bus note; after compaction, first reread `ticket.txt`, `prompt.txt`, `requires.txt` and the
+result ladder, claims, inbox, and `handover.md`, then continue.
+
+`spawn` sends the wrapper command to `agents-cli _attach inject PID 1` through stdin, matching the
+installed helper protocol; command text is not placed in argv. Failed injection reports stdout and
+stderr (including structured helper errors), restores `crew.json`, and leaves the slot available.
+
 ## The shift folder is the source of truth
 
 ```
