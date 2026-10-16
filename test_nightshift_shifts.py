@@ -80,6 +80,7 @@ def test_start_dry_run_from_a_ticket_titles_panes_with_it(monkeypatch, tmp_path,
     assert {r: v['pane_title'] for r, v in plan['roles'].items()} == {'Foreman': 'NGH-019 shift',
                                                                      'Advisor': 'NGH-019 shift',
                                                                      'Coder': 'NGH-019 shift',
+                                                                     'Apprentice': 'NGH-019 shift',
                                                                      'Tester': 'NGH-019 shift'}
     # every pane of the container, crew and empty slot alike, carries the one shift title (NGH-028)
     assert _titles(plan['wt_argv']) == ['NGH-019 shift'] * 8
@@ -141,8 +142,8 @@ roles:
 """
 
 
-def test_default_manifest_is_foreman_advisor_coder_tester():
-    """NGH-027: the Advisor sits second, on its own model; the other roles run the crew model."""
+def test_default_manifest_is_foreman_advisor_coder_tester_apprentice():
+    """NGH-027: the Advisor sits second, on its own model; NGH-029: the Apprentice fifth, on agy Gemini Flash."""
     crew = launcher.load_crew()
     assert crew == {'name': 'default', 'model': 'claude-opus-5-5', 'permission_mode': 'auto',
                     'contract': 'result.json', 'layout': '2x4', 'slots': 8, 'roles': [
@@ -153,16 +154,20 @@ def test_default_manifest_is_foreman_advisor_coder_tester():
                         {'role': 'Coder', 'brief': 'coder.md', 'count': 1, 'human_contact': False, 'colour': 'green',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
                         {'role': 'Tester', 'brief': 'tester.md', 'count': 1, 'human_contact': False, 'colour': 'blue',
-                         'tool': 'claude', 'model': 'claude-opus-5-5'}]}
+                         'tool': 'claude', 'model': 'claude-opus-5-5'},
+                        {'role': 'Apprentice', 'brief': 'apprentice.md', 'count': 1, 'human_contact': False,
+                         'colour': 'yellow', 'tool': 'agy', 'model': 'gemini-3.8-flash-high'}]}
     members = launcher.crew_members(crew, 'S')
     assert [(m['label'], m['identity'], m['peer']) for m in members] == [
-        ('Foreman', 'S-foreman', 'S-advisor, S-coder, S-tester'),
+        ('Foreman', 'S-foreman', 'S-advisor, S-coder, S-tester, S-apprentice'),
         ('Advisor', 'S-advisor', 'S-foreman'),
         ('Coder', 'S-coder', 'S-foreman'),
-        ('Tester', 'S-tester', 'S-foreman')]
+        ('Tester', 'S-tester', 'S-foreman'),
+        ('Apprentice', 'S-apprentice', 'S-foreman')]
     assert [(m['label'], m['model'], m['colour']) for m in members] == [
         ('Foreman', 'claude-opus-5-5', 'red'), ('Advisor', 'claude-fable-5-1', 'purple'),
-        ('Coder', 'claude-opus-5-5', 'green'), ('Tester', 'claude-opus-5-5', 'blue')]
+        ('Coder', 'claude-opus-5-5', 'green'), ('Tester', 'claude-opus-5-5', 'blue'),
+        ('Apprentice', 'gemini-3.8-flash-high', 'yellow')]
 
 
 def test_custom_crew_defaults_and_numbered_members(monkeypatch, tmp_path):
@@ -642,9 +647,9 @@ def _fixed_uuid(monkeypatch):
     monkeypatch.setattr(launcher.uuid, 'uuid4', lambda: launcher.uuid.UUID('12345678123456781234567812345678'))
 
 
-def test_start_dry_run_default_crew_is_the_four_pane_golden(monkeypatch, tmp_path, capsys):
-    """Golden for the default crew (Foreman, Advisor, Coder, Tester; NGH-024, NGH-027) in the 2x4 container
-    (slots 1..4 crew, slots 5..8 empty shells for spawn): must not move."""
+def test_start_dry_run_default_crew_is_the_five_pane_golden(monkeypatch, tmp_path, capsys):
+    """Golden for the default crew (Foreman, Advisor, Coder, Tester, Apprentice; NGH-024, NGH-027, NGH-029) in the
+    2x4 container (slots 1..5 crew, slots 6..8 empty shells for spawn): must not move."""
     _fixed_uuid(monkeypatch)
     work = tmp_path / 'work'
     work.mkdir()
@@ -669,7 +674,7 @@ def test_start_dry_run_default_crew_is_the_four_pane_golden(monkeypatch, tmp_pat
         'permission_mode': 'auto', 'lock': str(launcher.lock_path(cwd)),
         'roles': {
             'Foreman': {'session_name': f'{shift}-foreman', 'pane_title': f'{shift} shift',
-                        'peer': f'{shift}-advisor, {shift}-coder, {shift}-tester',
+                        'peer': f'{shift}-advisor, {shift}-coder, {shift}-tester, {shift}-apprentice',
                         'receives_prompt': True,
                         'first_message': 'Begin the assignment: the task text is at the end of your role instructions, '
                                          'after "The human task for this shift follows, verbatim:".'},
@@ -682,17 +687,22 @@ def test_start_dry_run_default_crew_is_the_four_pane_golden(monkeypatch, tmp_pat
             'Tester': {'session_name': f'{shift}-tester', 'pane_title': f'{shift} shift', 'peer': f'{shift}-foreman',
                        'receives_prompt': False,
                        'first_message': 'Begin your Tester role: send READY to Foreman and await verification '
-                                        'assignments.'}},
+                                        'assignments.'},
+            'Apprentice': {'session_name': f'{shift}-apprentice', 'pane_title': f'{shift} shift',
+                           'peer': f'{shift}-foreman', 'receives_prompt': False,
+                           'first_message': 'Begin your Apprentice role: send READY to Foreman and await bounded '
+                                            'assignments.',
+                           'tool': 'agy', 'model': 'gemini-3.8-flash-high', 'exe': str(launcher.AGY_EXE)}},
         'slots': [{'slot': 1, 'role': 'Foreman', 'pane_title': f'{shift} shift'},
                   {'slot': 2, 'role': 'Advisor', 'pane_title': f'{shift} shift'},
                   {'slot': 3, 'role': 'Coder', 'pane_title': f'{shift} shift'},
                   {'slot': 4, 'role': 'Tester', 'pane_title': f'{shift} shift'},
-                  {'slot': 5, 'role': None, 'pane_title': f'{shift} shift'},
+                  {'slot': 5, 'role': 'Apprentice', 'pane_title': f'{shift} shift'},
                   {'slot': 6, 'role': None, 'pane_title': f'{shift} shift'},
                   {'slot': 7, 'role': None, 'pane_title': f'{shift} shift'},
                   {'slot': 8, 'role': None, 'pane_title': f'{shift} shift'}],
         'wt_argv': ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized', 'new-tab', *pane_args('Foreman', 1),
-                    ';', 'split-pane', '-H', '-s', '0.5', *empty_args(5),
+                    ';', 'split-pane', '-H', '-s', '0.5', *pane_args('Apprentice', 5),
                     ';', 'move-focus', 'up',
                     ';', 'split-pane', '-V', '-s', '0.75', *pane_args('Advisor', 2),
                     ';', 'split-pane', '-V', '-s', '0.6667', *pane_args('Coder', 3),
@@ -2412,7 +2422,7 @@ def test_wt_without_slots_has_no_slot_args():
 # ── start --dry-run shows the slots ───────────────────────────────────────────
 
 @pytest.mark.usefixtures('_container_isolated')
-def test_dry_run_default_crew_fills_all_four_slots_with_crew(monkeypatch, tmp_path, capsys):
+def test_dry_run_default_crew_fills_five_slots_with_crew(monkeypatch, tmp_path, capsys):
     _fixed_uuid(monkeypatch)
     monkeypatch.chdir(tmp_path)
     launcher.start(['--dry-run', 'task'])
@@ -2422,15 +2432,15 @@ def test_dry_run_default_crew_fills_all_four_slots_with_crew(monkeypatch, tmp_pa
                              {'slot': 2, 'role': 'Advisor', 'pane_title': f'{s} shift'},
                              {'slot': 3, 'role': 'Coder', 'pane_title': f'{s} shift'},
                              {'slot': 4, 'role': 'Tester', 'pane_title': f'{s} shift'},
-                             {'slot': 5, 'role': None, 'pane_title': f'{s} shift'},
+                             {'slot': 5, 'role': 'Apprentice', 'pane_title': f'{s} shift'},
                              {'slot': 6, 'role': None, 'pane_title': f'{s} shift'},
                              {'slot': 7, 'role': None, 'pane_title': f'{s} shift'},
                              {'slot': 8, 'role': None, 'pane_title': f'{s} shift'}]
     slot_cells = [c for c in _cells(plan['wt_argv']) if '--slot' in c]
     assert [(c[c.index('--slot') + 1], c[c.index('--pane') + 1] if '--pane' in c else None) for c in slot_cells] == [
-        ('1', 'Foreman'), ('5', None), ('2', 'Advisor'), ('3', 'Coder'),
+        ('1', 'Foreman'), ('5', 'Apprentice'), ('2', 'Advisor'), ('3', 'Coder'),
         ('4', 'Tester'), ('6', None), ('7', None), ('8', None)]
-    assert plan['wt_argv'].count('cmd.exe') == 4   # four empty slot shells in the bottom row
+    assert plan['wt_argv'].count('cmd.exe') == 3   # three empty slot shells after the Apprentice in the bottom row
     assert not (tmp_path / 'shifts').exists()
 
 
@@ -3139,7 +3149,8 @@ def test_dry_run_default_crew_names_only_the_advisors_model(monkeypatch, tmp_pat
     launcher.start(['--dry-run', 'task'])
     roles = json.loads(capsys.readouterr().out)['roles']
     assert {label: r.get('model') for label, r in roles.items()} == {
-        'Foreman': None, 'Advisor': 'claude-fable-5-1', 'Coder': None, 'Tester': None}
+        'Foreman': None, 'Advisor': 'claude-fable-5-1', 'Coder': None, 'Tester': None,
+        'Apprentice': 'gemini-3.8-flash-high'}   # a non-Claude role always names its model
 
 
 # ── respawn attribute preservation, down --close handover safety, inbox incarnation ──
@@ -3224,6 +3235,148 @@ def test_spawn_codex_and_copilot_use_their_default_models(tmp_path, injected, ca
     members = {m['label']: m for m in json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members']}
     assert (members['Apprentice']['tool'], members['Apprentice']['model']) == ('codex', 'gpt-6.1-sol')
     assert (members['Helper']['tool'], members['Helper']['model']) == ('copilot', 'gemini-3.8-flash-high')
+
+
+# ── Apprentice (NGH-029): slot 5, per-CLI manifests, spawn --crew ────────────
+
+@pytest.mark.parametrize('name, tool, model, account', [
+    ('apprentice-gemini', 'agy', 'gemini-3.8-flash-high', None),
+    ('apprentice-codex', 'codex', 'gpt-5.6-luna', 2),
+    ('apprentice-copilot', 'copilot', 'gemini-3.8-flash-high', None)])
+def test_apprentice_manifests_are_the_default_crew_plus_their_apprentice(name, tool, model, account):
+    crew = launcher.load_crew(name)
+    default = launcher.load_crew()
+    assert crew['layout'] == '2x4' and crew['slots'] == 8 and crew['model'] == 'claude-opus-5-5'
+    assert crew['roles'][:4] == default['roles'][:4]   # the same Claude Foreman, Advisor, Coder, Tester
+    apprentice = crew['roles'][4]
+    assert (apprentice['role'], apprentice['brief'], apprentice['colour'], apprentice['tool'], apprentice['model'],
+            apprentice.get('account')) == ('Apprentice', 'apprentice.md', 'yellow', tool, model, account)
+    assert len(crew['roles']) == 5
+
+
+def test_default_crew_leaves_three_empty_slots():
+    crew = launcher.load_crew()
+    assert crew['slots'] - sum(r['count'] for r in crew['roles']) == 3
+
+
+def test_apprentice_brief_fills_every_placeholder_and_relays_the_verdict():
+    brief = launcher.role_brief('Apprentice', 'S-apprentice', 'S-foreman', 'C:/Data/nightshift/shifts/S',
+                                'apprentice.md')
+    assert 'S-apprentice' in brief and 'S-foreman' in brief and ' S ' in brief
+    assert launcher.SUITE_PYTHON in brief and '{' not in brief and '}' not in brief
+    assert 'TESTED-FAIL' in brief and brief.rstrip().endswith('on its own line.')
+    assert 'APPRENTICE-DONE' in brief and 'APPRENTICE-BLOCKED' in brief
+
+
+def test_apprentice_opening_message_asks_for_ready():
+    member = {'role': 'Apprentice', 'human_contact': False}
+    assert launcher.opening_message(member) == \
+        'Begin your Apprentice role: send READY to Foreman and await bounded assignments.'
+
+
+def test_foreman_brief_splits_work_between_coder_and_apprentice():
+    brief = launcher.role_brief('Foreman', 'S-foreman', 'S-coder', 'C:/x/S', 'foreman.md')
+    assert 'Apprentice' in brief and "disjoint from Coder's claims" in brief
+    assert "agents-cli wait <identity> --match 'APPRENTICE-DONE|APPRENTICE-BLOCKED' --timeout 30m" in brief
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_wt_five_members_fill_slots_1_to_5_of_the_2x4_container():
+    argv = launcher.wt_command(CONT_SHIFT, Path('C:/x/state'), agents=True, mode_flag='--start', cwd='C:/w',
+                               members=['Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice'], slots=8)
+    slot_cells = [c for c in _cells(argv) if '--slot' in c]
+    assert sorted((int(c[c.index('--slot') + 1]), c[c.index('--pane') + 1] if '--pane' in c else None)
+                  for c in slot_cells) == [(1, 'Foreman'), (2, 'Advisor'), (3, 'Coder'), (4, 'Tester'),
+                                           (5, 'Apprentice'), (6, None), (7, None), (8, None)]
+    assert argv.count('cmd.exe') == 3
+
+
+@pytest.mark.usefixtures('_container_isolated')
+@pytest.mark.parametrize('crew, tool, model, account', [
+    ('apprentice-codex', 'codex', 'gpt-5.6-luna', 2),
+    ('apprentice-copilot', 'copilot', 'gemini-3.8-flash-high', None),
+    ('apprentice-gemini', 'agy', 'gemini-3.8-flash-high', None)])
+def test_spawn_crew_takes_the_role_from_the_named_manifest(tmp_path, injected, capsys, crew, tool, model, account):
+    d = _container(tmp_path)   # a default shift whose crew.json has only Foreman and Coder
+    launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', crew])
+    out = json.loads(capsys.readouterr().out)
+    assert out['tool'] == tool and out['role'] == 'Apprentice' and out['slot'] == 3
+    member = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert (member['brief'], member['colour'], member['tool'], member['model'], member.get('account')) == \
+        ('apprentice.md', 'yellow', tool, model, account)
+    assert 'reasoning' not in member and member['peer'] == f'{CONT_SHIFT}-foreman'
+    assert json.loads((d / 'crew.json').read_text(encoding='utf-8'))['crew'] == 'default'   # the shift keeps its crew
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_crew_with_cli_overrides_the_tool_and_falls_back_on_the_model(tmp_path, injected, capsys):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'apprentice-codex', '--cli', 'copilot'])
+    assert json.loads(capsys.readouterr().out)['tool'] == 'copilot'
+    member = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert (member['brief'], member['colour'], member['tool'], member['model']) == \
+        ('apprentice.md', 'yellow', 'copilot', launcher.COPILOT_MODEL)
+    assert 'account' not in member   # account 2 belongs to the manifest's codex Apprentice, not to copilot
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_crew_reasoning_comes_from_the_named_manifest(tmp_path, injected, capsys):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'codex'])
+    member = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert (member['tool'], member['model'], member['reasoning']) == ('codex', 'gpt-5.6-luna', 'xhigh')
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_crew_overrides_a_gone_members_record(tmp_path, injected, monkeypatch, capsys):
+    d = _container(tmp_path, members=('Foreman', 'Coder', 'Apprentice'), free=(4,))
+    crew = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    crew['members'][-1].update(tool='agy', model='gemini-3.8-flash-high', brief='apprentice.md', colour='yellow')
+    (d / 'crew.json').write_text(json.dumps(crew), encoding='utf-8')
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid, started=None: pid != 503)   # the Apprentice is gone
+    launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'apprentice-codex'])
+    members = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members']
+    assert [m['label'] for m in members] == ['Foreman', 'Coder', 'Apprentice']
+    assert (members[-1]['tool'], members[-1]['model'], members[-1]['account'], members[-1]['identity']) == \
+        ('codex', 'gpt-5.6-luna', 2, f'{CONT_SHIFT}-apprentice')
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawn_crew_refuses_a_role_the_manifest_lacks(tmp_path, injected):
+    d = _container(tmp_path)
+    before = (d / 'crew.json').read_text(encoding='utf-8')
+    with pytest.raises(SystemExit, match='crew apprentice-codex has no role Helper'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Helper', '--crew', 'apprentice-codex'])
+    with pytest.raises(SystemExit, match='no crew manifest'):
+        launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'nope'])
+    assert (d / 'crew.json').read_text(encoding='utf-8') == before and injected == []
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_pane_start_runs_a_spawned_crew_apprentice_on_its_tool_model_and_account(tmp_path, injected, monkeypatch,
+                                                                                 capsys):
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'apprentice-codex'])
+    seen = {}
+
+    class Child:
+        pid = 42
+
+        def wait(self):
+            return 0
+
+    def popen(command, **k):
+        seen.update(command=command, env=k.get('env'))
+        return Child()
+    monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
+    monkeypatch.setattr(launcher, 'register_name', lambda pid, name: None)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
+    launcher.pane('Apprentice', str(d), start=True, cwd=str(tmp_path), slot=3)
+    command = seen['command']
+    assert command[0] == str(launcher.CODEX_EXE) and command[command.index('--model') + 1] == 'gpt-5.6-luna'
+    assert seen['env']['CODEX_HOME'].endswith('.codex-second')
+    assert launcher.read_slot(d, 3)['role'] == 'Apprentice'
 
 
 
@@ -3333,7 +3486,7 @@ def test_start_puts_a_start_event_on_the_bus(monkeypatch, tmp_path, capsys):
     state_dir = launcher.start(['--cwd', cwd, 'do it'])
     (event,) = _bus(state_dir)
     assert _strip(event) == {'seq': 1, 'event': 'start', 'shift': state_dir.name, 'ticket': None, 'cwd': cwd,
-                             'crew': 'default', 'members': ['Foreman', 'Advisor', 'Coder', 'Tester']}
+                             'crew': 'default', 'members': ['Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice']}
 
 
 def test_start_dry_run_writes_no_bus(monkeypatch, tmp_path, capsys):

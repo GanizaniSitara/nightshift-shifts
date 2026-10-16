@@ -15,8 +15,8 @@ resume; a closed pane is not relaunched. `start --dry-run` prints the plan as
 JSON without launching or writing anything.
 Container (NGH-025): a crew with layout 2x4 (8 slots, 2 rows x 4 columns) or 1x4 (4 equal columns) puts the crew
 in the first slots and plain cmd shells in the rest (each records <state_dir>/slots/<N>.json); the launcher exits once every pane and slot has
-reported. `spawn SHIFT --role ROLE [--cli claude|gemini] [--slot N]` starts a session in a free slot of that
-window (Foreman's only way to add a crew member), and Foreman ends its own shift with `down` (--hold, the
+reported. `spawn SHIFT --role ROLE [--cli claude|gemini|codex|copilot] [--crew NAME] [--slot N]` starts a session in a free
+slot of that window (Foreman's only way to add a crew member; --crew takes the role from crews/NAME.yaml), and Foreman ends its own shift with `down` (--hold, the
 default, keeps the tab; --close closes the window, as `loop` does). A working folder holds one live shift at a time:
 start takes a lock (C:/Data/nightshift/locks), refuses with exit code 3 while a live shift holds it,
 and `down` releases it.
@@ -68,6 +68,7 @@ START_MESSAGES = {'Foreman': 'Begin the assignment: the task text is at the end 
                              '"The human task for this shift follows, verbatim:".',
                   'Coder': 'Begin your Coder role: send READY to Foreman and await assignments.',
                   'Tester': 'Begin your Tester role: send READY to Foreman and await verification assignments.',
+                  'Apprentice': 'Begin your Apprentice role: send READY to Foreman and await bounded assignments.',
                   'Advisor': 'You are the Advisor and dormant: do not send READY, do not poll, read or run anything; '
                              'wait silently until Foreman messages you.'}
 ADVISOR = 'Advisor'   # the crew label only the human contact may message, and that answers only it (NGH-027)
@@ -1275,7 +1276,10 @@ def spawn(argv):
     parser.add_argument('shift', help='shift name, unique suffix, or "latest"')
     parser.add_argument('--role', required=True, help='role label, e.g. Advisor or Coder2 (letters, digits, _)')
     parser.add_argument('--cli', default='claude', choices=list(SPAWN_CLIS),
-                        help='the CLI to run: claude (default) or gemini (agy); codex/copilot/opencode are not wired yet')
+                        help='the CLI to run: claude (default), gemini (agy), codex or copilot; opencode is not wired '
+                             'yet. Overrides the tool --crew would give')
+    parser.add_argument('--crew', help="take the role's brief, colour, tool, model, reasoning and account from "
+                                       "crews/NAME.yaml instead of the shift's own manifest (e.g. apprentice-codex)")
     parser.add_argument('--slot', type=int, help='slot number (default: the first free one)')
     args = parser.parse_args(argv)
     tool = SPAWN_CLIS[args.cli]
@@ -1284,6 +1288,13 @@ def spawn(argv):
     role = args.role
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', role):
         raise SystemExit(f'role name {role!r} must be letters, digits or _ (it names files and panes)')
+    crew_role = None   # --crew NAME: the role as manifest NAME defines it
+    if args.crew:
+        crew_role = next((r for r in load_crew(args.crew)['roles'] if r['role'].lower() == role.lower()), None)
+        if crew_role is None:
+            raise SystemExit(f'crew {args.crew} has no role {role}')
+        if '--cli' not in argv:
+            tool = crew_role['tool']
     state_dir = resolve_shift(args.shift)
     saved = read_crew_json(state_dir)
     slots = (saved or {}).get('slots')
@@ -1324,7 +1335,7 @@ def spawn(argv):
                          f'no free slot in shift {state_dir.name} ({slots} slots, all taken)')
     shift = state_dir.name
     lead = next((m for m in members if m.get('human_contact')), members[0])
-    if existing and '--cli' not in argv and existing.get('tool') in TOOLS:
+    if existing and not crew_role and '--cli' not in argv and existing.get('tool') in TOOLS:
         tool = existing['tool']
     same_role = next((m for m in members if m['role'].lower() == role.lower()), None)
     same_tool = next((m for m in members if m.get('tool') == tool), None)
@@ -1362,6 +1373,19 @@ def spawn(argv):
             for opt in ('reasoning', 'account'):
                 if opt in existing:
                     member[opt] = existing[opt]
+    if crew_role:
+        # --crew NAME wins over the shift's manifest and the gone member's record; the model, reasoning and account
+        # only when the spawned tool is the one NAME gives the role (an explicit --cli falls back as above)
+        member.update(role=crew_role['role'], brief=crew_role['brief'], colour=crew_role['colour'])
+        if not existing:
+            member['label'] = crew_role['role']
+        for opt in ('reasoning', 'account'):
+            member.pop(opt, None)
+        if crew_role['tool'] == tool:
+            member['model'] = crew_role['model']
+            for opt in ('reasoning', 'account'):
+                if opt in crew_role:
+                    member[opt] = crew_role[opt]
     updated = [m for m in members if m is not existing] + [member]
     cwd = saved.get('cwd') or member_info(state_dir, lead['label']).get('cwd') or os.getcwd()
     crew_file = state_dir / 'crew.json'
@@ -2364,7 +2388,7 @@ def main():
                '  status [--all]                              shifts and whether their crews are alive\n'
                '  down [SHIFT|latest] [--hold|--close]        capture panes, write handover.md, stop the crew; --hold (default)\n'
                '                                              keeps the tab open, --close closes its window\n'
-               '  spawn SHIFT --role ROLE [--cli claude|gemini] [--slot N]\n'
+               '  spawn SHIFT --role ROLE [--cli claude|gemini|codex|copilot] [--crew NAME] [--slot N]\n'
                "                                              start a session in a free slot of the shift's 1x4 window\n"
                '  loop TICKET [TICKET...] [--stall-minutes N] optional batch runner: start, wait for result.json, down --close, next\n'
                '  loop --project PREFIX [--max N]             same over a project\'s backlog, lowest number first\n'

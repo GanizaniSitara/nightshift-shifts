@@ -51,7 +51,7 @@ As built (NGH-025):
   so a respawned member never tries to ack a dead incarnation's messages.
 - **Launcher exits.** `launch` waits for every `<Role>.json` and every slot record, prints, and
   returns. Nothing polls the shift after that.
-- **spawn.** `nightshift spawn SHIFT --role ROLE [--cli claude|gemini] [--slot N]` is the only way a
+- **spawn.** `nightshift spawn SHIFT --role ROLE [--cli claude|gemini|codex|copilot] [--crew NAME] [--slot N]` is the only way a
   crew session starts after launch, and only Foreman runs it. It refuses (non-zero, plain message) when
   the shift's window (`launch.json` hwnd) is gone, when no slot is free or the requested one is taken,
   or when the role is already live (or still starting in a slot). Slot choice: a dead role being
@@ -66,6 +66,12 @@ As built (NGH-025):
   `agents-cli _attach inject`, and marks the slot with the role and a `spawned` time. A start-mode pane reads its member
   from `crew.json` (falling back to the manifest), so spawned roles run like launched ones; `status`,
   `down` and the mailbox pick them up from `crew.json`.
+- **spawn --crew NAME (NGH-029).** Takes the spawned role's brief, colour, tool, model, `reasoning` and
+  `account` from `crews/NAME.yaml` instead of the shift's own manifest (and over a gone member's
+  record); refused when NAME has no such role. An explicit `--cli` still overrides the tool, and the
+  model then falls back as without `--crew`. The member written to `crew.json` carries all of it, so the
+  pane wrapper starts that tool/model/reasoning/account. This is how Foreman proves each CLI as
+  Apprentice inside a live default shift: `spawn SHIFT --role Apprentice --crew apprentice-codex`.
 - **down --hold / --close.** Both write the handover, kill the crew and release the folder lock.
   `--hold` (default) leaves the tab open; `--close` also closes the window (the loop uses it). When the
   crew is already dead and `handover.md` exists (Foreman already ran `down`, and a caller later runs
@@ -109,9 +115,9 @@ permission boundary.
 
 The top row of the 2x4 container holds four fixed identities, one per column: **Foreman** (runs the
 ticket's goal statement, sole human contact), **Advisor** (NGH-027), **Coder**, **Tester** (NGH-024);
-all four are built, see "The default crew" below, with the bottom four slots (5..8) open for
-`nightshift spawn` and additional identities such as the **Apprentice** (NGH-029, slot 5 in
-`crews/codex.yaml` and `crews/codex-copilot.yaml`). The
+all four are built, see "The default crew" below. The **Apprentice** (NGH-029) is a fifth, cheap
+coder in slot 5 (bottom row, first column) of the default, codex, codex-copilot and apprentice-* crews;
+slots 6..8 stay open for `nightshift spawn`. The
 Advisor is a dormant session on a frontier model (Fable, Astra, Mistral Large 4 or Gemini's top
 model, whichever the manifest names): it gets no instructions beyond its identity and does
 nothing until Foreman is stuck on something it cannot resolve. Then, instead of asking the human,
@@ -194,12 +200,25 @@ As built (NGH-027):
    crew processes (Foreman's own tree last), releases the lock, and keeps the tab open (`--hold`,
    default) or closes only that shift's Terminal window (`--close`).
 
-## The default crew: Foreman, Advisor, Coder, Tester (NGH-024, NGH-027)
+## The default crew: Foreman, Advisor, Coder, Tester, Apprentice (NGH-024, NGH-027, NGH-029)
 
 - `crews/default.yaml` is Foreman (red), Advisor (purple, Fable, `advisor.md`), Coder (green),
-  Tester (blue, `tester.md`), filling slots 1..4 (top row) of the 2x4 container and leaving slots
-  5..8 (bottom row) as empty cmd shells for `spawn`. Foreman's peers are `<shift>-advisor, <shift>-coder, <shift>-tester`; everyone
-  else's peer is `<shift>-foreman`. Other crews (`--crew NAME`) are unaffected.
+  Tester (blue, `tester.md`) in slots 1..4 (top row) of the 2x4 container, and Apprentice (yellow,
+  `apprentice.md`, agy on `gemini-3.8-flash-high`) in slot 5, leaving slots 6..8 as empty cmd shells
+  for `spawn`. Foreman's peers are `<shift>-advisor, <shift>-coder, <shift>-tester, <shift>-apprentice`;
+  everyone else's peer is `<shift>-foreman`. Other crews (`--crew NAME`) are unaffected.
+- Apprentice (NGH-029): Coder (expensive model) gets anything needing judgement; Apprentice (cheap
+  model) gets bounded, well-specified jobs with an explicit file list disjoint from Coder's claims; its
+  output is reviewed by Foreman and goes through Tester exactly like Coder's. `START_MESSAGES['Apprentice']`
+  tells it to send READY and await bounded assignments. A non-Claude Apprentice is driven like the agy
+  Coder (mailbox `msg send` → `agents-cli send` → `msg sent`, `agents-cli wait --match
+  'APPRENTICE-DONE|APPRENTICE-BLOCKED'`, `tail`, ack); Foreman relays the Tester verdict to it as a mailbox
+  note, and on TESTED-FAIL it waits for the follow-up assignment.
+- Per-CLI Apprentice manifests (2x4, the default Claude Foreman/Advisor/Coder/Tester plus Apprentice):
+  `crews/apprentice-gemini.yaml` (agy, `gemini-3.8-flash-high`), `crews/apprentice-codex.yaml` (codex,
+  `gpt-5.6-luna`, account 2), `crews/apprentice-copilot.yaml` (copilot, `gemini-3.8-flash-high`). They
+  serve both `start --crew NAME` and `spawn --crew NAME`. OpenCode and Qwen have none yet: they are not
+  in `TOOLS`, so `load_crew` would refuse the manifest.
 - Handoff is Coder -> Foreman -> Tester. Coder reports an assignment done; Foreman reviews it and
   assigns verification to Tester with its own `--asg` id, saying what changed and what was asked.
   Coder and Tester never talk to each other.
@@ -342,7 +361,7 @@ revision-bound evidence. No worktrees per shift (owner: not needed).
 - Personas beyond Foreman + Advisor + Coder + Tester (DevOps, Reviewer, validator council): design in
   NGH-014, to be agreed with the owner before any is added. Roadmap on NGH-001.
 - Which frontier model the Advisor should run long term (Fable now; Astra or Mistral Large 4 need the
-  agents-cli transport), and whether a 2x4 container gives room for more members than four.
+  agents-cli transport).
 - Whether to converge all messaging on mailbox + agents-cli, or keep native mesh for Claude.
 - Single binary (NGH-021): PyInstaller bundle vs Go port — owner's call.
 - Parallel shifts on separate codebases (NGH-013) — the locks make it possible; not yet run.

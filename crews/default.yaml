@@ -1,8 +1,11 @@
 # Nightshift crew manifest: `nightshift start` uses this one; `nightshift start --crew NAME`
 # reads nightshift-crews/NAME.yaml instead. Briefs are files in nightshift-briefs/ (common.md
 # always comes first). Exactly one role has human_contact: true and count 1; 2 to 8 panes in all.
-# The default crew is Foreman, Advisor, Coder and Tester in slots 1..4 of the 2x4 container,
-# leaving slots 5..8 as empty cmd shells for `spawn` (and Apprentice).
+# The default crew is Foreman, Advisor, Coder, Tester and Apprentice in slots 1..5 of the 2x4 container,
+# leaving slots 6..8 as empty cmd shells for `spawn`. To try the Apprentice on another CLI inside a live
+# default shift, Foreman runs `spawn SHIFT --role Apprentice --crew apprentice-codex` (or apprentice-gemini,
+# apprentice-copilot). OpenCode and Qwen have no apprentice manifest yet: they are not in TOOLS, so
+# load_crew would refuse one.
 # layout: split instead sizes the tab to the crew (2-8 panes, a second row above 4).
 name: default
 permission_mode: auto        # Claude --permission-mode for every pane
@@ -31,3 +34,10 @@ roles:
     brief: tester.md
     colour: blue
     count: 1
+  # Second, cheap coder (NGH-029): bounded, well-specified jobs only; Foreman drives it with agents-cli.
+  - role: Apprentice
+    brief: apprentice.md
+    colour: yellow
+    count: 1
+    tool: agy
+    model: gemini-3.8-flash-high
