@@ -445,10 +445,27 @@ func runWarden(argv []string) (object, int) {
 			stateDirs = shiftDirs()
 		}
 		shiftsList := []any{}
+		idleClosed := []any{}
+		defer func() {
+			if len(idleClosed) > 0 {
+				report = setValue(report, "idle_closed", idleClosed)
+			}
+		}()
 		for _, dir := range stateDirs {
 			record, err := statusRecord(dir)
 			if err != nil {
 				return err
+			}
+			// Live shift idle timeout (docs/design-live-shift.md, review note c): an idle prompt cannot time out by
+			// itself, so the warden closes a live shift whose queue is empty and quiet for idle_minutes.
+			if objectBool(record, "alive") && liveShiftIdle(dir) {
+				idleClosed = append(idleClosed, filepath.Base(dir))
+				if !dryRun {
+					if err := stopShift(dir, true, &floor, false); err != nil {
+						return err
+					}
+				}
+				continue
 			}
 			if !objectBool(record, "alive") || contains([]string{"done", "halted"}, objectString(record, "result")) {
 				continue

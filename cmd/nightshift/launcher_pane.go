@@ -475,6 +475,9 @@ func runPaneChild(command []string, cwd string, env []string, role, identity, pe
 	if start {
 		recordStarted, _ := objectNumber(record, "started")
 		go watchRoleTelemetry(child, stateDir, role, uint32(child.pid), numberFloat(recordStarted))
+		if role == "Foreman" {
+			go watchLiveShiftIdle(child.done, stateDir)
+		}
 	}
 	if slot != 0 {
 		old, _ := readObject(filepath.Join(stateDir, "slots", strconv.Itoa(slot)+".json"))

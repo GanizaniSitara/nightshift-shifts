@@ -191,6 +191,23 @@ func runStart(argv []string, print bool) (string, error) {
 		return "", startUsageError("working folder does not exist: " + cwd)
 	}
 	cwd = pyResolve(cwd)
+	// One live shift per repository (docs/design-live-shift.md): attach instead of starting a second crew.
+	if live := liveShiftFor(cwd); live != "" && !args.present["--dry-run"] {
+		item := task
+		if ticket != "" {
+			item = ticket
+		}
+		woken, added, err := queueAdd(live, item, "start")
+		if err != nil {
+			return "", startExit(err.Error())
+		}
+		focusShiftWindow(live)
+		line := renderJSON(object{{"attached", filepath.Base(live)}, {"queued", added.ID}, {"foreman_woken", woken}}, false, false)
+		if print {
+			out(line + "\n")
+		}
+		return line, nil
+	}
 	repoRoot := canonicalRepoRoot(cwd, "")
 	config, err := loadRepoConfig(repoRoot)
 	if err != nil {
@@ -1028,6 +1045,21 @@ func launchCrew(command []string, name, stateDir string, extra object, labels []
 		return startExit("WT activation returned success, but these panes never reported: " + strings.Join(pending, ", ") + ".")
 	}
 	return nil
+}
+
+// focusShiftWindow brings a live shift's window to the front with its Foreman pane (pane 0) focused.
+func focusShiftWindow(dir string) {
+	launch, ok := readObject(filepath.Join(dir, "launch.json"))
+	if !ok {
+		return
+	}
+	if n, ok := objectNumber(launch, "hwnd"); ok {
+		if v, err := strconv.ParseUint(n.String(), 10, 64); err == nil && v != 0 {
+			lifecycleUser32.NewProc("ShowWindow").Call(uintptr(v), 9) // SW_RESTORE
+			restoreForeground(uintptr(v))
+		}
+	}
+	_ = exec.Command("wt.exe", "-w", filepath.Base(dir), "focus-pane", "-t", "0").Run()
 }
 
 // restoreForeground gives focus back to the human's window (AttachThreadInput
