@@ -905,6 +905,51 @@ func indentFour(text string) string {
 	return strings.Join(lines, "\n")
 }
 
+// wtStepPause is the wait between two wt.exe calls of one layout.
+var wtStepPause = 600 * time.Millisecond
+
+// wtSteps turns wtCommand's single argv into one wt.exe call per subcommand, all
+// aimed at a window named after the shift. Windows Terminal handles a long `;`
+// chain asynchronously and drops focus steps (move-focus and focus-pane alike)
+// while it is still creating panes, so every later split landed in the bottom
+// row (16 Oct). Separate calls are applied in order. The first call keeps the
+// window options; "-w -1" becomes "-w <name>" so later calls find the window.
+func wtSteps(command []string, name string) [][]string {
+	if len(command) < 3 || command[1] != "-w" {
+		return [][]string{command}
+	}
+	head := []string{command[0], "-w", name}
+	var steps [][]string
+	current := append([]string{}, head...)
+	current = append(current, command[3:]...)
+	first := true
+	cut := func(parts []string) {
+		if first {
+			steps = append(steps, parts)
+			first = false
+			return
+		}
+		steps = append(steps, append(append([]string{}, head...), parts...))
+	}
+	start := len(head)
+	for i := start; i < len(current); i++ {
+		if current[i] == ";" {
+			if first {
+				cut(append([]string{}, current[:i]...))
+			} else {
+				cut(append([]string{}, current[start:i]...))
+			}
+			start = i + 1
+		}
+	}
+	if first {
+		cut(append([]string{}, current...))
+	} else {
+		cut(append([]string{}, current[start:]...))
+	}
+	return steps
+}
+
 // launchCrew runs wt.exe, remembers the new window, hands focus back to the
 // human and waits for every pane and slot to report; then it exits.
 func launchCrew(command []string, name, stateDir string, extra object, labels []string, slots int, print bool) error {
@@ -918,10 +963,13 @@ func launchCrew(command []string, name, stateDir string, extra object, labels []
 	if err := os.WriteFile(launchFile, []byte(renderJSON(record, false, true)), 0666); err != nil {
 		return startExit(err.Error())
 	}
-	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		return startExit(fmt.Sprintf("Command %s returned non-zero exit status: %s", pyRepr(command[0]), err))
+	for _, step := range wtSteps(command, name) {
+		cmd := exec.Command(step[0], step[1:]...)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return startExit(fmt.Sprintf("Command %s returned non-zero exit status: %s", pyRepr(step[0]), err))
+		}
+		time.Sleep(wtStepPause)
 	}
 	for i := 0; i < 20; i++ {
 		var created uintptr
