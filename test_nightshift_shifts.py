@@ -7550,3 +7550,14 @@ def test_repo043_pane_fallback_manifest_and_prompt_use_repo_root(monkeypatch, tm
     command = seen['cmd']
     assert command[command.index('--model') + 1] == 'repo-model'
     assert 'PANE-REPO-POLICY' in command[command.index('--append-system-prompt') + 1]
+
+
+def test_gemini_crew_manifest_parses_five_roles_on_agy():
+    gemini = launcher.load_crew('gemini')
+    assert [(r['role'], r['tool'], r['model'], r.get('permissions')) for r in gemini['roles']] == [
+        ('Foreman', 'agy', 'gemini-4-argon-high', 'skip'),
+        ('Advisor', 'agy', 'gemini-4-argon-high', 'skip'),
+        ('Apprentice', 'agy', 'gemini-3.8-flash-high', 'skip'),
+        ('Coder', 'agy', 'gemini-3.8-flash-high', 'skip'),
+        ('Tester', 'agy', 'gemini-3.8-flash-high', 'skip'),
+    ]
