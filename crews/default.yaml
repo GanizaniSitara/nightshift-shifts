@@ -1,6 +1,7 @@
 # Nightshift crew manifest: `nightshift start` uses this one; `nightshift start --crew NAME`
 # reads nightshift-crews/NAME.yaml instead. Briefs are files in nightshift-briefs/ (common.md
 # always comes first). Exactly one role has human_contact: true and count 1; 2 to 8 panes in all.
+# The default crew is Foreman, Coder and Tester: three equal columns in the split layout.
 name: default
 permission_mode: auto        # Claude --permission-mode for every pane
 model: claude-opus-5-5
@@ -15,4 +16,8 @@ roles:
   - role: Coder
     brief: coder.md
     colour: green
+    count: 1
+  - role: Tester
+    brief: tester.md
+    colour: blue
     count: 1

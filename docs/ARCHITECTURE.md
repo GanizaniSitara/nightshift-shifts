@@ -26,7 +26,8 @@ once NGH-025 lands.
 ## The four identities (owner, 16 Oct 2026)
 
 The 1x4 container is meant for four fixed identities, one per column: **Foreman** (runs the
-ticket's goal statement, sole human contact), **Advisor**, **Coder**, **Tester** (NGH-024). The
+ticket's goal statement, sole human contact), **Advisor**, **Coder**, **Tester** (NGH-024; built,
+see "The default crew" below). The
 Advisor is a dormant session on a frontier model (Fable, Astra, Mistral Large 4 or Gemini's top
 model, whichever the manifest names): it gets no instructions beyond its identity and does
 nothing until Foreman is stuck on something it cannot resolve. Then, instead of asking the human,
@@ -42,7 +43,7 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
 |---|---|---|
 | `nightshift_shifts.py` | the launcher and loop: `start`, `status`, `down`, `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020) | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (claude or agy) and `model`, pane layout | this repo |
-| `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`, placeholders filled in); the task text is appended for Foreman | this repo |
+| `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `coder.md`, `tester.md`; placeholders filled in); the task text is appended for Foreman | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | `C:\Tools\tasks-cli.exe` |
 | agents-cli | universal console driver for any agent TUI: peek a pane, inject a line, press a key, name/wait on a session | `C:\Tools\agents-cli` |
@@ -65,8 +66,8 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
    `--append-system-prompt` = its brief. The wrapper scrubs inherited `CLAUDE*` env so a crew
    launched from inside a Claude session is not a child session of it. The human's foreground
    window is restored once the crew window exists.
-3. The crew works. Foreman is the only member that talks to the human; Coder acts only on
-   Foreman's assignments. Rules the briefs enforce: never launch sessions/windows/agents (write
+3. The crew works. Foreman is the only member that talks to the human; Coder and Tester act only
+   on Foreman's assignments (handoff below). Rules the briefs enforce: never launch sessions/windows/agents (write
    the command for the human instead); claim files before editing (`claims.json`, exit 4 on
    conflict); record messages in the mailbox before sending them (NGH-019).
 4. Foreman ends the shift by writing `result.json`: `status` done|blocked, `stage`
@@ -75,6 +76,23 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
 5. `nightshift down` captures the last lines of each pane, writes `handover.md` (result,
    commits since start, test outcome, denials, claims, pane tails), kills the crew processes,
    releases the lock and closes only that shift's Terminal window.
+
+## The default crew: Foreman, Coder, Tester (NGH-024)
+
+- `crews/default.yaml` is Foreman (red), Coder (green), Tester (blue, `tester.md`): three equal
+  columns in the split layout. Foreman's peers are `<shift>-coder, <shift>-tester`; Coder's and
+  Tester's peer is `<shift>-foreman`. Other crews (`--crew NAME`) are unaffected.
+- Handoff is Coder -> Foreman -> Tester. Coder reports an assignment done; Foreman reviews it and
+  assigns verification to Tester with its own `--asg` id, saying what changed and what was asked.
+  Coder and Tester never talk to each other.
+- Tester runs the suite through `nightshift build` so the evidence is revision-bound, reviews the
+  diff against the assignment and writes missing tests. It edits test files only (claims disjoint
+  from Coder's); a needed product fix is reported, not made.
+- Its report starts `TESTED-PASS` or `TESTED-FAIL` and cites `builds/<n>.json` (head, dirty, exit),
+  test counts, findings and the test files it changed. A TESTED-PASS on a clean tree is the
+  tested-rung evidence Foreman puts in `result.json`; with a Tester present Foreman does not run the
+  suite itself. A TESTED-FAIL goes back to Coder as a new assignment. Without a Tester, Foreman
+  produces the tested evidence itself as before.
 
 ## Mixed crews: per-role tool and model (NGH-012)
 
@@ -87,7 +105,7 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
   shift identity. The trust-dialog answer and `/color` are Claude-only and skipped.
 - `pid_alive` counts `agy.exe` as a crew process alongside `claude.exe`/`node.exe`.
 - `start --dry-run` adds `tool`, `model` and `exe` to each non-Claude role; Claude roles keep the
-  original shape (the default crew's plan is golden-tested byte for byte).
+  original shape (the default three-pane crew's plan is golden-tested byte for byte).
 - `crews/gemini-coder.yaml` is the first mixed crew: Claude Foreman (`foreman-agy-coder.md`), agy
   Coder on `gemini-3.8-flash-high` (`coder-agy.md`). The agy Coder cannot use ListAgents/SendMessage:
   it writes reports in its own window, each ending with `CODER-DONE` or `CODER-BLOCKED`. Foreman
@@ -114,7 +132,7 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
 ```
 C:\Data\nightshift\shifts\<shift>\
   prompt.txt       the task as given to Foreman        ticket.txt   ticket id (when started from one)
-  launch.json      wt argv, launcher pid, window hwnd   Foreman.json / Coder.json   pid, name, start time, cwd
+  launch.json      wt argv, launcher pid, window hwnd   Foreman.json / Coder.json / Tester.json   pid, name, start time, cwd
   result.json      the shift contract (above)           handover.md  written by down
   claims.json      file claims per role                 denials.json auto-mode classifier refusals seen
   mailbox.sqlite3  messages: stored → sent → acknowledged, with sender/recipient incarnation (NGH-019)
@@ -152,14 +170,14 @@ revision-bound evidence. No worktrees per shift (owner: not needed).
 
 | Reviewed design said | Built | Status |
 |---|---|---|
-| No resident runtime; launch from the human's shell; Windows Terminal, two panes | same | matches |
+| No resident runtime; launch from the human's shell; Windows Terminal, two panes | same; the default crew is now three panes (NGH-024) | matches |
 | Named Claude sessions on the native mesh; permission-mode parity | same (`--name`, `--permission-mode auto` for all) | matches |
 | Mailbox with stored→sent→acked, incarnation fencing, `inbox`/`ack`, protocol-violation notes | NGH-019 | matches |
 | Folder lock, worktree lease at `assign` time | folder lock (NGH-010); worktrees dropped by owner, file claims instead (NGH-011) | deliberate departure |
 | Build slot, revision-bound evidence, cancellation (G4) | NGH-020 | in progress |
 | Acceptance gates G0–G5 as the delivery sequence | replaced by ticketed increments run by the loop; G0–G3 and most of G5 are covered, G4 pending | departure in method, not in content |
 | `down` with handover; `resume` re-dispatches acked-but-unfinished work | `down`/handover, loop retries with handover carry-over, `resume` after reboot | matches |
-| Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | none built; NGH-014 holds the design for owner agreement | not started |
+| Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | Tester built into the default crew (NGH-024); Advisor and the rest not built, NGH-014 holds the design | in progress |
 | Second coder, heterogeneous CLIs later | claims ready; per-role `tool:` with an agy Gemini Coder crew (NGH-012, not yet run live); Copilot (NGH-022) | in progress |
 | "Portable package", CLI language open | Python in its own repo; binary decision NGH-021 | open |
 | — (not in the design) | loop, result ladder, crew manifest, email on halt, denial capture | additions |
@@ -167,7 +185,7 @@ revision-bound evidence. No worktrees per shift (owner: not needed).
 
 ## Not decided / not built
 
-- Personas beyond Foreman + Coder (Tester, DevOps, Reviewer, validator council): design in
+- Personas beyond Foreman + Coder + Tester (Advisor, DevOps, Reviewer, validator council): design in
   NGH-014, to be agreed with the owner before any is added. Roadmap on NGH-001.
 - Whether to converge all messaging on mailbox + agents-cli, or keep native mesh for Claude.
 - Single binary (NGH-021): PyInstaller bundle vs Go port — owner's call.

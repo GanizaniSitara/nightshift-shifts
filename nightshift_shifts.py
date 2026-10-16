@@ -1,13 +1,13 @@
-"""Nightshift launcher: one Windows Terminal tab, Foreman and Coder side by side.
+"""Nightshift launcher: one Windows Terminal tab, Foreman, Coder and Tester side by side.
 
 `start "task"` (via C:/scripts/nightshift.cmd) persists the task to
-<state_dir>/prompt.txt and starts interactive Claude Opus 5.5 Foreman and Coder
+<state_dir>/prompt.txt and starts interactive Claude Opus 5.5 Foreman, Coder and Tester (the default crew)
 in the "Nightshift Crew" Terminal profile (Cascadia Mono 12, dark). Only Foreman receives the
-task; Coder gets its role and peer identity, sends READY and awaits work. The task
+task; Coder and Tester get their role and peer identity, send READY and await work. The task
 reaches the panes by file path only, never as argv text. Panes run in the
 caller's current directory (no worktree is created) in Claude's auto permission
 mode (--permission-mode auto). Each `start` is a new shift: mesh names are
-<shift>-foreman / <shift>-coder, pane titles are '<ticket or shift> <Role>' (e.g. 'NGH-019 Foreman'), a loop
+<shift>-foreman / <shift>-coder / <shift>-tester, pane titles are '<ticket or shift> <Role>' (e.g. 'NGH-019 Foreman'), a loop
 window is titled 'Nightshift <first ticket>..<last ticket>', and
 <state_dir>/<Role>.json records pid, name, peer and model. There is no restart or
 resume; a closed pane is not relaunched. `start --dry-run` prints the plan as
@@ -53,12 +53,13 @@ TRIALS_DIR = Path('C:/Data/nightshift/layout-trials')
 SUITE_PYTHON = 'C:/miniconda3/envs/python312/python.exe'
 REPO_DIR = Path(__file__).resolve().parent                 # C:/git/nightshift-shifts
 SUITE_TESTS = str(REPO_DIR / 'test_nightshift_shifts.py')  # run by `down` for the handover
-BRIEFS_DIR = REPO_DIR / 'briefs'                           # common.md, foreman.md, coder.md
+BRIEFS_DIR = REPO_DIR / 'briefs'                           # common.md, foreman.md, coder.md, tester.md
 CREWS_DIR = REPO_DIR / 'crews'                             # <crew>.yaml manifests; default.yaml
 START_PERMISSION_MODE = 'auto'  # owner decision 2026-10-15: auto (classifier-guarded), not manual or bypass
 START_MESSAGES = {'Foreman': 'Begin the assignment: the task text is at the end of your role instructions, after '
                              '"The human task for this shift follows, verbatim:".',
-                  'Coder': 'Begin your Coder role: send READY to Foreman and await assignments.'}
+                  'Coder': 'Begin your Coder role: send READY to Foreman and await assignments.',
+                  'Tester': 'Begin your Tester role: send READY to Foreman and await verification assignments.'}
 MAILKEEP = 'C:/Tools/mailkeep/Mailkeep.Cli.exe'
 NOTIFY_IDENTITY = 'owner_id'                # Mailkeep identity for owner@example.com
 NOTIFY_TO = 'owner@example.com'        # `loop` emails the owner here when it halts or finishes
@@ -647,12 +648,12 @@ def release_lock(shift_name):
 def start(argv):
     parser = argparse.ArgumentParser(
         prog='nightshift start',
-        description='Start a Nightshift crew: Claude Foreman and Coder side by side in one Windows Terminal tab '
+        description='Start a Nightshift crew: Claude Foreman, Coder and Tester side by side in one Windows Terminal tab '
                     '(the default crew; --crew NAME uses crews/NAME.yaml for other roles and pane counts). '
-                    'The task is saved to <state_dir>/prompt.txt and given to Foreman only; Coder sends READY '
-                    'and waits for Foreman to delegate work. Panes run in the current directory (no worktree is '
+                    'The task is saved to <state_dir>/prompt.txt and given to Foreman only; Coder and Tester send '
+                    'READY and wait for Foreman to delegate work. Panes run in the current directory (no worktree is '
                     'created) in Claude auto permission mode. Each start is a new shift with its own '
-                    '<shift>-foreman / <shift>-coder session names; there is no restart or resume, and a closed '
+                    '<shift>-foreman / <shift>-coder / <shift>-tester session names; there is no restart or resume, and a closed '
                     'pane is not relaunched. A folder holds one live shift at a time: start exits with code 3 '
                     'while another live shift holds the working folder (nightshift down releases it).',
         epilog='Example: nightshift start "Add a --verbose flag to report.py"  |  '
@@ -666,7 +667,7 @@ def start(argv):
                         help='an earlier shift folder for the same task: its handover.md is appended so the crew carries on')
     parser.add_argument('--crew', default='default',
                         help='crew manifest crews/CREW.yaml: roles, briefs, colours, counts, model '
-                             '(default: default = one Foreman, one Coder)')
+                             '(default: default = one Foreman, one Coder, one Tester)')
     parser.add_argument('--dry-run', action='store_true',
                         help='print the intended command, roles and prompt as JSON; launch and write nothing')
     args = parser.parse_args(argv)

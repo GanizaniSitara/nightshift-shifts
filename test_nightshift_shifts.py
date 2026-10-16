@@ -76,8 +76,9 @@ def test_start_dry_run_from_a_ticket_titles_panes_with_it(monkeypatch, tmp_path,
     launcher.start(['--dry-run', 'NGH-019'])
     plan = json.loads(capsys.readouterr().out)
     assert {r: v['pane_title'] for r, v in plan['roles'].items()} == {'Foreman': 'NGH-019 Foreman',
-                                                                     'Coder': 'NGH-019 Coder'}
-    assert _titles(plan['wt_argv']) == ['NGH-019 Foreman', 'NGH-019 Coder']
+                                                                     'Coder': 'NGH-019 Coder',
+                                                                     'Tester': 'NGH-019 Tester'}
+    assert _titles(plan['wt_argv']) == ['NGH-019 Foreman', 'NGH-019 Coder', 'NGH-019 Tester']
 
 
 @pytest.mark.parametrize('tickets, title', [
@@ -135,17 +136,20 @@ roles:
 """
 
 
-def test_default_manifest_matches_the_original_crew():
+def test_default_manifest_is_foreman_coder_tester():
     crew = launcher.load_crew()
     assert crew == {'name': 'default', 'model': 'claude-opus-5-5', 'permission_mode': 'auto',
                     'contract': 'result.json', 'layout': 'split', 'roles': [
                         {'role': 'Foreman', 'brief': 'foreman.md', 'count': 1, 'human_contact': True, 'colour': 'red',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
                         {'role': 'Coder', 'brief': 'coder.md', 'count': 1, 'human_contact': False, 'colour': 'green',
+                         'tool': 'claude', 'model': 'claude-opus-5-5'},
+                        {'role': 'Tester', 'brief': 'tester.md', 'count': 1, 'human_contact': False, 'colour': 'blue',
                          'tool': 'claude', 'model': 'claude-opus-5-5'}]}
     members = launcher.crew_members(crew, 'S')
-    assert [(m['label'], m['identity'], m['peer']) for m in members] == [('Foreman', 'S-foreman', 'S-coder'),
-                                                                          ('Coder', 'S-coder', 'S-foreman')]
+    assert [(m['label'], m['identity'], m['peer']) for m in members] == [('Foreman', 'S-foreman', 'S-coder, S-tester'),
+                                                                          ('Coder', 'S-coder', 'S-foreman'),
+                                                                          ('Tester', 'S-tester', 'S-foreman')]
 
 
 def test_custom_crew_defaults_and_numbered_members(monkeypatch, tmp_path):
@@ -522,8 +526,8 @@ def _fixed_uuid(monkeypatch):
     monkeypatch.setattr(launcher.uuid, 'uuid4', lambda: launcher.uuid.UUID('12345678123456781234567812345678'))
 
 
-def test_start_dry_run_default_crew_is_unchanged_golden(monkeypatch, tmp_path, capsys):
-    """Golden captured from the pre-manifest launcher (NGH-015): the default crew's plan must not move."""
+def test_start_dry_run_default_crew_is_the_three_pane_golden(monkeypatch, tmp_path, capsys):
+    """Golden for the three-pane default crew (Foreman, Coder, Tester; NGH-024): its plan must not move."""
     _fixed_uuid(monkeypatch)
     work = tmp_path / 'work'
     work.mkdir()
@@ -543,15 +547,21 @@ def test_start_dry_run_default_crew_is_unchanged_golden(monkeypatch, tmp_path, c
         'prompt_file': str(Path(state) / 'prompt.txt'), 'model': 'claude-opus-5-5', 'profile': 'Nightshift Crew',
         'permission_mode': 'auto', 'lock': str(launcher.lock_path(cwd)),
         'roles': {
-            'Foreman': {'session_name': f'{shift}-foreman', 'pane_title': f'{shift} Foreman', 'peer': f'{shift}-coder',
+            'Foreman': {'session_name': f'{shift}-foreman', 'pane_title': f'{shift} Foreman',
+                        'peer': f'{shift}-coder, {shift}-tester',
                         'receives_prompt': True,
                         'first_message': 'Begin the assignment: the task text is at the end of your role instructions, '
                                          'after "The human task for this shift follows, verbatim:".'},
             'Coder': {'session_name': f'{shift}-coder', 'pane_title': f'{shift} Coder', 'peer': f'{shift}-foreman',
                       'receives_prompt': False,
-                      'first_message': 'Begin your Coder role: send READY to Foreman and await assignments.'}},
+                      'first_message': 'Begin your Coder role: send READY to Foreman and await assignments.'},
+            'Tester': {'session_name': f'{shift}-tester', 'pane_title': f'{shift} Tester', 'peer': f'{shift}-foreman',
+                       'receives_prompt': False,
+                       'first_message': 'Begin your Tester role: send READY to Foreman and await verification '
+                                        'assignments.'}},
         'wt_argv': ['wt.exe', '-w', '-1', '--pos', '0,0', '--maximized', 'new-tab', *pane_args('Foreman'),
-                    ';', 'split-pane', '-V', '-s', '0.5', *pane_args('Coder'), ';', 'move-focus', 'left'],
+                    ';', 'split-pane', '-V', '-s', '0.6667', *pane_args('Coder'),
+                    ';', 'split-pane', '-V', '-s', '0.5', *pane_args('Tester'), ';', 'focus-pane', '-t', '0'],
         'prompt': 'task'}
     assert list(plan) == ['dry_run', 'shift', 'state_dir', 'cwd', 'ticket', 'prompt_file', 'model', 'profile',
                           'permission_mode', 'lock', 'roles', 'wt_argv', 'prompt']   # key order too
@@ -1376,6 +1386,60 @@ def test_role_brief_fills_shift_and_tells_crew_about_claims():
     assert '{nightshift}' not in coder and '{nightshift}' not in foreman
     assert '{shift}' not in launcher.role_brief('Coder', 'c', 'f')   # no state dir: filled with ''
 
+
+
+# ── Tester role in the default crew (NGH-024) ─────────────────────────────────
+
+def test_tester_brief_fills_identity_and_states_the_report_format():
+    tester = launcher.role_brief('Tester', 'S-tester', 'S-foreman', Path('C:/x/Nightshift-shift-abc'), 'tester.md')
+    ns = _nightshift_cmd()
+    assert 'S-tester' in tester and 'S-foreman' in tester
+    assert 'TESTED-PASS' in tester and 'TESTED-FAIL' in tester and 'builds/' in tester
+    assert f'{ns} build Nightshift-shift-abc --cwd' in tester
+    assert f'{ns} msg send Nightshift-shift-abc Tester Foreman' in tester
+    assert f'{ns} claim Nightshift-shift-abc S-tester' in tester
+    assert not any(p in tester for p in ('{role}', '{identity}', '{peer_name}', '{state_dir}', '{shift}', '{nightshift}'))
+
+
+def test_pane_start_launches_the_default_tester_in_blue(monkeypatch, tmp_path):
+    state = tmp_path / 'Nightshift-shift-test0001'
+    state.mkdir()
+    (state / 'prompt.txt').write_text('THE TASK', encoding='utf-8')
+    seen = {}
+
+    class Child:
+        pid = 43
+
+        def wait(self):
+            return 0
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.setdefault('colour', colour))
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane('Tester', str(state), start=True, cwd=str(tmp_path))
+    cmd = seen['cmd']
+    assert cmd[cmd.index('--name') + 1] == 'Nightshift-shift-test0001-tester' and seen['colour'] == 'blue'
+    brief = cmd[cmd.index('--append-system-prompt') + 1]
+    assert 'THE TASK' not in brief and 'TESTED-PASS' in brief and 'Nightshift-shift-test0001-foreman' in brief
+    record = json.loads((state / 'Tester.json').read_text(encoding='utf-8'))
+    assert record['peer'] == 'Nightshift-shift-test0001-foreman'
+
+
+def test_shift_record_and_handover_list_the_tester(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'shifts')
+    d = _shift(tmp_path, 'Nightshift-shift-trio0001', {'Foreman': 701, 'Coder': 702, 'Tester': 703})
+    members = launcher.crew_members(launcher.load_crew(), d.name)
+    (d / 'crew.json').write_text(json.dumps({'crew': 'default', 'members': members}), encoding='utf-8')
+    monkeypatch.setattr(launcher, 'pid_alive', lambda pid: True)
+    assert list(launcher.shift_record(d)['roles']) == ['Foreman', 'Coder', 'Tester']
+    monkeypatch.setattr(launcher, 'pane_tail', lambda pid, lines=40: [f'last words of {pid}'])
+    monkeypatch.setattr(launcher, 'suite_result', lambda: ('passed', '1 passed'))
+    monkeypatch.setattr(launcher, 'shift_commits', lambda cwd, since: [])
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: subprocess.CompletedProcess([], 0, stdout=b'', stderr=b''))
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: {})
+    launcher.down([d.name])
+    handover = (d / 'handover.md').read_text(encoding='utf-8')
+    assert '## Tester (Nightshift-shift-trio0001-tester, pid 703, alive)' in handover and 'last words of 703' in handover
 
 # ── Windows Terminal profile ──────────────────────────────────────────────────
 
