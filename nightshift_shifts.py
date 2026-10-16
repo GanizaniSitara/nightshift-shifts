@@ -353,8 +353,32 @@ def read_slot(state_dir, slot):
 
 
 def slot_shell(slot, state_dir):
-    """The --slot step of an empty slot: record the cmd.exe that runs it (our parent) and exit to its prompt."""
-    write_slot(state_dir, slot, cmd_pid=os.getppid())
+    """The --slot step of a slot shell: record the cmd.exe that runs it (our parent) and exit to its prompt.
+
+    A role already recorded in the slot (a crew pane whose member died) is kept, so `spawn` can put that
+    role back into its own slot and `status` shows it as dead rather than empty."""
+    kept = {k: v for k, v in (read_slot(state_dir, slot) or {}).items() if k in ('role', 'identity', 'spawned')}
+    write_slot(state_dir, slot, **kept, cmd_pid=os.getppid())
+
+
+def slot_state(state_dir, slot):
+    """What slot N holds: 'empty' (a cmd shell, no role), 'dead' (a cmd shell whose role's member has exited),
+    'live' (its member runs), 'starting' (spawned, the wrapper has not written <role>.json yet) or 'gone' (no
+    record, or no shell left to type into). Only empty and dead slots can be spawned into."""
+    record = read_slot(state_dir, slot)
+    if record is None:
+        return 'gone'
+    shell = bool(record.get('cmd_pid')) and process_running(record['cmd_pid'])
+    role = record.get('role')
+    if role is None:
+        return 'empty' if shell else 'gone'
+    info = member_info(state_dir, role)
+    # spawn stamps 'spawned'; a <role>.json older than that belongs to the previous incarnation
+    if not info.get('pid') or info.get('started', 0) < record.get('spawned', 0):
+        return 'starting'
+    if pid_alive(info['pid'], info.get('started')):
+        return 'live'
+    return 'dead' if shell else 'gone'
 
 
 def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/nightshift', crew=None, slot=None):
@@ -419,6 +443,10 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                   'name': identity, 'peer': peer_name, 'model': model, 'cwd': cwd}
         if start:
             record['tool'] = tool
+        previous = member_info(state_dir, role)
+        if previous:
+            # earlier incarnations of this role; 'started' stays the current one, so mailbox fencing is unchanged
+            record['history'] = previous.get('history', []) + [{k: v for k, v in previous.items() if k != 'history'}]
         Path(state_dir, role + '.json').write_text(json.dumps(record), encoding='utf-8')
         if slot:
             # keep what is already there (a spawned slot's cmd_pid) and add who runs in it
@@ -431,6 +459,15 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             set_role_colour(child, colour, cwd)
         code = child.wait()
         print(f'{role} exited with code {code}.')
+        if start and slot:
+            # A container slot must leave a cmd prompt behind for `spawn` to type into. A spawned wrapper was
+            # typed into a slot shell: returning lands at its prompt. A crew pane wt launched directly has none,
+            # so it becomes one (slot_shell keeps the dead role in the slot record).
+            cmd_pid = (read_slot(state_dir, slot) or {}).get('cmd_pid')
+            if not (cmd_pid and process_running(cmd_pid)):
+                subprocess.run(['cmd.exe', '/k', sys.executable, str(Path(__file__).resolve()),
+                                '--slot', str(slot), '--state-dir', str(state_dir)])
+            return
         input('Press Enter to close this pane.')
         return
     kernel = ctypes.windll.kernel32
@@ -484,9 +521,10 @@ def layout_description(n):
     return f'2 rows: {top} columns over {n - top}'
 
 
-def pane_title(label, role):
-    """Start-mode pane title: '<ticket or shift> <Role>', e.g. 'NGH-019 Foreman' (owner format, 16 Oct)."""
-    return f'{label} {role}'
+def pane_title(label):
+    """Start-mode pane title, the same for every pane and slot of the container: '<ticket or shift> shift', e.g.
+    'NGH-025 shift' (owner, 16 Oct; NGH-028). Shifts before that titled panes '<ticket or shift> <Role>'."""
+    return f'{label} shift'
 
 
 def loop_title(tickets):
@@ -514,7 +552,7 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
         command.extend(parts)
         if agents:
             command.extend(['--profile', PROFILE])
-        command.extend(['--title', pane_title(ticket or name, f'slot {slot}'), '--suppressApplicationTitle',
+        command.extend(['--title', pane_title(ticket or name), '--suppressApplicationTitle',
                         '-d', '%USERPROFILE%', 'cmd.exe', '/k', sys.executable, script,
                         '--slot', str(slot), '--state-dir', str(state_dir)])
 
@@ -534,8 +572,8 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
         if role:
             if agents:
                 command.extend(['--profile', PROFILE])
-            # start mode shows '<ticket or shift> <Role>'; the trial modes keep the shift name in the title.
-            title = pane_title(ticket or name, role) if mode_flag == '--start' else 'Nightshift | ' + role + ' | ' + name
+            # start mode shows '<ticket or shift> shift'; the trial modes keep the shift name in the title.
+            title = pane_title(ticket or name) if mode_flag == '--start' else 'Nightshift | ' + role + ' | ' + name
             command.extend(['--title', title, '--suppressApplicationTitle',
                             '-d', '%USERPROFILE%', sys.executable, script, '--pane', role, '--state-dir', str(state_dir)])
             if mode_flag:
@@ -786,7 +824,7 @@ def start(argv):
             'dry_run': True, 'shift': name, 'state_dir': str(state_dir), 'cwd': cwd, 'ticket': ticket,
             'prompt_file': str(state_dir / 'prompt.txt'), 'model': crew['model'], 'profile': PROFILE,
             'permission_mode': crew['permission_mode'], 'lock': str(lock_path(cwd)),
-            'roles': {m['label']: {'session_name': m['identity'], 'pane_title': pane_title(ticket or name, m['label']),
+            'roles': {m['label']: {'session_name': m['identity'], 'pane_title': pane_title(ticket or name),
                                    'peer': m['peer'],
                                    'receives_prompt': m['human_contact'], 'first_message': opening_message(m),
                                    # Claude roles keep the pre-manifest shape; other tools show what will run
@@ -796,7 +834,7 @@ def start(argv):
         if crew['slots']:
             # The container (NGH-025): which slot holds which crew pane, and the empty ones `spawn` can fill.
             cells = labels + [None] * (crew['slots'] - len(labels))
-            plan['slots'] = [{'slot': n, 'role': role, 'pane_title': pane_title(ticket or name, role or f'slot {n}')}
+            plan['slots'] = [{'slot': n, 'role': role, 'pane_title': pane_title(ticket or name)}
                              for n, role in enumerate(cells, 1)]
         plan.update(wt_argv=command, prompt=prompt)
         if crew['name'] != 'default':
@@ -880,6 +918,14 @@ def shift_record(state_dir):
             'registered': (sessions / f'{pid}.json').exists(),
         }
     record['alive'] = any(r['alive'] for r in record['roles'].values())
+    slots = (read_crew_json(state_dir) or {}).get('slots')
+    if slots:
+        # the container's cells; empty and dead slots are the ones `spawn` can fill
+        record['slots'] = []
+        for n in range(1, slots + 1):
+            state = slot_state(state_dir, n)
+            record['slots'].append({'slot': n, 'role': (read_slot(state_dir, n) or {}).get('role'), 'state': state,
+                                    'reusable': state in ('empty', 'dead')})
     result_path = state_dir / 'result.json'
     record['stage'] = None
     try:
@@ -1076,11 +1122,11 @@ def close_target(state_dir):
     hwnd = launch_record.get('hwnd')
     windows = terminal_windows()
     if not hwnd:
-        # Shift started before the hwnd was recorded: fall back to the one window titled by one of this shift's
-        # panes ('<ticket or shift> <Role>'), or by a bare 'Foreman'/'Coder' for shifts from before those titles.
+        # Shift started before the hwnd was recorded: fall back to the one window titled by this shift's panes
+        # ('<ticket or shift> shift'; older shifts '<ticket or shift> <Role>', or a bare 'Foreman'/'Coder').
         ticket_file = state_dir / 'ticket.txt'
         label = (ticket_file.read_text(encoding='utf-8').strip() if ticket_file.is_file() else '') or state_dir.name
-        titles = {pane_title(label, m['label']) for m in crew_roster(state_dir)} | {'Foreman', 'Coder'}
+        titles = {pane_title(label)} | {f"{label} {m['label']}" for m in crew_roster(state_dir)} | {'Foreman', 'Coder'}
         candidates = [h for h, title in windows.items() if title in titles]
         hwnd = candidates[0] if len(candidates) == 1 else None
     return hwnd if hwnd and hwnd in windows else None
@@ -1163,20 +1209,24 @@ def spawn(argv):
         info = member_info(state_dir, existing['label'])
         if info.get('pid') and pid_alive(info['pid'], info.get('started')):
             raise SystemExit(f"role {existing['label']} is already live in shift {state_dir.name} (pid {info['pid']})")
-        starting = [n for n in range(1, slots + 1) if (read_slot(state_dir, n) or {}).get('role') == existing['label']]
-        if starting and not info:
+    if args.slot and not 1 <= args.slot <= slots:
+        raise SystemExit(f'no free slot: slot {args.slot} is not in 1..{slots}')
+    states = {n: slot_state(state_dir, n) for n in range(1, slots + 1)}
+    mine = []   # the slots recorded for this role
+    if existing:
+        mine = [n for n in states if (read_slot(state_dir, n) or {}).get('role') == existing['label']]
+        starting = [n for n in mine if states[n] == 'starting']
+        if starting:
             # spawned into a slot but its wrapper has not written <label>.json yet: still starting, count it live
             raise SystemExit(f"role {existing['label']} is already live in shift {state_dir.name} "
                              f'(starting in slot {starting[0]})')
-    wanted = [args.slot] if args.slot else range(1, slots + 1)
-    if args.slot and not 1 <= args.slot <= slots:
-        raise SystemExit(f'no free slot: slot {args.slot} is not in 1..{slots}')
-    slot = None
-    for n in wanted:
-        record = read_slot(state_dir, n)
-        if record and record.get('role') is None and record.get('cmd_pid') and process_running(record['cmd_pid']):
-            slot = n
-            break
+    free = [n for n, state in states.items() if state in ('empty', 'dead')]
+    if args.slot:
+        slot = args.slot if args.slot in free else None
+    else:
+        # a dead member goes back into its own slot; otherwise the lowest free slot, dead or empty alike
+        own = [n for n in free if n in mine]
+        slot = (own or free or [None])[0]
     if slot is None:
         raise SystemExit(f'no free slot: slot {args.slot} is taken' if args.slot else
                          f'no free slot in shift {state_dir.name} ({slots} slots, all taken)')
@@ -1204,6 +1254,7 @@ def spawn(argv):
             f'--start --cwd "{cwd}" --slot {slot}'
             + (f" --crew {saved['crew']}" if saved.get('crew', 'default') != 'default' else ''))
     record = read_slot(state_dir, slot)
+    spawned = time.time()   # before typing: the wrapper's <role>.json 'started' comes after it
     try:
         typed = subprocess.run(['agents-cli', '_attach', 'inject', str(record['cmd_pid']), '1', line],
                                capture_output=True, timeout=30)
@@ -1216,7 +1267,8 @@ def spawn(argv):
         raise SystemExit(f'could not type into slot {slot} (cmd pid {record["cmd_pid"]}): {failed}')
     # re-read: the wrapper may already have added its wrapper_pid
     kept = {k: v for k, v in (read_slot(state_dir, slot) or record).items() if k != 'slot'}
-    write_slot(state_dir, slot, **{**kept, 'role': member['label'], 'identity': member['identity']})
+    write_slot(state_dir, slot, **{**kept, 'role': member['label'], 'identity': member['identity'],
+                                   'spawned': spawned})
     print(json.dumps({'shift': shift, 'slot': slot, 'role': member['label'], 'identity': member['identity'],
                       'tool': tool}))
 

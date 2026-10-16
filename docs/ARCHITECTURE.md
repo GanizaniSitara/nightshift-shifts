@@ -27,22 +27,38 @@ As built (NGH-025):
   (the tab sized to the crew, 2-8 panes, unchanged). `load_crew` exposes `slots` (4 for 1x4, None
   for split) and refuses a crew that does not fit. `wt_command` lays out four equal columns: crew
   panes in slots 1..k (their wrappers get `--slot N`), and slots k+1..4 run
-  `cmd.exe /k <python> nightshift_shifts.py --slot N --state-dir <dir>`, titled `<ticket or shift> slot N`.
+  `cmd.exe /k <python> nightshift_shifts.py --slot N --state-dir <dir>`. Every pane is titled
+  `<ticket or shift> shift` (NGH-028).
 - **slots/.** Every slot records `<state_dir>/slots/<N>.json`: an empty slot writes
   `{slot, cmd_pid, started, role: null}` (cmd_pid = the cmd.exe that ran it) and exits to a plain
   prompt; a crew pane writes `{slot, role, identity, wrapper_pid}`. `start --dry-run` shows
   `slots: [{slot, role|null, pane_title}]`.
+- **Slot states and reuse (NGH-028).** `slot_state` reads a slot as `empty` (a running cmd shell, no
+  role), `dead` (a running cmd shell whose role's member has exited: `<role>.json` exists and
+  `pid_alive` is false), `live`, `starting` (role recorded but no `<role>.json`, or one older than the
+  slot's `spawned` stamp, i.e. the previous incarnation's) or `gone` (no record, or no shell to type
+  into). Empty and dead slots are free; a live member's slot is never taken. When a container pane's
+  member exits, the pane leaves a cmd prompt: a spawned wrapper just returns to the slot shell it was
+  typed into; a crew pane wt launched directly runs `cmd.exe /k ... --slot N` and becomes a slot
+  shell, and `slot_shell` keeps the dead role in the slot record (so `status` shows it dead and the
+  role can go back into its own slot). `status` adds `slots: [{slot, role, state, reusable}]` for a
+  container shift.
+- **Incarnation history.** When a pane writes `<role>.json` over an earlier one, the earlier record
+  (minus its own history) is appended to `history`; `started` stays the current incarnation, so
+  mailbox fencing is unchanged.
 - **Launcher exits.** `launch` waits for every `<Role>.json` and every slot record, prints, and
   returns. Nothing polls the shift after that.
 - **spawn.** `nightshift spawn SHIFT --role ROLE [--cli claude|gemini] [--slot N]` is the only way a
   crew session starts after launch, and only Foreman runs it. It refuses (non-zero, plain message) when
   the shift's window (`launch.json` hwnd) is gone, when no slot is free or the requested one is taken,
-  or when the role is already live (or still starting in a slot). `--cli gemini` runs agy; codex,
+  or when the role is already live (or still starting in a slot). Slot choice: a dead role being
+  respawned goes back into its own slot; otherwise the lowest free slot, dead or empty alike (a dead
+  slot 2 beats an empty slot 4); `--slot N` accepts a dead slot too. `--cli gemini` runs agy; codex,
   copilot and opencode are refused as not yet wired (NGH-022). It appends the member to `crew.json`
   (identity `<shift>-<role>`, brief `<role>.md` if it exists else `coder.md`, the colour of a member
   with the same role else yellow, peer = the human contact; Foreman's own peer list is not rewritten),
   types the pane wrapper line (paths double-quoted, `--slot N`) into that slot's cmd with
-  `agents-cli _attach inject`, and marks the slot with the role. A start-mode pane reads its member
+  `agents-cli _attach inject`, and marks the slot with the role and a `spawned` time. A start-mode pane reads its member
   from `crew.json` (falling back to the manifest), so spawned roles run like launched ones; `status`,
   `down` and the mailbox pick them up from `crew.json`.
 - **down --hold / --close.** Both write the handover, kill the crew and release the folder lock.
@@ -144,26 +160,27 @@ decision cannot be undone. This is the reviewed design's "bounded consultant" (n
   `agents-cli tail`, and checks the marker ends the new report, not an old one. Its proactive check
   is `agents-cli ls`/`tail` instead of ListAgents.
 
-## Window and pane titles (NGH-023)
+## Window and pane titles (NGH-023, NGH-028)
 
-- Each `start` pane is titled `<ticket or shift> <Role>`, one space, no dash: `NGH-019 Foreman`,
-  `NGH-019 Coder-2`; a free-text shift uses its shift name (`Nightshift-shift-1a2b3c4d Coder`).
-  `--suppressApplicationTitle` keeps the CLI from overwriting it, and the window shows the
-  focused pane's title. One helper (`pane_title`) builds it for `wt_command`, the dry-run plan
-  and `down`.
-- Empty container slots are titled `<ticket or shift> slot N` (NGH-025).
+- Every `start` pane, crew panes and empty container slots alike, is titled `<ticket or shift> shift`:
+  `NGH-025 shift`; a free-text shift uses its shift name (`Nightshift-shift-1a2b3c4d shift`). So the
+  window reads the same whichever pane has focus. `--suppressApplicationTitle` keeps the CLI from
+  overwriting it. One helper (`pane_title`) builds it for `wt_command` and the dry-run plan
+  (`roles` and `slots`). Before NGH-028 panes were `<ticket or shift> <Role>` and empty slots
+  `<ticket or shift> slot N`.
 - The legacy trial modes keep `Nightshift | <Role> | <trial>`.
 - `loop` sets its own console title to `Nightshift <first>..<last>` (`Nightshift NGH-019` for one
   ticket; `loop_title`), and a finished loop closes the Terminal window with that title.
 - `down` closes the hwnd recorded in `launch.json`; without one it falls back to the single window
-  titled by one of this shift's panes, or a bare `Foreman`/`Coder` for shifts from before NGH-023.
+  titled `<ticket or shift> shift`, or the older `<ticket or shift> <Role>`, or a bare
+  `Foreman`/`Coder` for shifts from before NGH-023.
 
 ## The shift folder is the source of truth
 
 ```
 C:\Data\nightshift\shifts\<shift>\
   prompt.txt       the task as given to Foreman        ticket.txt   ticket id (when started from one)
-  launch.json      wt argv, launcher pid, window hwnd   Foreman.json / Coder.json / Tester.json   pid, name, start time, cwd
+  launch.json      wt argv, launcher pid, window hwnd   Foreman.json / Coder.json / Tester.json   pid, name, start time, cwd, history
   crew.json        members (incl. spawned), slots, cwd  slots/<N>.json  what each container slot holds (NGH-025)
   result.json      the shift contract (above)           handover.md  written by down
   claims.json      file claims per role                 denials.json auto-mode classifier refusals seen
