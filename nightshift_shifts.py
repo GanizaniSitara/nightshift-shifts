@@ -16,9 +16,9 @@ JSON without launching or writing anything.
 Container (NGH-025): a crew with layout 2x4 (8 slots, 2 rows x 4 columns) or 1x4 (4 equal columns) puts the crew
 in the first slots and plain cmd shells in the rest (each records <state_dir>/slots/<N>.json); the launcher exits once every pane and slot has
 reported. `spawn SHIFT --role ROLE [--cli claude|gemini|codex|copilot] [--crew NAME] [--slot N]` starts a session in a free
-slot of that window (Foreman's only way to add a crew member; --crew takes the role from crews/NAME.yaml), and Foreman ends its own shift with `down` (--hold, the
-default, keeps the tab; --close closes the window, as `loop` does). A working folder holds one live shift at a time:
-start takes a lock (C:/Data/nightshift/locks), refuses with exit code 3 while a live shift holds it,
+slot of that window (Foreman's only way to add a crew member; --crew takes the role from crews/NAME.yaml), and Foreman ends its own shift with `down` (--close, the
+default, closes the window; --hold keeps the tab). A working folder holds one live shift at a time:
+start takes a lock (C:/nightshift/locks), refuses with exit code 3 while a live shift holds it,
 and `down` releases it.
 Coders claim files before editing them (`claim`/`release`/`claims`, kept in <state_dir>/claims.json); a file
 held by another role makes `claim` exit 4 and change nothing.
@@ -38,6 +38,8 @@ WT separators are native argv, not shell chaining. No software installs.
 import argparse
 import contextlib
 import ctypes
+import hashlib
+import io
 import json
 import math
 import os
@@ -48,6 +50,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 
@@ -65,12 +68,18 @@ CAMPBELL_SCHEME = {
     'brightBlack': '#767676', 'brightRed': '#E74856', 'brightGreen': '#16C60C', 'brightYellow': '#F9F1A5',
     'brightBlue': '#3B78FF', 'brightPurple': '#B4009E', 'brightCyan': '#61D6D6', 'brightWhite': '#F2F2F2',
 }
-SHIFTS_DIR = Path('C:/Data/nightshift/shifts')
-LOCKS_DIR = Path('C:/Data/nightshift/locks')
-TRIALS_DIR = Path('C:/Data/nightshift/layout-trials')
+SOLID_DIR = Path('C:/nightshift')
+SHIFTS_DIR = SOLID_DIR / 'shifts'
+LOCKS_DIR = SOLID_DIR / 'locks'
+BUILDS_DIR = SOLID_DIR / 'builds'
+FLOOR_FILE = SOLID_DIR / 'floor.json'
+TRIALS_DIR = SOLID_DIR / 'layout-trials'
+LEGACY_DIR = Path('C:/Data/nightshift')
+FILE_LOCK_STALE_S = 30
+NUDGE_IDLE_S = 300
 SUITE_PYTHON = 'C:/miniconda3/envs/python312/python.exe'
 REPO_DIR = Path(__file__).resolve().parent                 # C:/git/nightshift-shifts
-SUITE_TESTS = str(REPO_DIR / 'test_nightshift_shifts.py')  # run by `down` for the handover
+SUITE_TESTS = str(REPO_DIR / 'test_nightshift_shifts.py')  # explicit suite runner; teardown uses saved evidence
 BRIEFS_DIR = REPO_DIR / 'briefs'                           # common.md, foreman.md, coder.md, tester.md
 PERSONAS_DIR = REPO_DIR / 'personas'                       # <role>.yaml: identity, good_looks_like, how_you_work, never
 CREWS_DIR = REPO_DIR / 'crews'                             # <crew>.yaml manifests; default.yaml
@@ -106,6 +115,10 @@ CODEX_MODEL = 'gpt-6.1-sol'              # default model for a spawned codex rol
 COPILOT_MODEL = 'gemini-3.8-flash-high'  # default model for a spawned copilot role
 DEFAULT_TOOL_MODELS = {'agy': AGY_MODEL, 'codex': CODEX_MODEL, 'copilot': COPILOT_MODEL}
 REASONING_LEVELS = ('low', 'medium', 'high', 'xhigh')
+# a tool whose reasoning flag takes other levels than REASONING_LEVELS (copilot --reasoning-effort, NGH-037)
+TOOL_REASONING_LEVELS = {'copilot': ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')}
+CONTEXT_TIERS = ('default', 'long_context')   # a manifest role's `context:` (copilot --context)
+CONTEXT_TOOLS = ('copilot',)                   # the tools that have a context tier flag
 PERMISSIONS = ('skip', 'auto', 'default')   # a manifest role's `permissions:`; permission_flags maps them per tool
 APPROVE_ALL_FLAGS = {'agy': ('--dangerously-skip-permissions',),   # as C:/scripts/launch.ps1 starts agy
                      'codex': ('--dangerously-bypass-approvals-and-sandbox',),
@@ -188,10 +201,19 @@ def load_crew(name='default'):
                      'tool': tool, 'model': str(entry.get('model') or '')}
         if entry.get('reasoning') is not None:
             reasoning = str(entry['reasoning'])
-            if reasoning not in REASONING_LEVELS:
-                raise SystemExit(f"crew {name}: reasoning {reasoning!r} for {role} must be one of: "
-                                 f"{', '.join(REASONING_LEVELS)}")
+            levels = TOOL_REASONING_LEVELS.get(tool, REASONING_LEVELS)
+            if reasoning not in levels:
+                raise SystemExit(f"crew {name}: reasoning {reasoning!r} for {role} (tool {tool}) must be one of: "
+                                 f"{', '.join(levels)}")
             role_dict['reasoning'] = reasoning
+        if entry.get('context') is not None:
+            context = str(entry['context'])
+            if context not in CONTEXT_TIERS:
+                raise SystemExit(f"crew {name}: context {context!r} for {role} must be one of: "
+                                 f"{', '.join(CONTEXT_TIERS)}")
+            if tool not in CONTEXT_TOOLS:
+                raise SystemExit(f"crew {name}: context {context!r} for {role}: tool {tool} has no context tier flag")
+            role_dict['context'] = context
         if entry.get('account') is not None:
             if entry['account'] not in (1, 2):
                 raise SystemExit(f"crew {name}: account for {role} must be 1 or 2, not {entry['account']!r}")
@@ -240,7 +262,7 @@ def crew_members(crew, shift):
                       'persona': r.get('persona'),
                       'colour': r['colour'], 'human_contact': r['human_contact'],
                       'tool': r['tool'], 'model': r['model']}
-            for opt in ('reasoning', 'account', 'permissions'):
+            for opt in ('reasoning', 'context', 'account', 'permissions'):
                 if opt in r:
                     member[opt] = r[opt]
             members.append(member)
@@ -338,6 +360,10 @@ def crew_env(environ, tool='claude', account=None):
         env.pop('TERM', None)   # native Windows cmd.exe: TERM can make Codex stop for confirmation
         if account == 2:
             env['CODEX_HOME'] = str(Path.home() / '.codex-second')
+    if tool == 'copilot':
+        # Copilot retitles its pane after the session ("<task> - GitHub Copilot"), which beats
+        # --suppressApplicationTitle; this documented opt-out keeps the '<ticket> shift' title (NGH-039).
+        env['COPILOT_DISABLE_TERMINAL_TITLE'] = '1'
     return env
 
 
@@ -372,10 +398,24 @@ def codex_command(model, brief, first_message, reasoning=None, permissions=None)
     return cmd + [brief + '\n\n' + first_message]
 
 
-def copilot_command(model, brief, first_message, permissions=None):
-    """argv for a Copilot CLI crew member: tools per `permissions`, no auto-update, interactive initial prompt."""
-    return [str(COPILOT_EXE), *permission_flags('copilot', permissions), '--no-auto-update', '--model', model,
-            '-i', brief + '\n\n' + first_message]
+def copilot_command(model, brief, first_message, permissions=None, reasoning=None, context=None):
+    """argv for a Copilot CLI crew member: tools per `permissions`, no auto-update, optional reasoning effort and
+    context tier, interactive initial prompt."""
+    cmd = [str(COPILOT_EXE), *permission_flags('copilot', permissions), '--no-auto-update', '--model', model]
+    if reasoning:
+        cmd += ['--reasoning-effort', reasoning]
+    if context:
+        cmd += ['--context', context]
+    return cmd + ['-i', brief + '\n\n' + first_message]
+
+
+def tool_command(tool, model, brief, first_message, permissions=None, reasoning=None, context=None):
+    """argv for a non-Claude crew member (agy, codex or copilot), as pane() runs it and start --dry-run shows it."""
+    if tool == 'agy':
+        return agy_command(model, brief, first_message, permissions=permissions)
+    if tool == 'codex':
+        return codex_command(model, brief, first_message, reasoning=reasoning, permissions=permissions)
+    return copilot_command(model, brief, first_message, permissions=permissions, reasoning=reasoning, context=context)
 
 
 def register_name(pid, identity):
@@ -476,7 +516,13 @@ def codex_prompt_is_empty(lines):
         return False
     if any(line.strip() for line in lines[prompt + 1:-1]):
         return False
-    # Busy status is allowed: /rename is handled locally without interrupting the active turn.
+    # On a live console buffer (prompt > 4), wait until the initial turn has finished ('Worked for ')
+    # and no turn is mid-flight ('esc to interrupt'), otherwise Codex TUI fails with
+    # 'Error: thread/name/set failed in TUI' before the session thread exists on disk.
+    if prompt > 4 and (not any('Worked for ' in line for line in lines[:prompt])
+                       or any('esc to interrupt' in line for line in lines[:prompt])):
+        return False
+    # Busy status is allowed on synthetic fixtures: /rename is handled locally once a thread exists.
     tail = '\n'.join(lines[max(0, prompt - 4):])
     return not re.search(r'(?i)(?:\(y/n\)|\[y/n\]|press enter to confirm|do you trust|'
                          r'would you like to|allow once|approve|select an option|^\s*[›❯]?\s*\d+\. )',
@@ -622,7 +668,7 @@ def foreman_claude_settings(cwd):
 def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/nightshift', crew=None, slot=None):
     if live or start:
         model, permission_mode, tool = MODEL, START_PERMISSION_MODE, 'claude'
-        reasoning, account = None, None
+        reasoning, context, account = None, None, None
         colour = 'red' if role == 'Foreman' else 'green'
         shift = Path(state_dir).name
         peer = 'Coder' if role == 'Foreman' else 'Foreman'
@@ -666,19 +712,15 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                 raise SystemExit(f'pane {role} is not a member of crew {crew_name}')
             identity, peer_name, colour = member['identity'], member['peer'], member['colour']
             model, tool = member['model'], member['tool']
-            reasoning, account = member.get('reasoning'), member.get('account')
+            reasoning, context, account = member.get('reasoning'), member.get('context'), member.get('account')
             # a role's own permissions: (skip | auto | default) wins over the crew-level permission_mode
             permission_mode = member.get('permissions') or permission_mode or START_PERMISSION_MODE
             first_message = opening_message(member)
             brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'], member.get('persona'))
             if member['human_contact']:
                 brief += Path(state_dir, 'prompt.txt').read_text(encoding='utf-8')
-        if tool == 'agy':
-            command = agy_command(model, brief, first_message, permissions=permission_mode)
-        elif tool == 'codex':
-            command = codex_command(model, brief, first_message, reasoning=reasoning, permissions=permission_mode)
-        elif tool == 'copilot':
-            command = copilot_command(model, brief, first_message, permissions=permission_mode)
+        if tool in TOOL_EXES:
+            command = tool_command(tool, model, brief, first_message, permission_mode, reasoning, context)
         else:
             exe = Path('C:/nvm4w/nodejs/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
             command = [str(exe), '--name', identity, '--model', model,
@@ -709,7 +751,14 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             if tool != 'claude':
                 register_name(child.pid, identity)   # the trust dialog and /color are Claude-only
                 if tool == 'codex':
-                    set_codex_role_name(child, role, identity)
+                    if isinstance(subprocess.Popen, type) and isinstance(child, subprocess.Popen):
+                        threading.Thread(
+                            target=lambda: any(set_codex_role_name(child, role, identity)
+                                               for _ in range(6) if child.poll() is None),
+                            daemon=True,
+                        ).start()
+                    else:
+                        set_codex_role_name(child, role, identity)
             else:
                 accept_trust_prompt(child)
                 set_role_colour(child, colour, cwd)
@@ -988,7 +1037,10 @@ def lock_path(cwd):
 def read_locks():
     """[(path, lock dict)] for every readable lock file; [] when LOCKS_DIR is missing."""
     found = []
-    for path in sorted(LOCKS_DIR.glob('*.json')) if LOCKS_DIR.exists() else []:
+    roots = [LOCKS_DIR]
+    if LOCKS_DIR == Path('C:/nightshift/locks'):
+        roots.append(LEGACY_DIR / 'locks')
+    for path in sorted(p for root in roots for p in root.glob('*.json')):
         try:
             lock = json.loads(path.read_text(encoding='utf-8'))
         except (OSError, ValueError):
@@ -1008,11 +1060,20 @@ class FolderLocked(SystemExit):
 def take_lock(cwd, name, state_dir):
     """Claim cwd for shift `name`; FolderLocked if a live shift holds it. A stale or unreadable lock is replaced."""
     path = lock_path(cwd)
+    for _, lock in read_locks():
+        other = Path(lock['state_dir']) if lock.get('state_dir') else next(
+            (d for d in shift_dirs() if d.name == lock.get('shift')), None)
+        if lock.get('cwd') and normalise_path(lock['cwd']) == normalise_path(cwd) \
+                and other and other.is_dir() and shift_record(other)['alive']:
+            message = (f'folder {cwd} is held by live shift {other.name} (state dir {other}); '
+                       f"stop it with `nightshift down {other.name.removeprefix('Nightshift-shift-')}` first")
+            print(message, file=sys.stderr)
+            raise FolderLocked(3, message)
     try:
         held = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         held = None
-    holder = SHIFTS_DIR / str(held['shift']) if isinstance(held, dict) and held.get('shift') else None
+    holder = lock_shift_dir(held) if isinstance(held, dict) else None
     if holder and holder.is_dir() and shift_record(holder)['alive']:
         message = (f"folder {cwd} is held by live shift {held['shift']} (state dir {holder}); "
                    f"stop it with `nightshift down {held['shift'].removeprefix('Nightshift-shift-')}` first")
@@ -1110,7 +1171,13 @@ def start(argv):
                                       if m['tool'] != 'claude' else
                                       {'model': m['model']} if m['model'] != crew['model'] else {}),
                                    **({'reasoning': m['reasoning']} if 'reasoning' in m else {}),
+                                   **({'context': m['context']} if 'context' in m else {}),
                                    **({'account': m['account']} if 'account' in m else {}),
+                                   # the argv pane() will run, with placeholders for the brief and opening message
+                                   **({'command': tool_command(m['tool'], m['model'], '<brief>', '<first message>',
+                                                               m.get('permissions') or crew['permission_mode'],
+                                                               m.get('reasoning'), m.get('context'))}
+                                      if m['tool'] != 'claude' else {}),
                                    'permission_flags': permission_flags(
                                        m['tool'], m.get('permissions') or crew['permission_mode'])}
                       for m in members}}
@@ -1230,9 +1297,24 @@ def shift_record(state_dir):
     return record
 
 
+def shift_dirs():
+    """New state plus legacy state in place; never split an existing shift's mailbox or claims."""
+    roots = [SHIFTS_DIR]
+    if SHIFTS_DIR == Path('C:/nightshift/shifts'):
+        roots.append(LEGACY_DIR / 'shifts')
+    return sorted((d for root in roots if root.exists() for d in root.iterdir() if d.is_dir()),
+                  key=lambda d: d.stat().st_mtime)
+
+
+def lock_shift_dir(lock):
+    if lock.get('state_dir'):
+        return Path(lock['state_dir'])
+    return next((d for d in shift_dirs() if d.name == lock.get('shift')), None)
+
+
 def resolve_shift(ref):
     """`latest`, a full shift name or a unique suffix -> state dir."""
-    dirs = sorted((d for d in SHIFTS_DIR.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime)
+    dirs = shift_dirs()
     if not dirs:
         raise SystemExit('no shifts found under ' + str(SHIFTS_DIR))
     if ref == 'latest':
@@ -1247,8 +1329,7 @@ def status(argv):
     parser = argparse.ArgumentParser(prog='nightshift status', description='List shifts and whether their crews are alive.')
     parser.add_argument('--all', action='store_true', help='include shifts whose crew is gone')
     args = parser.parse_args(argv)
-    records = [shift_record(d) for d in sorted(SHIFTS_DIR.iterdir(), key=lambda d: d.stat().st_mtime) if d.is_dir()] \
-        if SHIFTS_DIR.exists() else []
+    records = [shift_record(d) for d in shift_dirs()]
     holds = {lock.get('shift'): lock.get('cwd') for _, lock in read_locks()}
     for record in records:
         record['holds'] = holds.get(record['shift'])
@@ -1362,8 +1443,7 @@ def handover_report(state_dir, record):
     else:
         commits = shift_commits(cwd, launch_path.stat().st_mtime)
         lines += ['```', *commits, '```'] if commits else ['(none)']
-    outcome, last = suite_result()
-    lines += ['', '## Test suite at teardown', '', f'{Path(SUITE_TESTS).name}: {outcome} — {last}', '']
+    lines += ['', '## Test evidence', '', 'Recorded build and result evidence above; teardown does not run tests.', '']
     return lines
 
 
@@ -1421,13 +1501,13 @@ def down(argv):
     parser = argparse.ArgumentParser(
         prog='nightshift down',
         description='Stop a crew: capture each pane, write handover.md, end the sessions and release the folder lock. '
-                    '--hold (default) leaves the tab open; --close also closes the window. When run from inside the '
+                    '--close (default) closes the window; --hold leaves the tab open. When run from inside the '
                     'crew (Foreman ending its own shift), its own process tree is killed last, after the output.')
     parser.add_argument('shift', nargs='?', default='latest', help='shift name, unique suffix, or "latest" (default)')
     keep = parser.add_mutually_exclusive_group()
-    keep.add_argument('--hold', dest='close', action='store_false', help='leave the Terminal tab open (default)')
-    keep.add_argument('--close', dest='close', action='store_true', help="also close the shift's Terminal window")
-    parser.set_defaults(close=False)   # without it the shared dest takes --hold's store_false default (True)
+    keep.add_argument('--hold', dest='close', action='store_false', help='leave the Terminal tab open')
+    keep.add_argument('--close', dest='close', action='store_true', help="close the shift's Terminal window (default)")
+    parser.set_defaults(close=True)
     args = parser.parse_args(argv)
     state_dir = resolve_shift(args.shift)
     record = shift_record(state_dir)
@@ -1448,6 +1528,8 @@ def down(argv):
     mine = own_ancestors()
     kills, last = [], []
     for role, info in record['roles'].items():
+        if not info['alive']:
+            continue   # an old PID may now belong to an unrelated process
         pids = [pid for pid in (info['pid'], info.get('wrapper_pid')) if pid]
         (last if any(pid in mine for pid in pids) else kills).extend(pids)
     for pid in kills:
@@ -1567,7 +1649,7 @@ def spawn(argv):
                           persona=manifest_role.get('persona'), colour=manifest_role['colour'])
             if manifest_role['tool'] == tool:
                 member['model'] = manifest_role['model']
-                for opt in ('reasoning', 'account', 'permissions'):
+                for opt in ('reasoning', 'context', 'account', 'permissions'):
                     if opt in manifest_role:
                         member[opt] = manifest_role[opt]
     if existing:
@@ -1578,7 +1660,7 @@ def spawn(argv):
                       colour=existing.get('colour', member['colour']))
         if tool == existing.get('tool', 'claude') and existing.get('model'):
             member['model'] = existing['model']
-            for opt in ('reasoning', 'account', 'permissions'):
+            for opt in ('reasoning', 'context', 'account', 'permissions'):
                 if opt in existing:
                     member[opt] = existing[opt]
     if crew_role:
@@ -1588,11 +1670,11 @@ def spawn(argv):
                       colour=crew_role['colour'])
         if not existing:
             member['label'] = crew_role['role']
-        for opt in ('reasoning', 'account', 'permissions'):
+        for opt in ('reasoning', 'context', 'account', 'permissions'):
             member.pop(opt, None)
         if crew_role['tool'] == tool:
             member['model'] = crew_role['model']
-            for opt in ('reasoning', 'account', 'permissions'):
+            for opt in ('reasoning', 'context', 'account', 'permissions'):
                 if opt in crew_role:
                     member[opt] = crew_role[opt]
     updated = [m for m in members if m is not existing] + [member]
@@ -1736,7 +1818,7 @@ def claim(argv):
         conflicts = [p for p in paths if p in claims and not same_role(claims[p], args.role)]
         for p in conflicts:
             print(f"{p} is already claimed by {claims[p].get('role')} since {claims[p].get('time')}", file=sys.stderr)
-        for other_dir in SHIFTS_DIR.iterdir() if SHIFTS_DIR.exists() else []:
+        for other_dir in shift_dirs():
             if not other_dir.is_dir() or other_dir == state_dir or not shift_record(other_dir)['alive']:
                 continue
             other_claims = load_claims(other_dir)
@@ -1917,20 +1999,62 @@ MAILBOX_SCHEMA = '''CREATE TABLE IF NOT EXISTS messages (
 
 
 @contextlib.contextmanager
+def mailbox_guard(path, timeout_ms=10000):
+    """Coordinate central-helper readers/writers without creating a lock file beside the mailbox."""
+    key = hashlib.sha256(os.path.normcase(str(path.resolve())).encode('utf-8')).hexdigest()
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    kernel.CreateMutexW.restype = ctypes.c_void_p
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    kernel.WaitForSingleObject.restype = ctypes.c_ulong
+    kernel.ReleaseMutex.argtypes = [ctypes.c_void_p]
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel.CreateMutexW(None, False, 'Global\\NightshiftMailbox-' + key)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    owned = False
+    try:
+        outcome = kernel.WaitForSingleObject(handle, timeout_ms)
+        if outcome == 258:   # WAIT_TIMEOUT
+            raise TimeoutError(f'mailbox {path} is still held after {timeout_ms / 1000:g}s')
+        if outcome not in (0, 0x80):   # WAIT_OBJECT_0 or WAIT_ABANDONED: both grant ownership
+            raise ctypes.WinError(ctypes.get_last_error())
+        owned = True
+        yield
+    finally:
+        if owned:
+            kernel.ReleaseMutex(handle)
+        kernel.CloseHandle(handle)
+
+
+@contextlib.contextmanager
 def mailbox(state_dir, create=True):
     """Open <state_dir>/mailbox.sqlite3 (WAL, busy timeout); yields None when create=False and it does not exist.
 
     The connection is always closed, so nothing keeps the file open (Windows cannot delete an open file).
     """
     path = Path(state_dir) / 'mailbox.sqlite3'
-    if not create and not path.exists():
-        yield None
-        return
-    with contextlib.closing(sqlite3.connect(path, timeout=10)) as conn:
+    with contextlib.ExitStack() as stack:
+        if create:
+            stack.enter_context(mailbox_guard(path))   # held through connection close/checkpoint
+            target = path
+        else:
+            with mailbox_guard(path):
+                if not path.exists():
+                    yield None
+                    return
+                scratch = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='nightshift-mailbox-')))
+                target = scratch / path.name
+                shutil.copy2(path, target)
+                wal = path.with_name(path.name + '-wal')
+                if wal.exists():
+                    shutil.copy2(wal, target.with_name(target.name + '-wal'))
+            # SQLite may rebuild WAL/SHM here; only the disposable copy is ever opened.
+        conn = stack.enter_context(contextlib.closing(sqlite3.connect(target, timeout=10)))
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA busy_timeout=10000')
-        conn.execute('PRAGMA journal_mode=WAL')
         if create:
+            conn.execute('PRAGMA journal_mode=WAL')
             conn.execute(MAILBOX_SCHEMA)
             conn.commit()
         yield conn
@@ -2544,7 +2668,7 @@ def stale_locks():
     """[(path, lock)] for locks whose shift folder is missing or whose crew is no longer alive."""
     stale = []
     for path, lock in read_locks():
-        holder = SHIFTS_DIR / str(lock['shift']) if lock.get('shift') else None
+        holder = lock_shift_dir(lock)
         if holder is None or not holder.is_dir() or not shift_record(holder)['alive']:
             stale.append((path, lock))
     return stale
@@ -2562,7 +2686,7 @@ def resume_plan(project=None):
     own mtime moves when down writes the handover).
     """
     latest = {}
-    for d in (d for d in SHIFTS_DIR.iterdir() if d.is_dir()) if SHIFTS_DIR.exists() else []:
+    for d in shift_dirs():
         ticket_file = d / 'ticket.txt'
         if not ticket_file.is_file():
             continue
@@ -2622,20 +2746,331 @@ def resume(argv):
         loop(tickets + flags, continue_from={r['ticket']: r['continue_from'] for r in plan['resume']})
 
 
+def read_floor():
+    if not FLOOR_FILE.exists():
+        return {}
+    data = json.loads(FLOOR_FILE.read_text(encoding='utf-8'))
+    if not isinstance(data, dict):
+        raise SystemExit(f'{FLOOR_FILE} must contain a JSON object')
+    return data
+
+
+@contextlib.contextmanager
+def floor_locked(dry_run=False):
+    """Serialize floor updates and the cap-check/dispatch transaction."""
+    if dry_run:
+        yield
+        return
+    FLOOR_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock = FLOOR_FILE.with_suffix('.lock')
+    deadline = time.time() + 5
+    while True:
+        try:
+            with lock.open('x', encoding='utf-8') as out:
+                json.dump({'pid': os.getpid()}, out)
+            break
+        except FileExistsError:
+            try:
+                holder = json.loads(lock.read_text(encoding='utf-8'))
+                stale = not process_running(holder['pid'], holder.get('started'))
+            except (OSError, ValueError, KeyError):
+                stale = time.time() - lock.stat().st_mtime > FILE_LOCK_STALE_S
+            if stale:
+                lock.unlink(missing_ok=True)
+                continue
+            if time.time() >= deadline:
+                raise SystemExit(f'{lock} is held by another floor command')
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        release_file_lock(lock)
+
+
+def stale_file_lock(path):
+    if not path.exists():
+        return False
+    if time.time() - path.stat().st_mtime > FILE_LOCK_STALE_S:
+        return True
+    try:
+        holder = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False   # existing file locks are empty; their age is the only evidence
+    return isinstance(holder, dict) and bool(holder.get('pid')) and not process_running(holder['pid'])
+
+
+def agent_tail(pid):
+    try:
+        result = subprocess.run(['agents-cli', 'tail', str(pid), '--lines', '40'], capture_output=True, timeout=30)
+        data = json.loads(result.stdout) if result.returncode == 0 else {}
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+
+
+def header_submitted(pid, header):
+    """Old agents-cli receipts need visible history plus a cleared current composer."""
+    tail = agent_tail(pid)
+    lines = tail.get('lines', [])
+    if tail.get('state') not in ('idle', 'busy') or not isinstance(lines, list):
+        return False
+    prompts = [i for i, line in enumerate(lines) if re.match(r'^\s*[›❯>]', line)]
+    if not prompts:
+        return False
+    last = prompts[-1]
+    return lines[last].strip() in ('›', '❯', '>', '› Ask Codex to do anything') \
+        and any(header in line for line in lines[:last])
+
+
+def send_header(pid, header):
+    """Only a confirmed submission lets the mailbox advance to sent."""
+    try:
+        sent = subprocess.run(['agents-cli', 'send', str(pid), header], capture_output=True, timeout=30)
+        if sent.returncode != 0:
+            return False
+        receipt = json.loads(sent.stdout)
+        if 'submitted' in receipt:
+            return receipt['submitted'] is True
+        return receipt.get('enter') is True and receipt.get('sent') == header and header_submitted(pid, header)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+
+def deliver_pending(state_dir, dry_run=False):
+    delivered = []
+    attempts_path = state_dir / 'warden-delivery.json'
+    attempts = json.loads(attempts_path.read_text(encoding='utf-8')) if attempts_path.exists() else {}
+    for row in unacked_messages(state_dir):
+        if row['state'] != 'stored' or row['recipient_incarnation'] != incarnation(state_dir, row['recipient']):
+            continue
+        info = member_info(state_dir, row['recipient'])
+        if not info.get('pid') or not pid_alive(info['pid'], info.get('started')):
+            continue
+        key = f"{row['id']}:{row['recipient_incarnation']}"
+        if dry_run:
+            confirmed = True
+        elif key in attempts:
+            confirmed = header_submitted(info['pid'], msg_header(row))
+        else:
+            attempts[key] = {'pid': info['pid'], 'at': time.time()}
+            write_json(attempts_path, attempts)   # a crash or uncertain receipt must not cause a blind resend
+            confirmed = send_header(info['pid'], msg_header(row))
+        if confirmed:
+            delivered.append(row['id'])
+            if not dry_run:
+                with mailbox(state_dir) as conn, conn:
+                    conn.execute("UPDATE messages SET state = 'sent' WHERE id = ? AND state = 'stored'", (row['id'],))
+                bus_append(state_dir, 'sent', id=row['id'])
+    return delivered
+
+
+def nudge_idle_foremen(state_dir, dry_run=False):
+    lead = human_contact_label(state_dir)
+    info = member_info(state_dir, lead)
+    if not info.get('pid') or not pid_alive(info['pid'], info.get('started')):
+        return []
+    if info.get('tool', 'claude') == 'claude':
+        idle = session_idle_since(info['pid'])
+    else:
+        if agent_tail(info['pid']).get('state') != 'idle':
+            return []
+        last_activity = info.get('started', time.time())
+        bus = state_dir / 'bus.jsonl'
+        for _, event in bus_events(bus)[0] if bus.exists() else []:
+            if event and (event.get('sender') == lead or event.get('by') == lead):
+                with contextlib.suppress(ValueError, TypeError):
+                    last_activity = max(last_activity, time.mktime(time.strptime(event['ts'], '%Y-%m-%dT%H:%M:%S')))
+        idle = time.time() - last_activity
+    if idle is None or idle < NUDGE_IDLE_S:
+        return []
+    marker = state_dir / 'warden-nudge.json'
+    try:
+        last = json.loads(marker.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        last = {}
+    if time.time() - last.get('at', 0) < NUDGE_IDLE_S:
+        return []
+    if not dry_run:
+        write_json(marker, {'at': time.time()})   # throttle uncertain submissions too
+    if dry_run or send_header(info['pid'], f'Warden: inspect nightshift inbox {state_dir.name} {lead} and continue the active assignment.'):
+        return [lead]
+    return []
+
+
+def recover_pane(state_dir, slot, dry_run=False):
+    saved = read_slot(state_dir, slot) or {}
+    role = saved.get('role')
+    result = {'slot': slot, 'role': role, 'recovered': False}
+    if not role or slot_state(state_dir, slot) != 'dead':
+        return result
+    if dry_run:
+        return {**result, 'would_recover': True}
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            spawn([state_dir.name, '--role', role, '--slot', str(slot)])
+        result['recovered'] = True
+    except SystemExit as err:
+        result['error'] = str(err)
+    return result
+
+
+def cleaner(argv):
+    parser = argparse.ArgumentParser(prog='nightshift cleaner', description='Reap dead or finished shifts only.')
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args(argv)
+    report = {'reaped': [], 'locks_released': [], 'windows_closed': [], 'dry_run': args.dry_run}
+    with floor_locked(args.dry_run):
+        floor = read_floor()
+        old = {r['shift'] for r in floor.get('reaped', [])}
+        for state_dir in shift_dirs():
+            record = shift_record(state_dir)
+            if record['alive'] and record['result'] not in ('done', 'halted'):
+                continue
+            locks = [p for p in (state_dir / 'claims.lock', state_dir / 'bus.lock') if stale_file_lock(p)]
+            repo_locks = [p for p, data in read_locks() if data.get('shift') == state_dir.name]
+            claims = load_claims(state_dir)
+            hwnd = close_target(state_dir)
+            if state_dir.name in old and not (locks or repo_locks or claims or hwnd):
+                continue
+            summary = {'shift': state_dir.name, 'task': record['task'], 'result': record['result'],
+                       'reaped_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+            report['reaped'].append(summary)
+            report['locks_released'].extend(str(p) for p in locks + repo_locks)
+            report['locks_released'].extend(claims)
+            if hwnd:
+                report['windows_closed'].append(state_dir.name)
+            if not args.dry_run:
+                for path in locks:
+                    path.unlink(missing_ok=True)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    down([state_dir.name, '--close'])
+                if claims:
+                    with claims_locked(state_dir):
+                        save_claims(state_dir, {})
+                floor['reaped'] = [r for r in floor.get('reaped', []) if r['shift'] != state_dir.name] + [summary]
+        if not args.dry_run and report['reaped']:
+            write_json(FLOOR_FILE, floor)
+    print(json.dumps(report, indent=2))
+    return report
+
+
+def warden(argv):
+    parser = argparse.ArgumentParser(prog='nightshift warden', description='Patrol live shifts without tearing them down.')
+    parser.add_argument('shift', nargs='?')
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args(argv)
+    report = {'shifts': [], 'dry_run': args.dry_run}
+    with floor_locked(args.dry_run):
+        floor = read_floor()
+        for state_dir in [resolve_shift(args.shift)] if args.shift else shift_dirs():
+            record = shift_record(state_dir)
+            if not record['alive'] or record['result'] in ('done', 'halted'):
+                continue
+            patrol = {'shift': state_dir.name, 'locks_released': [], 'claims_normalized': [], 'recovered': []}
+            for path in (state_dir / 'claims.lock', state_dir / 'bus.lock'):
+                if stale_file_lock(path):
+                    patrol['locks_released'].append(str(path))
+                    if not args.dry_run:
+                        path.unlink(missing_ok=True)
+            with contextlib.nullcontext() if args.dry_run else claims_locked(state_dir):
+                claims = load_claims(state_dir)
+                names = {m['label'].lower(): m['identity'] for m in crew_roster(state_dir)
+                         if record['roles'].get(m['label'], {}).get('alive')}
+                for path, claim_info in claims.items():
+                    identity = names.get(str(claim_info.get('role', '')).lower())
+                    if identity and identity != claim_info.get('role'):
+                        claim_info['role'] = identity
+                        patrol['claims_normalized'].append(path)
+                if patrol['claims_normalized'] and not args.dry_run:
+                    save_claims(state_dir, claims)
+            patrol['delivered'] = deliver_pending(state_dir, args.dry_run)
+            patrol['nudged'] = nudge_idle_foremen(state_dir, args.dry_run)
+            if record['result'] == 'none':
+                core = {m['label'] for m in (read_crew_json(state_dir) or {}).get('members', crew_roster(state_dir))
+                        if m.get('role', m['label']) in ('Foreman', 'Advisor', 'Coder', 'Tester')}
+                for slot in record.get('slots', []):
+                    if slot.get('role') in core and slot['state'] == 'dead':
+                        patrol['recovered'].append(recover_pane(state_dir, slot['slot'], args.dry_run))
+            report['shifts'].append(patrol)
+        if not args.dry_run:
+            floor['last_warden_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            floor['health'] = {p['shift']: p for p in report['shifts']}
+            write_json(FLOOR_FILE, floor)
+    print(json.dumps(report, indent=2))
+    return report
+
+
+def gaffer(argv):
+    parser = argparse.ArgumentParser(prog='nightshift gaffer', description='Dispatch a ticket below the live-shift cap.')
+    parser.add_argument('--max-shifts', type=int, default=2)
+    parser.add_argument('--crew')
+    parser.add_argument('--ticket')
+    parser.add_argument('--repo')
+    parser.add_argument('--tick', action='store_true')
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args(argv)
+    if args.max_shifts < 1:
+        parser.error('--max-shifts must be positive')
+    report = {'dry_run': args.dry_run, 'dispatched': False}
+    if args.tick:
+        with contextlib.redirect_stdout(io.StringIO()):
+            report['cleaner'] = cleaner(['--dry-run'] if args.dry_run else [])
+            report['warden'] = warden(['--dry-run'] if args.dry_run else [])
+    with floor_locked(args.dry_run):
+        floor = read_floor()
+        live = [d for d in shift_dirs() if shift_record(d)['alive']]
+        report['live_shifts'] = len(live)
+        queue = floor.get('queue', [])
+        entry = {'ticket': args.ticket} if args.ticket else (queue[0] if queue else {})
+        entry = {'ticket': entry} if isinstance(entry, str) else entry
+        ticket = entry.get('ticket')
+        if len(live) >= args.max_shifts:
+            report['reason'] = 'at_capacity'
+        elif not ticket:
+            report['reason'] = 'no_ticket'
+        elif any((d / 'ticket.txt').exists() and (d / 'ticket.txt').read_text(encoding='utf-8').strip() == ticket for d in live):
+            report['reason'] = 'already_running'
+        else:
+            crew = args.crew or entry.get('crew') or 'default'
+            repo = args.repo or entry.get('repo')
+            command = [ticket, '--crew', crew] + (['--cwd', repo] if repo else [])
+            report.update(ticket=ticket, crew=crew, repo=repo)
+            if args.dry_run:
+                report['reason'] = 'would_dispatch'
+            else:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    state_dir = start(command)
+                dispatch = {'shift': state_dir.name, 'ticket': ticket, 'crew': crew, 'repo': repo,
+                            'dispatched_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+                floor.setdefault('dispatches', []).append(dispatch)
+                if not args.ticket:
+                    floor['queue'] = queue[1:]
+                write_json(FLOOR_FILE, floor)
+                report.update(dispatched=True, reason='dispatched', shift=state_dir.name)
+    print(json.dumps(report, indent=2))
+    return report
+
+
+COMMANDS = {'start': start, 'status': status, 'down': down, 'spawn': spawn, 'loop': loop, 'resume': resume,
+            'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack,
+            'build': build, 'log': log_command, 'cleaner': cleaner, 'warden': warden, 'gaffer': gaffer}
+
+
 def main():
-    commands = {'start': start, 'status': status, 'down': down, 'spawn': spawn, 'loop': loop, 'resume': resume,
-                'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack,
-                'build': build, 'log': log_command}
-    if len(sys.argv) > 1 and sys.argv[1] in commands:
-        commands[sys.argv[1]](sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] in COMMANDS:
+        COMMANDS[sys.argv[1]](sys.argv[2:])
         return
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='Commands:\n  start "task"|TICKET [--dry-run] [--cwd D] [--crew NAME]\n'
                '                                              start a crew (manifest crews/NAME.yaml)\n'
                '  status [--all]                              shifts and whether their crews are alive\n'
-               '  down [SHIFT|latest] [--hold|--close]        capture panes, write handover.md, stop the crew; --hold (default)\n'
-               '                                              keeps the tab open, --close closes its window\n'
+               '  down [SHIFT|latest] [--hold|--close]        capture panes, write handover.md, stop the crew; --close (default)\n'
+               '                                              closes its window; --hold keeps the tab open\n'
+               '  cleaner [--dry-run]                         reap dead or finished shifts\n'
+               '  warden [SHIFT] [--dry-run]                  patrol live shifts without teardown\n'
+               '  gaffer [--max-shifts N] [--ticket ID] [--crew NAME] [--repo PATH] [--tick] [--dry-run]\n'
+               '                                              dispatch below the floor concurrency cap\n'
                '  spawn SHIFT --role ROLE [--cli claude|gemini|codex|copilot] [--crew NAME] [--slot N]\n'
                "                                              start a session in a free slot of the shift's 1x4 window\n"
                '  loop TICKET [TICKET...] [--stall-minutes N] optional batch runner: start, wait for result.json, down --close, next\n'

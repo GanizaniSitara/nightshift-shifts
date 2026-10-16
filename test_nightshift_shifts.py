@@ -21,8 +21,9 @@ _real_notify = launcher.notify_owner   # restored only by tests that fake subpro
 
 @pytest.fixture(autouse=True)
 def _locks_in_tmp(monkeypatch, tmp_path):
-    """No test reads or writes the real C:/Data/nightshift/locks."""
+    """No test reads or writes the real floor locks or legacy shifts."""
     monkeypatch.setattr(launcher, 'LOCKS_DIR', tmp_path / 'locks')
+    monkeypatch.setattr(launcher, 'LEGACY_DIR', tmp_path / 'legacy', raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -112,13 +113,8 @@ def test_finished_loop_titles_and_closes_its_own_window(monkeypatch, tmp_path):
 
 
 def test_architecture_doc_mentions_every_command():
-    import ast
-    import inspect
     import re
-    tree = ast.parse(inspect.getsource(launcher.main))
-    commands = next(n.value for n in ast.walk(tree)
-                    if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', None) == 'commands')
-    keys = [k.value for k in commands.keys]
+    keys = list(launcher.COMMANDS)
     assert 'start' in keys and 'build' in keys
     doc = (Path(launcher.__file__).resolve().parent / 'docs' / 'ARCHITECTURE.md').read_text(encoding='utf-8')
     assert [k for k in keys if not re.search(rf'\b{re.escape(k)}\b', doc)] == []
@@ -947,7 +943,7 @@ def test_start_dry_run_default_crew_is_the_five_pane_golden(monkeypatch, tmp_pat
     launcher.start(['--dry-run', 'task'])
     plan = json.loads(capsys.readouterr().out)
     shift = 'Nightshift-shift-12345678'
-    state = str(Path('C:/Data/nightshift/shifts') / shift)
+    state = str(Path('C:/nightshift/shifts') / shift)
     cwd = str(work.resolve())
     py, script = sys.executable, str(Path(launcher.__file__).resolve())
 
@@ -985,6 +981,8 @@ def test_start_dry_run_default_crew_is_the_five_pane_golden(monkeypatch, tmp_pat
                            'first_message': 'Begin your Apprentice role: send READY to Foreman and await bounded '
                                             'assignments.',
                            'tool': 'agy', 'model': 'gemini-3.8-flash-high', 'exe': str(launcher.AGY_EXE),
+                           'command': [str(launcher.AGY_EXE), '--model', 'gemini-3.8-flash-high',
+                                       '--dangerously-skip-permissions', '-i', '<brief>\n\n<first message>'],
                            'permission_flags': ['--dangerously-skip-permissions']}},
         'slots': [{'slot': 1, 'role': 'Foreman', 'pane_title': f'{shift} shift'},
                   {'slot': 2, 'role': 'Advisor', 'pane_title': f'{shift} shift'},
@@ -1178,7 +1176,7 @@ def test_down_writes_handover_kills_crew_and_closes_only_its_window(monkeypatch,
     assert closed == [(777, 0x10)] and out['window_closed'] is True   # WM_CLOSE to that hwnd only
     assert 'Status: done' in handover and 'Summary: did the thing' in handover and '- a.py' in handover
     assert 'abc1234 First change' in handover and 'def5678 Second change' in handover
-    assert 'test_nightshift_shifts.py: failed — 1 failed, 2 passed in 0.5s' in handover
+    assert 'teardown does not run tests' in handover
     assert git_calls and git_calls[0][:3] == ['git', '-C', 'C:/x'] and git_calls[0][4].startswith('--since=')
     assert handover.index('## Result') < handover.index('## Commits') < handover.index('## Foreman')
 
@@ -1192,7 +1190,7 @@ def test_down_handover_without_result_or_launch_json(monkeypatch, tmp_path, caps
     monkeypatch.setattr(launcher, 'terminal_windows', lambda: {})
     launcher.down(['bare0001'])
     handover = (d / 'handover.md').read_text(encoding='utf-8')
-    assert '(no result.json)' in handover and '(no launch.json)' in handover and ': passed — 5 passed' in handover
+    assert '(no result.json)' in handover and '(no launch.json)' in handover and '## Test evidence' in handover
 
 
 @pytest.mark.parametrize('ticket, windows, expected', [
@@ -3269,9 +3267,9 @@ def down_world(monkeypatch, tmp_path):
 
 
 @pytest.mark.usefixtures('_container_isolated')
-def test_down_defaults_to_hold_and_kills_its_own_tree_last(down_world):
+def test_down_explicit_hold_kills_its_own_tree_last(down_world):
     d, events = down_world
-    launcher.down([CONT_SHIFT])
+    launcher.down([CONT_SHIFT, '--hold'])
     kinds = [e[0] for e in events]
     assert 'close' not in kinds
     printed = json.loads(next(e[1] for e in events if e[0] == 'print'))
@@ -3285,9 +3283,10 @@ def test_down_defaults_to_hold_and_kills_its_own_tree_last(down_world):
 
 
 @pytest.mark.usefixtures('_container_isolated')
-def test_down_close_posts_wm_close_after_output_before_own_kill(down_world):
+@pytest.mark.parametrize('flags', [[], ['--close']])
+def test_down_default_and_explicit_close_post_wm_close_after_output_before_own_kill(down_world, flags):
     _, events = down_world
-    launcher.down([CONT_SHIFT, '--close'])
+    launcher.down([CONT_SHIFT, *flags])
     kinds = [e[0] for e in events]
     printed = json.loads(events[kinds.index('print')][1])
     assert printed['held'] is False and printed['window_closed'] is True
@@ -3577,11 +3576,15 @@ def test_codex_and_codex_copilot_manifests_parse_five_roles_in_2x4():
     assert codex['layout'] == '2x4' and codex['slots'] == 8 and codex['model'] == 'gpt-6.1-sol'
     assert [(r['role'], r['tool'], r['model'], r.get('reasoning')) for r in codex['roles']] == [
         ('Foreman', 'codex', 'gpt-6.1-sol', None),
-        ('Advisor', 'codex', 'gpt-6.1-sol', 'xhigh'),
-        ('Coder', 'codex', 'gpt-6-astra', None),
+        ('Advisor', 'codex', 'gpt-6-astra', 'xhigh'),
+        ('Coder', 'codex', 'gpt-6.1-sol', None),
         ('Tester', 'codex', 'gpt-6.1-sol', None),
         ('Apprentice', 'codex', 'gpt-5.6-luna', 'xhigh')]
     copilot = launcher.load_crew('codex-copilot')
+    for crew in (codex, copilot):
+        advisor = next(r for r in crew['roles'] if r['role'] == 'Advisor')
+        coder = next(r for r in crew['roles'] if r['role'] == 'Coder')
+        assert (advisor['model'], advisor['reasoning'], coder['model']) == ('gpt-6-astra', 'xhigh', 'gpt-6.1-sol')
     assert copilot['roles'][-1]['tool'] == 'copilot' and copilot['roles'][-1]['model'] == 'gemini-3.8-flash-high'
 
 
@@ -4003,7 +4006,7 @@ def test_default_crew_leaves_three_empty_slots():
 
 
 def test_apprentice_brief_fills_every_placeholder_and_relays_the_verdict():
-    brief = launcher.role_brief('Apprentice', 'S-apprentice', 'S-foreman', 'C:/Data/nightshift/shifts/S',
+    brief = launcher.role_brief('Apprentice', 'S-apprentice', 'S-foreman', 'C:/nightshift/shifts/S',
                                 'apprentice.md')
     assert 'S-apprentice' in brief and 'S-foreman' in brief and ' S ' in brief
     assert launcher.SUITE_PYTHON in brief and '{' not in brief and '}' not in brief
@@ -4414,5 +4417,842 @@ def test_log_follow_waits_for_a_missing_bus_and_stops_on_ctrl_c(monkeypatch, tmp
 def test_log_is_a_main_command():
     import inspect
     source = inspect.getsource(launcher.main)
-    assert "'log': log_command" in source and 'log SHIFT [--follow] [--since N] [--json]' in source
+    assert launcher.COMMANDS['log'] is launcher.log_command
+    assert 'log SHIFT [--follow] [--since N] [--json]' in source
     assert 'bus.jsonl' in launcher.__doc__ and '`log SHIFT' in launcher.__doc__
+
+
+# ── Copilot crew, reasoning effort and context tier (NGH-037) ───────────────
+
+def test_copilot_crew_manifest_and_reasoning_and_context_constants():
+    assert launcher.TOOL_REASONING_LEVELS['copilot'] == ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
+    assert launcher.CONTEXT_TIERS == ('default', 'long_context')
+    copilot = launcher.load_crew('copilot')
+    assert copilot['layout'] == '2x4' and copilot['slots'] == 8 and copilot['model'] == 'grok-4.7'
+    assert [(r['role'], r['tool'], r['model'], r.get('reasoning'), r.get('context')) for r in copilot['roles']] == [
+        ('Foreman', 'copilot', 'grok-4.7', 'max', None),
+        ('Advisor', 'copilot', 'grok-4.7', 'max', None),
+        ('Coder', 'copilot', 'gemini-3.8-flash', 'high', 'long_context'),
+        ('Tester', 'copilot', 'grok-4.7', 'max', None),
+        ('Apprentice', 'copilot', 'gemini-3.8-flash', 'high', 'long_context'),
+    ]
+    for r in copilot['roles']:
+        if r['role'] in ('Foreman', 'Advisor', 'Tester'):
+            assert 'context' not in r
+
+
+def test_copilot_command_supports_optional_reasoning_and_context():
+    base = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST')
+    assert base == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash',
+                    '-i', 'BRIEF\n\nFIRST']
+    with_reasoning = launcher.copilot_command('grok-4.7', 'BRIEF', 'FIRST', reasoning='max')
+    assert with_reasoning == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'grok-4.7',
+                              '--reasoning-effort', 'max', '-i', 'BRIEF\n\nFIRST']
+    with_context = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST', context='long_context')
+    assert with_context == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash',
+                            '--context', 'long_context', '-i', 'BRIEF\n\nFIRST']
+    with_both = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST', reasoning='high', context='long_context')
+    assert with_both == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash',
+                         '--reasoning-effort', 'high', '--context', 'long_context', '-i', 'BRIEF\n\nFIRST']
+
+
+def test_start_dry_run_copilot_crew_records_reasoning_and_context(monkeypatch, tmp_path, capsys):
+    _fixed_uuid(monkeypatch)
+    monkeypatch.setattr(launcher.subprocess, 'run', _fake_run([]))
+    monkeypatch.chdir(tmp_path)
+    launcher.start(['--dry-run', '--crew', 'copilot', 'task'])
+    plan = json.loads(capsys.readouterr().out)
+    assert plan['crew'] == 'copilot'
+    roles = plan['roles']
+    for label in ('Foreman', 'Advisor', 'Tester'):
+        r = roles[label]
+        assert r['tool'] == 'copilot' and r['model'] == 'grok-4.7'
+        assert r['reasoning'] == 'max'
+        assert 'context' not in r
+        cmd = r['command']
+        assert cmd[:4] == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model']
+        assert cmd[4:6] == ['grok-4.7', '--reasoning-effort']
+        assert cmd[6] == 'max'
+        assert '--context' not in cmd
+    for label in ('Coder', 'Apprentice'):
+        r = roles[label]
+        assert r['tool'] == 'copilot' and r['model'] == 'gemini-3.8-flash'
+        assert r['reasoning'] == 'high'
+        assert r['context'] == 'long_context'
+        cmd = r['command']
+        assert '--model' in cmd and cmd[cmd.index('--model') + 1] == 'gemini-3.8-flash'
+        assert '--reasoning-effort' in cmd and cmd[cmd.index('--reasoning-effort') + 1] == 'high'
+        assert '--context' in cmd and cmd[cmd.index('--context') + 1] == 'long_context'
+
+
+def test_load_crew_rejects_unsupported_reasoning_and_context(monkeypatch, tmp_path):
+    _crew_file(monkeypatch, tmp_path, 'bad-codex-max', """\
+name: bad-codex-max
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true, tool: codex, reasoning: max}
+  - {role: Coder, brief: coder.md}
+""")
+    with pytest.raises(SystemExit, match=r"reasoning 'max' for Foreman \(tool codex\) must be one of: low, medium, high, xhigh"):
+        launcher.load_crew('bad-codex-max')
+
+    _crew_file(monkeypatch, tmp_path, 'bad-copilot-reasoning', """\
+name: bad-copilot-reasoning
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true, tool: copilot, reasoning: bogus}
+  - {role: Coder, brief: coder.md}
+""")
+    with pytest.raises(SystemExit, match=r"reasoning 'bogus' for Foreman \(tool copilot\) must be one of: none, minimal, low, medium, high, xhigh, max"):
+        launcher.load_crew('bad-copilot-reasoning')
+
+    _crew_file(monkeypatch, tmp_path, 'bad-copilot-context', """\
+name: bad-copilot-context
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true, tool: copilot, context: huge}
+  - {role: Coder, brief: coder.md}
+""")
+    with pytest.raises(SystemExit, match=r"context 'huge' for Foreman must be one of: default, long_context"):
+        launcher.load_crew('bad-copilot-context')
+
+    _crew_file(monkeypatch, tmp_path, 'bad-codex-context', """\
+name: bad-codex-context
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true, tool: codex, context: long_context}
+  - {role: Coder, brief: coder.md}
+""")
+    with pytest.raises(SystemExit, match=r"context 'long_context' for Foreman: tool codex has no context tier flag"):
+        launcher.load_crew('bad-codex-context')
+
+    _crew_file(monkeypatch, tmp_path, 'bad-claude-context', """\
+name: bad-claude-context
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true, tool: claude, context: long_context}
+  - {role: Coder, brief: coder.md}
+""")
+    with pytest.raises(SystemExit, match=r"context 'long_context' for Foreman: tool claude has no context tier flag"):
+        launcher.load_crew('bad-claude-context')
+
+
+# ── Floor CLI (NGH-035): all state and process effects stay isolated ──────────
+
+def test_floor_default_paths_are_derived_from_top_level_root(monkeypatch):
+    import ast
+    tree = ast.parse(Path(launcher.__file__).read_text(encoding='utf-8'))
+    names = {'SOLID_DIR', 'SHIFTS_DIR', 'LOCKS_DIR', 'BUILDS_DIR', 'FLOOR_FILE'}
+    env = {'Path': Path}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in names:
+            exec(compile(ast.Module(body=[node], type_ignores=[]), '<constants>', 'exec'), env)
+    assert env['SOLID_DIR'] == Path('C:/nightshift')
+    for name, suffix in [('SHIFTS_DIR', 'shifts'), ('LOCKS_DIR', 'locks'),
+                         ('BUILDS_DIR', 'builds'), ('FLOOR_FILE', 'floor.json')]:
+        assert env[name] == env['SOLID_DIR'] / suffix
+
+
+def test_handover_uses_recorded_build_evidence_without_running_suite(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, 'suite_result', lambda: pytest.fail('teardown ran suite'))
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda *a, **k: pytest.fail('unexpected process'))
+    (tmp_path / 'builds').mkdir()
+    (tmp_path / 'builds' / '1.json').write_text(json.dumps(
+        {'n': 1, 'status': 'failed', 'exit': 9, 'head': 'abcdef123', 'dirty': True, 'cmd': 'unit suite'}), encoding='utf-8')
+    report = '\n'.join(launcher.handover_report(tmp_path, {'roles': {}}))
+    assert '#1 failed exit=9 head=abcdef12 dirty=True unit suite' in report
+    assert 'teardown does not run tests' in report
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_down_never_kills_recorded_pids_of_dead_roles(monkeypatch, tmp_path, capsys):
+    d = _container(tmp_path, members=('Foreman', 'Coder'), free=(3, 4))
+    monkeypatch.setattr(launcher, 'pid_alive', lambda *a, **k: False)
+    monkeypatch.setattr(launcher, 'process_running', lambda *a, **k: False)
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: {})
+    monkeypatch.setattr(launcher, 'own_ancestors', lambda: set())
+    monkeypatch.setattr(launcher, 'shift_commits', lambda *a: [])
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda *a, **k: pytest.fail('dead PID was targeted'))
+    launcher.down([d.name, '--hold'])
+    assert json.loads(capsys.readouterr().out)['stopped'] == []
+
+
+@pytest.fixture
+def floor_world(monkeypatch, tmp_path):
+    for name, suffix in [('SOLID_DIR', ''), ('SHIFTS_DIR', 'shifts'), ('LOCKS_DIR', 'locks'),
+                         ('BUILDS_DIR', 'builds'), ('FLOOR_FILE', 'floor.json'), ('LEGACY_DIR', 'legacy')]:
+        monkeypatch.setattr(launcher, name, tmp_path / suffix)
+    launcher.SHIFTS_DIR.mkdir()
+    monkeypatch.setattr(launcher, 'process_start_epoch', lambda pid: 123.0)
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: {})
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('real launch'))
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda *a, **k: pytest.fail('unexpected subprocess'))
+    return tmp_path
+
+
+def _floor_shift(root, suffix, alive=True, result='none', roles=None, slots=None):
+    d = root / 'shifts' / ('Nightshift-shift-' + suffix)
+    d.mkdir(parents=True)
+    record = {'shift': d.name, 'state_dir': str(d), 'task': 'NGH-035', 'alive': alive,
+              'result': result, 'roles': roles or {}, 'messages': {'unsent': 0, 'unacked': 0}}
+    if slots is not None:
+        record['slots'] = slots
+    return d, record
+
+
+def _floor_snapshot(root):
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('command', ['cleaner', 'warden', 'gaffer'])
+def test_floor_empty_dry_run_does_not_write_any_state(floor_world, command, capsys):
+    before = _floor_snapshot(floor_world)
+    report = getattr(launcher, command)(['--dry-run'])
+    assert report['dry_run'] is True
+    assert json.loads(capsys.readouterr().out) == report
+    assert _floor_snapshot(floor_world) == before
+
+
+def test_cleaner_protects_live_active_and_reaps_dead_or_finished_only(floor_world, monkeypatch, capsys):
+    records = {}
+    eligible = []
+    for suffix, alive, result in [('live', True, 'none'), ('invalid', True, 'invalid'),
+                                  ('dead', False, 'none'), ('done', True, 'done'), ('halt', True, 'halted')]:
+        d, record = _floor_shift(floor_world, suffix, alive, result)
+        records[d] = record
+        (d / 'claims.json').write_text(json.dumps({'x': {'role': 'Coder', 'time': 'old'}}), encoding='utf-8')
+        if not alive or result in ('done', 'halted'):
+            eligible.append(d)
+    monkeypatch.setattr(launcher, 'shift_record', lambda d: records[Path(d)])
+    calls = []
+    def fake_down(argv):
+        calls.append(argv)
+        records[launcher.SHIFTS_DIR / argv[0]]['alive'] = False
+    monkeypatch.setattr(launcher, 'down', fake_down)
+    before = _floor_snapshot(floor_world)
+    launcher.cleaner(['--dry-run'])
+    capsys.readouterr()
+    assert calls == [] and _floor_snapshot(floor_world) == before
+    launcher.cleaner([])
+    capsys.readouterr()
+    assert {args[0] for args in calls} == {d.name for d in eligible}
+    assert all('--close' in args for args in calls)
+    for d, record in records.items():
+        assert bool(json.loads((d / 'claims.json').read_text())) == (d not in eligible)
+    floor = json.loads(launcher.FLOOR_FILE.read_text())
+    assert {row['shift'] for row in floor['reaped']} == {d.name for d in eligible}
+    assert all({'shift', 'task', 'result', 'reaped_at'} <= row.keys() for row in floor['reaped'])
+    snapshot = _floor_snapshot(floor_world)
+    launcher.cleaner([])
+    assert _floor_snapshot(floor_world) == snapshot
+    assert len(calls) == len(eligible)
+
+
+def test_warden_never_tears_down_or_patrols_dead_finished_shifts(floor_world, monkeypatch, capsys):
+    records = {}
+    for suffix, alive, result in [('active', True, 'none'), ('blocked', True, 'blocked'),
+                                  ('dead', False, 'none'), ('done', True, 'done'), ('halt', True, 'halted')]:
+        d, record = _floor_shift(floor_world, suffix, alive, result)
+        records[d] = record
+    monkeypatch.setattr(launcher, 'shift_record', lambda d: records[Path(d)])
+    monkeypatch.setattr(launcher, 'down', lambda *a: pytest.fail('warden tore down a shift'))
+    delivered, nudged = [], []
+    monkeypatch.setattr(launcher, 'deliver_pending', lambda d, dry_run=False: delivered.append(Path(d)) or [])
+    monkeypatch.setattr(launcher, 'nudge_idle_foremen', lambda d, dry_run=False: nudged.append(Path(d)) or [])
+    launcher.warden([])
+    expected = {d for d, r in records.items() if r['alive'] and r['result'] not in ('done', 'halted')}
+    assert set(delivered) == set(nudged) == expected
+    floor = json.loads(launcher.FLOOR_FILE.read_text())
+    assert floor['last_warden_at']
+    assert set(floor['health']) == {d.name for d in expected}
+    capsys.readouterr()
+
+
+def test_gaffer_default_capacity_and_tick_order_never_launch(floor_world, monkeypatch, capsys):
+    records = {}
+    for suffix in ('one', 'two'):
+        d, record = _floor_shift(floor_world, suffix)
+        records[d] = record
+    monkeypatch.setattr(launcher, 'shift_record', lambda d: records[Path(d)])
+    calls = []
+    monkeypatch.setattr(launcher, 'cleaner', lambda argv: calls.append('cleaner') or {})
+    monkeypatch.setattr(launcher, 'warden', lambda argv: calls.append('warden') or {})
+    monkeypatch.setattr(launcher, 'start', lambda *a: pytest.fail('capacity exceeded'))
+    report = launcher.gaffer(['--tick', '--ticket', 'NGH-035', '--repo', str(floor_world)])
+    assert calls == ['cleaner', 'warden']
+    assert report['reason'] == 'at_capacity'
+    capsys.readouterr()
+
+
+def test_legacy_shift_lookup_keeps_original_mailbox_and_claims(floor_world, monkeypatch):
+    legacy = launcher.LEGACY_DIR / 'shifts' / 'Nightshift-shift-legacy01'
+    legacy.mkdir(parents=True)
+    (legacy / 'claims.json').write_text('{"x":{"role":"Coder"}}', encoding='utf-8')
+    # Map only the default-root comparison to the isolated new root; neither real root is scanned.
+    real_path = Path
+    monkeypatch.setattr(launcher, 'Path', lambda p, *args: launcher.SHIFTS_DIR
+                        if p == 'C:/nightshift/shifts' else real_path(p, *args))
+    before = _floor_snapshot(floor_world)
+    assert launcher.resolve_shift(legacy.name) == legacy
+    assert launcher.resolve_shift('legacy01') == legacy
+    assert _floor_snapshot(floor_world) == before
+    assert not (launcher.SHIFTS_DIR / legacy.name).exists()
+
+
+@pytest.mark.parametrize('command', ['cleaner', 'warden', 'gaffer'])
+def test_floor_commands_route_through_main_and_help_exits_without_effects(floor_world, monkeypatch, capsys, command):
+    assert command in launcher.COMMANDS
+    before = _floor_snapshot(floor_world)
+    monkeypatch.setattr(sys, 'argv', ['nightshift', command, '--help'])
+    with pytest.raises(SystemExit) as exc:
+        launcher.main()
+    assert exc.value.code == 0
+    assert '--dry-run' in capsys.readouterr().out
+    assert _floor_snapshot(floor_world) == before
+
+
+@pytest.mark.parametrize('worked,busy,expected', [(False, False, False), (True, True, False), (True, False, True)])
+def test_codex_live_buffer_rename_requires_finished_idle_turn(worked, busy, expected):
+    lines = ['older output'] * 6 + (['Worked for 10s'] if worked else [])
+    if busy:
+        lines.append('Working (10s • esc to interrupt)')
+    lines += ['› Ask Codex to do anything', '', '  GPT-6.1-Sol high · 90% left']
+    assert launcher.codex_prompt_is_empty(lines) is expected
+
+
+@pytest.mark.parametrize('submitted', [False, True])
+def test_delivery_fences_stale_incarnations_and_requires_submission(monkeypatch, tmp_path, capsys, submitted):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'old', '--body', 'old')
+    _relaunch_coder(d)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'current', '--body', 'current')
+    monkeypatch.setattr(launcher, 'pid_alive', lambda *a, **k: True)
+    sent = []
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k:
+                        sent.append(argv) or subprocess.CompletedProcess(argv, 0, json.dumps({'submitted': submitted}).encode()))
+    before = _floor_snapshot(tmp_path)
+    assert launcher.deliver_pending(d, dry_run=True) == [2]
+    assert sent == [] and _floor_snapshot(tmp_path) == before
+    assert launcher.deliver_pending(d) == ([2] if submitted else [])
+    assert len(sent) == 1 and sent[0][0:3] == ['agents-cli', 'send', '32']
+    assert 'msg:2 kind:assignment asg:current' in sent[0]
+    assert [r['state'] for r in _rows(d)] == ['stored', 'sent' if submitted else 'stored']
+    if submitted:
+        assert launcher.deliver_pending(d) == [] and len(sent) == 1
+
+
+def test_warden_dry_run_with_pending_mailbox_writes_no_sqlite_sidecars(floor_world, monkeypatch, capsys):
+    d = _mail_shift(monkeypatch, floor_world)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'dry', '--body', 'do work')
+    monkeypatch.setattr(launcher, 'pid_alive', lambda *a, **k: True)
+    monkeypatch.setattr(launcher, 'session_idle_since', lambda *a: None)
+    before = _floor_snapshot(floor_world)
+    report = launcher.warden([d.name, '--dry-run'])
+    assert report['shifts'][0]['delivered'] == [1]
+    assert _floor_snapshot(floor_world) == before
+
+
+@pytest.mark.parametrize('kind', ['fresh-empty', 'fresh-live', 'fresh-dead', 'old-live'])
+def test_stale_floor_lock_checks_general_writer_pid_and_age(floor_world, monkeypatch, kind):
+    path = floor_world / 'claims.lock'
+    path.write_text('' if kind == 'fresh-empty' else json.dumps({'pid': 8765}), encoding='utf-8')
+    seen = []
+    monkeypatch.setattr(launcher, 'process_running', lambda pid: seen.append(pid) or kind != 'fresh-dead')
+    monkeypatch.setattr(launcher, 'pid_alive', lambda *a: pytest.fail('writer need not be an agent'))
+    if kind == 'old-live':
+        old = launcher.time.time() - launcher.FILE_LOCK_STALE_S - 1
+        os.utime(path, (old, old))
+    assert launcher.stale_file_lock(path) is (kind in ('fresh-dead', 'old-live'))
+    assert path.exists()
+
+
+def test_warden_normalizes_only_live_claims_and_recovers_only_unfinished_slots(floor_world, monkeypatch, capsys):
+    d, record = _floor_shift(floor_world, 'patrol', roles={'Coder': {'alive': True}, 'Tester': {'alive': False}},
+                             slots=[{'slot': 1, 'role': 'Foreman', 'state': 'live'},
+                                    {'slot': 2, 'role': 'Coder', 'state': 'dead'},
+                                    {'slot': 3, 'role': None, 'state': 'empty'}])
+    claims = {'C:\\space name\\a.py': {'role': 'Coder'}, 'b.py': {'role': 'Tester'},
+              'c.py': {'role': 'foreign-coder'}}
+    (d / 'claims.json').write_text(json.dumps(claims), encoding='utf-8')
+    (d / 'claims.lock').write_text(json.dumps({'pid': 111}), encoding='utf-8')
+    (d / 'bus.lock').write_text('', encoding='utf-8')
+    old = launcher.time.time() - launcher.FILE_LOCK_STALE_S - 1
+    os.utime(d / 'bus.lock', (old, old))
+    monkeypatch.setattr(launcher, 'process_running', lambda *a: False)
+    monkeypatch.setattr(launcher, 'shift_record', lambda _: record)
+    monkeypatch.setattr(launcher, 'deliver_pending', lambda *a: [])
+    monkeypatch.setattr(launcher, 'nudge_idle_foremen', lambda *a: [])
+    recovered = []
+    monkeypatch.setattr(launcher, 'recover_pane', lambda state, slot, dry_run=False:
+                        recovered.append((slot, dry_run)) or {'slot': slot})
+    before = _floor_snapshot(floor_world)
+    launcher.warden([d.name, '--dry-run'])
+    assert _floor_snapshot(floor_world) == before and recovered == [(2, True)]
+    launcher.warden([d.name])
+    assert recovered == [(2, True), (2, False)]
+    assert not (d / 'claims.lock').exists() and not (d / 'bus.lock').exists()
+    updated = json.loads((d / 'claims.json').read_text())
+    assert updated['C:\\space name\\a.py']['role'] == d.name + '-coder'
+    assert updated['b.py']['role'] == 'Tester' and updated['c.py']['role'] == 'foreign-coder'
+    record['result'] = 'blocked'
+    launcher.warden([d.name])
+    assert len(recovered) == 2
+    capsys.readouterr()
+
+
+def test_nudge_respects_threshold_submission_and_repeat_cooldown(floor_world, monkeypatch):
+    d = floor_world / 'shifts' / 'Nightshift-shift-nudge'
+    d.mkdir()
+    monkeypatch.setattr(launcher, 'member_info', lambda *a: {'pid': 12, 'started': 1})
+    monkeypatch.setattr(launcher, 'pid_alive', lambda *a: True)
+    idle = [launcher.NUDGE_IDLE_S - 1]
+    monkeypatch.setattr(launcher, 'session_idle_since', lambda *a: idle[0])
+    sent = []
+    monkeypatch.setattr(launcher, 'send_header', lambda *a: sent.append(a) or True)
+    assert launcher.nudge_idle_foremen(d) == [] and sent == []
+    idle[0] += 1
+    before = _floor_snapshot(floor_world)
+    assert launcher.nudge_idle_foremen(d, dry_run=True) == ['Foreman']
+    assert _floor_snapshot(floor_world) == before and sent == []
+    assert launcher.nudge_idle_foremen(d) == ['Foreman']
+    assert launcher.nudge_idle_foremen(d) == [] and len(sent) == 1
+
+
+@pytest.mark.parametrize('queued', [False, True])
+def test_gaffer_dispatch_preserves_options_queue_and_live_ticket_idempotency(floor_world, monkeypatch, capsys, queued):
+    repo = str(floor_world / 'repo with spaces')
+    entry = {'ticket': 'NGH-035', 'crew': 'codex', 'repo': repo}
+    launcher.FLOOR_FILE.write_text(json.dumps({'queue': [entry, 'NGH-036'], 'keep': 'sentinel'}))
+    records, calls = {}, []
+    monkeypatch.setattr(launcher, 'shift_record', lambda d: records[Path(d)])
+
+    def fake_start(argv):
+        calls.append(argv)
+        d, record = _floor_shift(floor_world, 'dispatched')
+        (d / 'ticket.txt').write_text('NGH-035')
+        records[d] = record
+        return d
+    monkeypatch.setattr(launcher, 'start', fake_start)
+    flags = [] if queued else ['--ticket', 'NGH-035', '--crew', 'codex', '--repo', repo]
+    before = _floor_snapshot(floor_world)
+    report = launcher.gaffer([*flags, '--dry-run'])
+    assert report['reason'] == 'would_dispatch' and calls == []
+    assert _floor_snapshot(floor_world) == before
+    report = launcher.gaffer(flags)
+    assert report['dispatched'] is True
+    assert calls == [['NGH-035', '--crew', 'codex', '--cwd', repo]]
+    floor = json.loads(launcher.FLOOR_FILE.read_text())
+    assert floor['keep'] == 'sentinel'
+    assert floor['queue'] == (['NGH-036'] if queued else [entry, 'NGH-036'])
+    dispatch = floor['dispatches'][0]
+    assert (dispatch['ticket'], dispatch['repo'], dispatch['crew']) == ('NGH-035', repo, 'codex')
+    assert dispatch['dispatched_at']
+    assert launcher.gaffer(['--ticket', 'NGH-035'])['reason'] == 'already_running'
+    assert len(calls) == 1
+    capsys.readouterr()
+
+
+def test_gaffer_failed_start_retains_queued_ticket_and_releases_lock(floor_world, monkeypatch):
+    launcher.FLOOR_FILE.write_text(json.dumps({'queue': ['NGH-035', 'NGH-036']}))
+    before = _floor_snapshot(floor_world)
+    monkeypatch.setattr(launcher, 'start', lambda *a: (_ for _ in ()).throw(SystemExit('launch failed')))
+    with pytest.raises(SystemExit, match='launch failed'):
+        launcher.gaffer([])
+    assert _floor_snapshot(floor_world) == before
+    assert not launcher.FLOOR_FILE.with_suffix('.lock').exists()
+
+
+def test_gaffer_concurrent_calls_serialize_capacity_check_and_dispatch(floor_world, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    records, calls = {}, []
+    monkeypatch.setattr(launcher, 'process_running', lambda *a: True)
+    monkeypatch.setattr(launcher, 'shift_record', lambda d: records[Path(d)])
+
+    def fake_start(argv):
+        calls.append(argv)
+        d, record = _floor_shift(floor_world, 'dispatch' + str(len(calls)))
+        records[d] = record
+        return d
+    monkeypatch.setattr(launcher, 'start', fake_start)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reports = list(pool.map(lambda ticket: launcher.gaffer(['--ticket', ticket, '--max-shifts', '1']),
+                                ['NGH-035', 'NGH-036']))
+    assert len(calls) == 1
+    assert sorted(r['reason'] for r in reports) == ['at_capacity', 'dispatched']
+    assert len(json.loads(launcher.FLOOR_FILE.read_text())['dispatches']) == 1
+
+
+def test_top_level_help_lists_floor_commands_and_close_default(floor_world, monkeypatch, capsys):
+    monkeypatch.setattr(sys, 'argv', ['nightshift', '--help'])
+    with pytest.raises(SystemExit) as exc:
+        launcher.main()
+    assert exc.value.code == 0
+    text = capsys.readouterr().out
+    assert all(word in text for word in ('cleaner', 'warden', 'gaffer'))
+    assert '--hold (default)' not in text
+
+
+@pytest.mark.parametrize('receipt,tail,expected', [
+    ({'submitted': True}, {}, True),
+    ({'submitted': False, 'enter': True, 'sent': 'msg:7 kind:note asg:-'},
+     {'state': 'idle', 'lines': ['› msg:7 kind:note asg:-', 'answer', '›']}, False),
+    ({'enter': True, 'sent': 'msg:7 kind:note asg:-', 'via': 'inject'},
+     {'state': 'idle', 'lines': ['› msg:7 kind:note asg:-', 'answer', '›']}, True),
+    ({'enter': True, 'sent': 'msg:7 kind:note asg:-', 'via': 'inject'},
+     {'state': 'busy', 'lines': ['› msg:7 kind:note asg:-', 'Working', '› Ask Codex to do anything']}, True),
+    ({'enter': True, 'sent': 'msg:7 kind:note asg:-', 'via': 'inject'},
+     {'state': 'idle', 'lines': ['› msg:7 kind:note asg:-']}, False),
+    ({'enter': True, 'sent': 'msg:7 kind:note asg:-', 'via': 'inject'},
+     {'state': 'idle', 'lines': ['› msg:7 kind:note asg:-', 'answer', '› user draft']}, False),
+    ({'enter': True, 'sent': 'msg:7 kind:note asg:-', 'via': 'inject'},
+     {'state': 'unknown', 'lines': ['› msg:7 kind:note asg:-', 'answer', '›']}, False),
+    ({'enter': False, 'sent': 'msg:7 kind:note asg:-'}, {}, False),
+])
+def test_send_header_confirms_legacy_receipts_only_after_cleared_composer(monkeypatch, receipt, tail, expected):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        result = receipt if argv[1] == 'send' else tail
+        return subprocess.CompletedProcess(argv, 0, json.dumps(result).encode(), b'')
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    assert launcher.send_header(32, 'msg:7 kind:note asg:-') is expected
+    assert sum(argv[1] == 'send' for argv in calls) == 1
+    if 'submitted' in receipt:
+        assert len(calls) == 1
+
+
+def test_uncertain_delivery_is_tail_checked_without_blind_resend(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'once', '--body', 'do work')
+    monkeypatch.setattr(launcher, 'pid_alive', lambda *a, **k: True)
+    calls = []
+    tail = {'state': 'idle', 'lines': ['› msg:1 kind:assignment asg:once']}
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        result = {'enter': True, 'sent': argv[-1], 'via': 'inject'} if argv[1] == 'send' else tail
+        return subprocess.CompletedProcess(argv, 0, json.dumps(result).encode(), b'')
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    assert launcher.deliver_pending(d) == []
+    assert launcher.deliver_pending(d) == []
+    assert sum(argv[1] == 'send' for argv in calls) == 1
+    assert _rows(d)[0]['state'] == 'stored'
+    tail['lines'] += ['processing complete', '›']
+    assert launcher.deliver_pending(d) == [1]
+    assert sum(argv[1] == 'send' for argv in calls) == 1
+    assert _rows(d)[0]['state'] == 'sent'
+
+
+@pytest.mark.parametrize('tool', ['codex', 'copilot'])
+@pytest.mark.parametrize('state,recent_activity,expected', [('idle', False, True), ('busy', False, False),
+                                                          ('unknown', False, False), ('idle', True, False)])
+def test_non_claude_foreman_nudge_requires_idle_and_old_bus_activity(floor_world, monkeypatch, tool,
+                                                                  state, recent_activity, expected):
+    d = floor_world / 'shifts' / 'Nightshift-shift-idle'
+    d.mkdir()
+    now = 1_800_000_000.0
+    monkeypatch.setattr(launcher.time, 'time', lambda: now)
+    monkeypatch.setattr(launcher, 'member_info', lambda *a: {'pid': 12, 'tool': tool,
+                                                          'started': now - launcher.NUDGE_IDLE_S - 10})
+    monkeypatch.setattr(launcher, 'pid_alive', lambda *a: True)
+    monkeypatch.setattr(launcher, 'session_idle_since', lambda *a: pytest.fail('Claude-only idle query'))
+    monkeypatch.setattr(launcher, 'agent_tail', lambda pid: {'state': state})
+    if recent_activity:
+        (d / 'bus.jsonl').write_text(json.dumps({'seq': 1, 'event': 'ack', 'by': 'Foreman', 'id': 123,
+            'ts': launcher.time.strftime('%Y-%m-%dT%H:%M:%S', launcher.time.localtime(now - 1))}) + '\n')
+    sent = []
+    monkeypatch.setattr(launcher, 'send_header', lambda *a: sent.append(a) or True)
+    assert launcher.nudge_idle_foremen(d) == (['Foreman'] if expected else [])
+    assert bool(sent) is expected
+
+
+def test_warden_core_filter_uses_manifest_base_role_and_skips_helpers(floor_world, monkeypatch, capsys):
+    d, record = _floor_shift(floor_world, 'core', roles={'Foreman': {'alive': True}}, slots=[
+        {'slot': 1, 'role': 'Foreman', 'state': 'live'},
+        {'slot': 2, 'role': 'Builder', 'state': 'dead'},
+        {'slot': 3, 'role': 'Apprentice', 'state': 'dead'},
+        {'slot': 4, 'role': 'Helper', 'state': 'dead'},
+    ])
+    members = [{'label': label, 'role': role, 'identity': d.name + '-' + label.lower()}
+               for label, role in [('Foreman', 'Foreman'), ('Builder', 'Coder'),
+                                   ('Apprentice', 'Apprentice'), ('Helper', 'Helper')]]
+    (d / 'crew.json').write_text(json.dumps({'members': members}), encoding='utf-8')
+    monkeypatch.setattr(launcher, 'shift_record', lambda *a: record)
+    monkeypatch.setattr(launcher, 'deliver_pending', lambda *a: [])
+    monkeypatch.setattr(launcher, 'nudge_idle_foremen', lambda *a: [])
+    recovered = []
+    monkeypatch.setattr(launcher, 'recover_pane', lambda state, slot, dry_run=False:
+                        recovered.append(slot) or {'slot': slot})
+    launcher.warden([d.name])
+    assert recovered == [2]
+    capsys.readouterr()
+
+
+def test_mailbox_read_sees_committed_uncheckpointed_wal_without_changing_source(tmp_path, monkeypatch, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    # Keep the writer open with auto-checkpoint disabled so the new message exists in WAL, not only main DB.
+    with launcher.mailbox(d) as writer:
+        writer.execute('PRAGMA wal_autocheckpoint=0')
+        launcher.insert_message(writer, d, 'assignment', 'Foreman', 'Coder', 'committed in WAL', 'wal')
+        assert (d / 'mailbox.sqlite3-wal').stat().st_size > 0
+        before = _floor_snapshot(tmp_path)
+        rows = launcher.unacked_messages(d)
+        assert len(rows) == 1 and rows[0]['body'] == 'committed in WAL'
+        assert _floor_snapshot(tmp_path) == before
+
+
+def test_missing_mailbox_read_does_not_create_directory_or_database(tmp_path):
+    d = tmp_path / 'absent'
+    with launcher.mailbox(d, create=False) as conn:
+        assert conn is None
+    assert not d.exists()
+
+
+def test_closed_checkpointed_mailbox_repeat_reads_leave_source_bytes_and_files_unchanged(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'assignment', '--asg', 'closed', '--body', 'checkpointed')
+    assert not (d / 'mailbox.sqlite3-wal').exists() and not (d / 'mailbox.sqlite3-shm').exists()
+    before = _floor_snapshot(tmp_path)
+    for _ in range(3):
+        rows = launcher.unacked_messages(d)
+        assert len(rows) == 1 and rows[0]['body'] == 'checkpointed'
+        assert _floor_snapshot(tmp_path) == before
+
+
+def test_snapshot_read_exception_closes_connection_and_removes_scratch(monkeypatch, tmp_path, capsys):
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'note', '--body', 'before error')
+    before = _floor_snapshot(tmp_path)
+    with pytest.raises(RuntimeError, match='reader exception'):
+        with launcher.mailbox(d, create=False) as conn:
+            scratch = Path(conn.execute('PRAGMA database_list').fetchone()[2])
+            assert not scratch.is_relative_to(d)
+            raise RuntimeError('reader exception')
+    assert not scratch.exists()
+    with pytest.raises(launcher.sqlite3.ProgrammingError):
+        conn.execute('SELECT 1')
+    assert _floor_snapshot(tmp_path) == before
+    assert len(launcher.unacked_messages(d)) == 1
+
+
+def test_snapshot_copy_serializes_helper_writer_until_capture_completes(monkeypatch, tmp_path, capsys):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'note', '--body', 'before snapshot')
+    copied, release_copy, attempting, entered = [threading.Event() for _ in range(4)]
+    original_copy = launcher.shutil.copy2
+
+    def paused_copy(src, dst, *args, **kwargs):
+        result = original_copy(src, dst, *args, **kwargs)
+        if Path(src).name == 'mailbox.sqlite3':
+            copied.set()
+            if not release_copy.wait(5):
+                raise TimeoutError('test did not release snapshot copy')
+        return result
+
+    def write_message():
+        attempting.set()
+        with launcher.mailbox(d) as writer:
+            entered.set()
+            launcher.insert_message(writer, d, 'note', 'Foreman', 'Coder', 'after snapshot')
+
+    monkeypatch.setattr(launcher.shutil, 'copy2', paused_copy)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reader = pool.submit(launcher.unacked_messages, d)
+        try:
+            assert copied.wait(5)
+            writer = pool.submit(write_message)
+            assert attempting.wait(5)
+            assert not entered.wait(0.2), 'helper writer entered during DB/WAL capture'
+        finally:
+            release_copy.set()
+        assert [row['body'] for row in reader.result(timeout=5)] == ['before snapshot']
+        writer.result(timeout=5)
+    assert [row['body'] for row in launcher.unacked_messages(d)] == ['before snapshot', 'after snapshot']
+
+
+def test_snapshot_copy_error_releases_guard_and_cleans_temporary_files(monkeypatch, tmp_path, capsys):
+    from concurrent.futures import ThreadPoolExecutor
+    d = _mail_shift(monkeypatch, tmp_path)
+    _send(capsys, 'Foreman', 'Coder', '--kind', 'note', '--body', 'safe')
+    before = _floor_snapshot(tmp_path)
+    temps = []
+    original_temp = launcher.tempfile.TemporaryDirectory
+
+    def track_temp(*args, **kwargs):
+        temp = original_temp(*args, **kwargs)
+        temps.append(Path(temp.name))
+        return temp
+
+    def fail_copy(*args, **kwargs):
+        raise OSError('simulated copy failure')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(launcher.tempfile, 'TemporaryDirectory', track_temp)
+        patch.setattr(launcher.shutil, 'copy2', fail_copy)
+        with pytest.raises(OSError, match='simulated copy failure'):
+            launcher.unacked_messages(d)
+    assert temps and all(not p.exists() for p in temps)
+    assert _floor_snapshot(tmp_path) == before
+    # Different thread proves the mutex was released, rather than recursively reentered by this thread.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert len(pool.submit(launcher.unacked_messages, d).result(timeout=5)) == 1
+
+
+def test_mailbox_guard_timeout_does_not_steal_ownership_or_leave_files(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    path = tmp_path / 'mailbox.sqlite3'
+
+    def enter_guard():
+        with launcher.mailbox_guard(path, timeout_ms=20):
+            return True
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with launcher.mailbox_guard(path):
+            with pytest.raises(TimeoutError, match='still held'):
+                pool.submit(enter_guard).result(timeout=5)
+        assert pool.submit(enter_guard).result(timeout=5) is True
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('abandoned', [False, True])
+def test_mailbox_guard_releases_acquired_or_abandoned_handle_on_exception(monkeypatch, tmp_path, abandoned):
+    calls = []
+
+    class Api:
+        def __init__(self, name, result):
+            self.name, self.result = name, result
+
+        def __call__(self, *args):
+            calls.append((self.name, args))
+            return self.result
+
+    kernel = types.SimpleNamespace(CreateMutexW=Api('create', 123), WaitForSingleObject=Api('wait', 0x80 if abandoned else 0),
+                                   ReleaseMutex=Api('release', True), CloseHandle=Api('close', True))
+    monkeypatch.setattr(launcher.ctypes, 'WinDLL', lambda *a, **k: kernel)
+    with pytest.raises(RuntimeError, match='inside guard'):
+        with launcher.mailbox_guard(tmp_path / 'mailbox.sqlite3'):
+            raise RuntimeError('inside guard')
+    assert [name for name, _ in calls] == ['create', 'wait', 'release', 'close']
+    assert calls[-2][1] == calls[-1][1] == (123,)
+
+
+def test_cleaner_wires_down_claims_locks_window_bus_and_repeat_noop(floor_world, monkeypatch, capsys):
+    d = _container(floor_world, members=('Foreman', 'Coder'), free=(3, 4))
+    monkeypatch.setattr(launcher, 'pid_alive', lambda *a, **k: False)
+    monkeypatch.setattr(launcher, 'process_running', lambda *a, **k: False)
+    monkeypatch.setattr(launcher, 'own_ancestors', lambda: set())
+    monkeypatch.setattr(launcher, 'shift_commits', lambda *a: [])
+    windows = {777: CONT_SHIFT + ' shift', 888: 'other shift'}
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: windows.copy())
+    closed = []
+
+    def close(hwnd, *args):
+        closed.append(hwnd.value)
+        windows.pop(hwnd.value)
+    monkeypatch.setattr(launcher.ctypes.windll.user32, 'PostMessageW', close)
+    (d / 'claims.json').write_text(json.dumps({'a.py': {'role': 'Coder', 'time': 'old'}}))
+    for name in ('claims.lock', 'bus.lock'):
+        path = d / name
+        path.write_text('')
+        old = launcher.time.time() - launcher.FILE_LOCK_STALE_S - 1
+        os.utime(path, (old, old))
+    launcher.LOCKS_DIR.mkdir()
+    repo_lock = launcher.lock_path(str(floor_world))
+    repo_lock.write_text(json.dumps({'shift': d.name, 'cwd': str(floor_world), 'state_dir': str(d)}))
+    first = launcher.cleaner([])
+    assert first['windows_closed'] == [d.name] and closed == [777] and 888 in windows
+    assert not repo_lock.exists() and json.loads((d / 'claims.json').read_text()) == {}
+    assert not (d / 'claims.lock').exists() and not (d / 'bus.lock').exists()
+    assert (d / 'handover.md').exists()
+    assert _bus(d)[-1]['event'] == 'down'
+    before = _floor_snapshot(floor_world)
+    second = launcher.cleaner([])
+    assert second['reaped'] == [] and _floor_snapshot(floor_world) == before
+    capsys.readouterr()
+
+
+@pytest.mark.parametrize('dry_run,failed', [(True, False), (False, False), (False, True)])
+def test_recovery_reuses_dead_slot_and_reports_launch_failure_without_real_spawn(floor_world, monkeypatch,
+                                                                               dry_run, failed):
+    d, _ = _floor_shift(floor_world, 'recover')
+    monkeypatch.setattr(launcher, 'read_slot', lambda *a: {'role': 'Coder'})
+    monkeypatch.setattr(launcher, 'slot_state', lambda *a: 'dead')
+    calls = []
+
+    def fake_spawn(argv):
+        calls.append(argv)
+        if failed:
+            raise SystemExit('no shell remains')
+    monkeypatch.setattr(launcher, 'spawn', fake_spawn)
+    report = launcher.recover_pane(d, 3, dry_run=dry_run)
+    assert calls == ([] if dry_run else [[d.name, '--role', 'Coder', '--slot', '3']])
+    assert report['recovered'] is (not dry_run and not failed)
+    if failed:
+        assert report['error'] == 'no shell remains'
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_codex_real_popen_type_schedules_rename_on_daemon_thread(monkeypatch, tmp_path):
+    d = _container(tmp_path, members=('Foreman', 'Coder'), free=(3, 4))
+    crew = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    crew['members'][1]['tool'] = 'codex'
+    (d / 'crew.json').write_text(json.dumps(crew), encoding='utf-8')
+    events = []
+
+    class FakePopen:
+        pid = 42
+
+        def __init__(self, *a, **k):
+            pass
+
+        def poll(self):
+            return None
+
+        def wait(self):
+            events.append('wait')
+            return 0
+
+    class FakeThread:
+        def __init__(self, target, daemon):
+            assert daemon is True
+            self.target = target
+
+        def start(self):
+            events.append('thread')
+            self.target()
+
+    monkeypatch.setattr(launcher.subprocess, 'Popen', FakePopen)
+    monkeypatch.setattr(launcher.threading, 'Thread', FakeThread)
+    monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a: events.append('rename') or True)
+    monkeypatch.setattr(launcher, 'register_name', lambda *a: None)
+    monkeypatch.setattr(launcher, 'process_running', lambda *a, **k: True)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane('Coder', str(d), start=True, cwd=str(tmp_path), slot=2)
+    assert events == ['thread', 'rename', 'wait']
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_spawned_copilot_apprentice_pane_runs_with_reasoning_effort_and_context(tmp_path, injected, monkeypatch,
+                                                                               capsys):
+    # spawn carries reasoning/context into crew.json, and pane() passes them to the copilot argv it launches
+    d = _container(tmp_path)
+    launcher.spawn([CONT_SHIFT, '--role', 'Apprentice', '--crew', 'copilot'])
+    member = next(m for m in json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members']
+                  if m['label'] == 'Apprentice')
+    assert (member['tool'], member['model'], member['reasoning'], member['context']) == \
+        ('copilot', 'gemini-3.8-flash', 'high', 'long_context')
+    seen = {}
+
+    class Child:
+        pid = 42
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda command, **k: seen.update(command=command) or Child())
+    monkeypatch.setattr(launcher, 'register_name', lambda pid, name: None)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
+    launcher.pane('Apprentice', str(d), start=True, cwd=str(tmp_path), slot=3)
+    command = seen['command']
+    assert command[0] == str(launcher.COPILOT_EXE)
+    assert command[command.index('--model'):command.index('-i')] == [
+        '--model', 'gemini-3.8-flash', '--reasoning-effort', 'high', '--context', 'long_context']

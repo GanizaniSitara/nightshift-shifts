@@ -9,6 +9,62 @@ The design this grew from is in `portable-shifts-design.md` and its three review
 (`*-fable-critique.md`, `*-mistral-critique.md`, `*-argon-gaps.md`). This file describes what
 exists; where the two differ, this file wins.
 
+## State roots and floor roles (NGH-035)
+
+New shifts use `C:\nightshift\` as the visible machine state root. The launcher derives these
+locations from `SOLID_DIR`:
+
+- `C:\nightshift\shifts\<shift>\` — shift records, the mailbox and the bus.
+- `C:\nightshift\locks\` — working-folder locks and the build lock tree.
+- `C:\nightshift\builds\` — the defined machine-level `BUILDS_DIR` path; the current `build`
+  command still writes revision-bound evidence to `<state_dir>/builds/<N>.json`, not centrally.
+- `C:\nightshift\floor.json` — machine-level floor state for reaping, patrol and dispatch.
+
+An already-running legacy shift may keep its state under `C:\Data\nightshift\` until it is torn
+down; the root change does not move or split that shift's mailbox, claims or bus. The launcher
+keeps a read-through lookup for that legacy state while new state is written under `C:\nightshift\`.
+
+The three out-of-shift commands operate on `floor.json` and emit JSON reports:
+
+- `nightshift cleaner [--dry-run]` reaps only dead shifts, or shifts whose `result` is `done` or
+  `halted`. It closes a still-open finished shift, releases its claims and stale locks, and records
+  `{shift, task, result, reaped_at}` in `floor.json`. Its report has `reaped`, `locks_released`,
+  `windows_closed` and `dry_run` fields. A dry run makes no cleanup changes.
+- `nightshift warden [<shift>] [--dry-run]` patrols live shifts only and never tears one down. It
+  delivers unsent bus messages, nudges a silent Foreman after `NUDGE_IDLE_S` (300 seconds), clears
+  stale `claims.lock` and `bus.lock` files after `FILE_LOCK_STALE_S` (30 seconds), normalizes short
+  live-role names in `claims.json`, and recovers crashed core slots in an unfinished (`result ==
+  "none"`) shift. Recovery is limited to the manifest's Foreman, Advisor, Coder and Tester base
+  roles; Apprentice and custom helpers stay under Foreman's control. It records `last_warden_at`
+  and per-shift `health` in `floor.json`.
+- `nightshift gaffer [--max-shifts N] [--crew CREW] [--ticket ID] [--repo PATH] [--tick]
+  [--dry-run]` dispatches work while enforcing a live-shift cap (default `2`). `--tick` runs the
+  cleaner and then the warden before evaluating dispatch. At capacity it reports
+  `reason: "at_capacity"` without launching; under capacity it dispatches the explicit ticket or
+  a queued floor ticket and records `{shift, ticket, crew, repo, dispatched_at}` in `dispatches`.
+
+Warden delivers only stored messages addressed to the recipient's current incarnation. A modern
+`agents-cli send` receipt must say `submitted: true`. An older `enter: true`/`sent: <header>` receipt
+also needs tail evidence: the header in history above an empty current composer. Explicit
+`submitted: false` remains unconfirmed. The per-shift `warden-delivery.json` records each attempt
+before injection; subsequent patrols check uncertain delivery through the tail without injecting
+the same header again. If confirmation stays unavailable, the row remains stored for inspection.
+
+Claude idle time comes from its session record. Other CLIs require `agents-cli tail` to report
+`idle`, plus at least 300 seconds since the latest Foreman bus activity or process start. Busy or
+unknown state is never nudged. `warden-nudge.json` throttles attempts, including uncertain sends.
+
+Mailbox reads use a disposable database/WAL copy outside shift state, so a dry-run cannot create
+SQLite WAL/SHM sidecars beside the real mailbox. A named Windows mutex keyed by the canonical
+mailbox path guards the copy and every central `mailbox(create=True)` connection through close
+and checkpoint. SQLite opens only the scratch copy for reads and rebuilds its SHM there. This
+snapshot consistency guarantee covers writers using that helper; direct external SQLite writers
+do not participate. Missing mailboxes create no state, and mutex waits have an explicit timeout.
+
+All three commands are wired through the main parser and `COMMANDS` mapping. They are maintenance
+and dispatch operations, not additional crew sessions: cleaner and warden are safe to run repeatedly,
+and `--dry-run` is the inspection mode for all three.
+
 ## Container, not loop (owner decision, 16 Oct 2026; NGH-025)
 
 The owner has reset the shape of the thing. Nightshift is **not a persistent process**. The
@@ -18,8 +74,9 @@ filled with the crew from the manifest, the rest empty shells. From then on **Fo
 container**: it may fill an empty slot through `nightshift spawn` (any CLI; the Nightshift CLI
 is the one component that knows how to put a session into a tab slot, agents-cli only drives
 consoles), and when the ticket is tested and deployed it writes the records and runs
-`nightshift down` itself. If Foreman dies, the shift is dead until a human looks; there is no
-watcher of watchers. The `loop` below is kept as an optional batch runner and is no longer the
+`nightshift down` itself. If a core member crashes while the shift is active, `nightshift warden`
+can recover its pane; if recovery cannot proceed, the shift remains for human inspection. The
+`loop` below is kept as an optional batch runner and is no longer the
 default path.
 
 As built (NGH-025):
@@ -72,8 +129,8 @@ As built (NGH-025):
   model then falls back as without `--crew`. The member written to `crew.json` carries all of it, so the
   pane wrapper starts that tool/model/reasoning/account. This is how Foreman proves each CLI as
   Apprentice inside a live default shift: `spawn SHIFT --role Apprentice --crew apprentice-codex`.
-- **down --hold / --close.** Both write the handover, kill the crew and release the folder lock.
-  `--hold` (default) leaves the tab open; `--close` also closes the window (the loop uses it). When the
+- **down --close / --hold.** Both write the handover, kill the crew and release the folder lock.
+  `--close` (default) also closes the window; `--hold` explicitly leaves the tab open. When the
   crew is already dead and `handover.md` exists (Foreman already ran `down`, and a caller later runs
   `down --close`), the captured `handover.md` is preserved rather than overwritten with `(pane not readable)`.
   The member whose process tree is running `down` (Foreman ending its own shift) is killed last, after the
@@ -163,11 +220,11 @@ As built (NGH-027):
 
 | Piece | Role | Where |
 |---|---|---|
-| `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--hold`/`--close`), `spawn` (NGH-025), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), `log` (the shift bus, NGH-026) | this repo |
-| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`), `account` (`1`\|`2`) and `permissions` (`skip`\|`auto`\|`default`), pane layout | this repo |
+| `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--close` default, explicit `--hold`), `spawn` (NGH-025), `cleaner`, `warden`, `gaffer` and `floor.json` (NGH-035), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), `log` (the shift bus, NGH-026) | this repo |
+| `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`; copilot also `none`\|`minimal`\|`max`), `context` (`default`\|`long_context`, copilot only), `account` (`1`\|`2`) and `permissions` (`skip`\|`auto`\|`default`), pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
 | `personas/*.yaml` | each role's persona (identity, what good looks like, how you work, never), rendered above the brief (NGH-032) | this repo |
-| shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
+| shift folder | `C:\nightshift\shifts\<shift>\` — the source of truth for one new shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | `C:\Tools\tasks-cli.exe` |
 | agents-cli | universal console driver for any agent TUI: peek a pane, inject a line, press a key, name/wait on a session | `C:\Tools\agents-cli` |
 | Claude Code mesh | `ListAgents` / `SendMessage` between Claude sessions over named pipes (`~/.claude/sessions/<pid>.json`) | Claude Code |
@@ -178,7 +235,7 @@ As built (NGH-027):
 
 1. `nightshift start <TICKET|"task"> [--crew NAME] [--cwd DIR] [--continue-from SHIFT]`
    reads the ticket through tasks-cli, resolves the working folder (`--cwd` > ticket `codebase:` >
-   current directory), takes the **folder lock** (`C:\Data\nightshift\locks\`, exit 3 if another
+   current directory), takes the **folder lock** (`C:\nightshift\locks\`, exit 3 if another
    live shift holds it), writes `prompt.txt`, and runs `wt.exe` with one `new-tab`/`split-pane`
    per role. Each pane runs this same script as a **wrapper** (`--pane ROLE`), which launches the
    role's CLI, records `<Role>.json` (pid, name, start time, cwd), answers Claude's trust dialog
@@ -197,10 +254,10 @@ As built (NGH-027):
 4. Foreman ends the shift by writing `result.json`: `status` done|blocked, `stage`
    implemented|tested|deployed|validated, `evidence` per rung, `summary`, `changed`. A ticket may
    say `requires: <rung>` (default tested); done below the bar is recorded as `short`.
-5. Foreman then runs `nightshift down` itself: it captures the last lines of each pane, writes
+5. Foreman then runs `nightshift down --close` itself: it captures the last lines of each pane, writes
    `handover.md` (result, commits since start, test outcome, denials, claims, pane tails), kills the
-   crew processes (Foreman's own tree last), releases the lock, and keeps the tab open (`--hold`,
-   default) or closes only that shift's Terminal window (`--close`).
+   crew processes (Foreman's own tree last), releases the lock, and closes only that shift's Terminal
+   window. `--hold` is an explicit override when the tab must remain open.
 
 ## The default crew: Foreman, Advisor, Coder, Tester, Apprentice (NGH-024, NGH-027, NGH-029)
 
@@ -260,9 +317,23 @@ As built (NGH-027):
   `agents-cli name <pid> <identity>` (`register_name`, failures ignored) so it can be addressed by its
   shift identity. The trust-dialog answer and `/color` are Claude-only and skipped.
 - `pid_alive` counts `agy.exe` as a crew process alongside `claude.exe`/`node.exe`.
-- `start --dry-run` adds `tool`, `model` and `exe` to each non-Claude role; a Claude role on another
+- `start --dry-run` adds `tool`, `model`, `exe` and `command` to each non-Claude role; `command` is the
+  argv the pane will run, built by the same `tool_command` that `pane()` uses, with `<brief>` and
+  `<first message>` as placeholders. `reasoning` and `context` are shown when set. A Claude role on another
   model than the crew's (the Fable Advisor) adds `model`; Claude roles on the crew model keep the
   original shape (the default crew's plan is golden-tested byte for byte).
+- Reasoning is per tool (NGH-037). `reasoning:` is checked against `TOOL_REASONING_LEVELS.get(tool,
+  REASONING_LEVELS)`. Copilot accepts `none|minimal|low|medium|high|xhigh|max`; every other tool accepts
+  `low|medium|high|xhigh`. Anything else is refused, naming the role, the tool and the allowed levels.
+  Claude passes the level as `--effort`, Codex as `-c model_reasoning_effort=<level>`, and Copilot as
+  `--reasoning-effort <level>`. agy has no reasoning flag.
+- `context:` (NGH-037) selects a context tier, `default` or `long_context` (`CONTEXT_TIERS`). It is accepted
+  only on tools in `CONTEXT_TOOLS` (copilot), and is refused on any other tool or with any other value.
+  It reaches Copilot as `--context <tier>`, and is carried like `reasoning` through `crew.json`, `spawn`
+  and `pane()`. Without `reasoning` or `context`, `copilot_command` builds the same argv as before.
+- `crews/copilot.yaml` is the all-Copilot work crew (2x4, every role `tool: copilot`, `permissions: skip`).
+  Foreman, Advisor and Tester run `grok-4.7` with `reasoning: max`; Coder and Apprentice run
+  `gemini-3.8-flash` with `reasoning: high` and `context: long_context`.
 - `crews/gemini-coder.yaml` is the first mixed crew: Claude Foreman (`foreman-agy-coder.md`), agy
   Coder on `gemini-3.8-flash-high` (`coder-agy.md`). The agy Coder cannot use ListAgents/SendMessage:
   it writes reports in its own window, each ending with `CODER-DONE` or `CODER-BLOCKED`. Foreman
@@ -325,7 +396,7 @@ or not a YAML mapping. The persona is carried on each member in `crew.json`; a s
 ## The shift folder is the source of truth
 
 ```
-C:\Data\nightshift\shifts\<shift>\
+C:\nightshift\shifts\<shift>\
   prompt.txt       the task as given to Foreman        ticket.txt   ticket id (when started from one)
   launch.json      wt argv, launcher pid, window hwnd   Foreman.json / Coder.json / Tester.json   pid, name, start time, cwd, history
   crew.json        members (incl. spawned), slots, cwd  slots/<N>.json  what each container slot holds (NGH-025)
@@ -412,7 +483,7 @@ dead shifts are ignored. No worktrees per shift (owner: not needed).
 | Second coder, heterogeneous CLIs later | claims ready; per-role `tool:` with an agy Gemini Coder crew (NGH-012, not yet run live); Copilot (NGH-022) | in progress |
 | "Portable package", CLI language open | Python in its own repo; binary decision NGH-021 | open |
 | — (not in the design) | loop, result ladder, crew manifest, opt-in Mailkeep notification, denial capture | additions |
-| — (owner, 16 Oct) | container with slot grid (1x4), `slots/`, `spawn`, Foreman-owned `down --hold/--close`, launcher exits; loop optional | NGH-025, built |
+| — (owner, 16 Oct) | container with slot grid (1x4), `slots/`, `spawn`, Foreman-owned `down --close/--hold` (close default), launcher exits; loop optional | NGH-025, built |
 
 ## Not decided / not built
 
