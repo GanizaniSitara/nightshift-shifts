@@ -364,6 +364,31 @@ As built (NGH-027):
   `model:`/`tool:` lines in the manifest plus the agents-cli transport the Gemini Coder already uses
   (NGH-012); the mailbox guard and briefs do not change.
 
+### Reserved Coder (NGH-056, Go binary)
+
+Three live sessions by default (owner, 16 Oct): when the effective crew (after `--without`/`--role`) has an
+`Apprentice` role, the single manifest `Coder` is held like the Advisor.
+- **start.** The Coder's cell is an empty reserved slot (a `split` layout is promoted to a slot grid), it is
+  not launched, and the bus `start` event's `members` omit it. `crew.json` gains `"coder_slot": N` right after
+  `advisor_slot`, only when the Coder is reserved. The `start --dry-run` plan gives the Coder role
+  `"status": "not_started", "reserved_slot": N`, the same as the Advisor. `status` reports a Coder with
+  no `Coder.json` as `not_started` with `reserved_slot`. Crews without an Apprentice (e.g. `work`) keep the Coder
+  live, so their output is unchanged.
+- **summon.** `nightshift summon SHIFT BODY --asg ID [--kind assignment|uplift] [--reason R]` is the Coder's
+  sibling of `consult`, and `consult` is unchanged. It first runs exactly `msg send Foreman Coder`'s checks
+  under the claims lock (`dispatchMetadata`: `--reason` needs `--kind uplift`, the uplift trigger evidence, the
+  Apprentice's claims released, and no plain-assignment Apprentice -> Coder transfer). It then records
+  `"summon": {kind, body, asg[, reason]}` in `crew.json` and spawns the Coder in `coder_slot`. The pane
+  creates the Coder incarnation, stores the message through the same `storeDispatchMessage` path (so an
+  uplift carries `source_dispatch_id`/`reason`/`evidence` and the new incarnation), marks it sent, clears
+  `summon` and uses `msg:<id> header + body` as the first prompt. A failed spawn restores `crew.json`.
+  Refusals: `shift X has no reserved Coder`,
+  `Coder is already started; use msg send for later assignments`, `Coder summon is already starting`, plus
+  msg send's own messages.
+- **spawn.** Neither reserved slot is given to another label (`Coder slot N is reserved until summon`).
+  `spawn --role Coder` uses only `coder_slot` and, before the first summon, refuses with
+  `use summon to start the Coder`.
+
 ## Accountant (NGH-034) — proposed / unbuilt, owner review required
 
 This section is the design deliverable only. No Accountant, accounting adapter, accounting
@@ -907,7 +932,7 @@ stderr (including structured helper errors), restores `crew.json`, and leaves th
 C:\nightshift\shifts\<shift>\
   prompt.txt       the task as given to Foreman        ticket.txt   ticket id (when started from one)
   launch.json      wt argv, launcher pid, window hwnd   Foreman.json / Coder.json / Tester.json   pid, name, start time, cwd, history
-  crew.json        members (incl. spawned), slots, advisor_slot, cwd  slots/<N>.json  what each container slot holds (NGH-025)
+  crew.json        members (incl. spawned), slots, advisor_slot, [coder_slot,] cwd  slots/<N>.json  what each container slot holds (NGH-025)
   result.json      the shift contract (above)           handover.md  written by down
   claims.json      file claims per role                 denials.json auto-mode classifier refusals seen
   mailbox.sqlite3  messages: stored → sent → acknowledged, with sender/recipient incarnation (NGH-019)
@@ -1117,6 +1142,33 @@ stable unless `land --target-branch` explicitly overrides it.
 Repository crew lookup checks `<repo_root>/.nightshift/crews/<name>.yaml` before falling back to
 the built-in `crews/<name>.yaml`. This lets a work repository provide an approved manifest without
 modifying Nightshift's built-in crew definitions.
+
+### Crew lookup, `crews`, and start-time overrides (NGH-056, Go binary)
+
+- **Lookup order.** `--crew NAME` takes the first of: machine `<state root>/crews/NAME.yaml`
+  (`C:\nightshift\crews\`, honouring `NIGHTSHIFT_STATE_ROOT`), repository
+  `<repo_root>/.nightshift/crews/NAME.yaml`, built-in `crews/NAME.yaml`. Every `loadCrew` caller
+  (start, the pane fallback, spawn) uses the same order. An unknown name lists the crews from all three
+  sources, deduplicated and sorted. Machine files keep machine-local crews out of the user profile and
+  out of the repository.
+- **`nightshift crews [--cwd DIR]`** prints JSON, sorted by name: one
+  `{"name", "source": "machine"|"repo"|"built-in", "path", "active"}` entry per visible manifest, where
+  `active` marks the file `--crew NAME` picks and `false` the ones it shadows. `--cwd` picks the repo layer.
+- **`start --crew-file PATH`** loads that manifest directly (crew name = file stem, relative paths against
+  the current directory). It cannot be combined with `--crew`; a missing file exits 1 with `no crew manifest <abs path>`.
+- **Overrides** (start only), applied to the manifest's YAML before the normal validation, so every
+  manifest check still applies:
+  `--without ROLE` (repeatable, case-insensitive; the human_contact role cannot be dropped),
+  `--role ROLE=TOOL:MODEL[:REASONING]` (repeatable, once per role; sets tool, model and reasoning and drops
+  reasoning when it is not given; a tool change drops `context` if the new tool has no context tier, and
+  switches the brief between `<stem>.md` and `<stem>-cli.md` when the target brief exists), and
+  `--max-credits N` (replaces the top-level budget). A budget whose Copilot panes were all removed is dropped
+  unless `--max-credits` was given; otherwise it is re-split with the usual 30-per-pane minimum.
+- **Recording.** Only when an override is used, or `--crew` resolved to a machine file, `crew.json`
+  (right after `"crew"`), the bus `start` event and the `start --dry-run` plan carry
+  `"overrides": {"crew_file", "without", "role", "max_credits"}`, with unused keys omitted. Without these
+  features the output is unchanged. Panes use the effective members in `crew.json`; spawn's manifest fallback
+  reloads the effective crew from the recorded `crew_file` and overrides (`loadSavedCrew`).
 
 `role_brief` stacks prompts in four sections: `# <Role>` for the persona from `personas/`,
 `# Protocol` for `briefs/common.md` plus the role brief, `# Repository` for the resolved build

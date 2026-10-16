@@ -264,6 +264,113 @@ def assert_equal_bytes(actual, expected, label):
                 f'actual={actual[max(0, offset - 60):offset + 140]!r}')
 
 
+# NGH-056 (Foreman msg 16): the frozen oracle has no crew lookup flags, so exactly these help lines differ. Each pair
+# is (oracle lines, native lines); the oracle bytes are rewritten to the native lines and everything else stays
+# byte-compared. The start usage block appears in `start -h` and in every start usage error.
+NGH056_HELP_DELTAS = [
+    ([b'                        [--continue-from SHIFT_DIR] [--crew CREW] [--dry-run]'],
+     [b'                        [--continue-from SHIFT_DIR] [--crew CREW]',
+      b'                        [--crew-file CREW_FILE] [--without ROLE]',
+      b'                        [--role ROLE=TOOL:MODEL[:REASONING]]',
+      b'                        [--max-credits N] [--dry-run]']),
+    ([b'  --crew CREW           crew manifest crews/CREW.yaml: roles, briefs, colours,',
+      b'                        counts, model (default: default = one Foreman, one',
+      b'                        Advisor, one Coder, one Tester)'],
+     [b'  --crew CREW           crew manifest CREW.yaml, first found in',
+      b'                        <state root>/crews, <repo>/.nightshift/crews, then the',
+      b'                        built-in crews/: roles, briefs, colours, counts, model',
+      b'                        (default: default = one Foreman, one Advisor, one',
+      b'                        Coder, one Tester); nightshift crews lists them',
+      b'  --crew-file CREW_FILE',
+      b'                        use this crew manifest file instead of --crew',
+      b'  --without ROLE        drop ROLE from the crew (repeatable; not the',
+      b'                        human_contact role)',
+      b'  --role ROLE=TOOL:MODEL[:REASONING]',
+      b'                        run ROLE on TOOL with MODEL and optional reasoning',
+      b'                        (repeatable)',
+      b'  --max-credits N       the shift\'s Copilot credit budget, split across the',
+      b'                        Copilot panes (replaces the manifest\'s max_credits)']),
+    ([b'                                              start a crew (git worktree by default; --no-worktree opts out)'],
+     [b'                                              start a crew (git worktree by default; --no-worktree opts out)',
+      b'  crews [--cwd DIR]                           crew manifests in lookup order (machine > repo > built-in)']),
+    # Reserved Coder (Coder msg 18): the summon command follows consult.
+    ([b'  consult SHIFT QUESTION --asg ID             start the reserved Advisor with a durable first assignment'],
+     [b'  consult SHIFT QUESTION --asg ID             start the reserved Advisor with a durable first assignment',
+      b'  summon SHIFT BODY --asg ID [--kind assignment|uplift] [--reason R]',
+      b'                                              start the reserved Coder (crews with an Apprentice) the same way']),
+]
+
+
+def reserve_coder(plan):
+    """NGH-056 reserved Coder (Coder msg 18), applied to the oracle's start --dry-run plan: when the crew has an
+    Apprentice, the Coder is held like the Advisor. Exactly three things change: roles.Coder gains status and
+    reserved_slot after first_message, its slots entry has role null, and its wt_argv cell becomes the empty-slot
+    shell (cmd.exe /k <launcher> --slot N --state-dir D, no colour scheme). Returns the plan unchanged otherwise."""
+    roles = plan.get('roles') or {}
+    if 'Apprentice' not in roles or 'Coder' not in roles:
+        return plan
+    slots = plan.get('slots')
+    assert slots, 'a split-layout Apprentice crew would need slot promotion; no parity fixture has one'
+    n = next(s['slot'] for s in slots if s['role'] == 'Coder')
+    coder = {}
+    for key, value in roles['Coder'].items():
+        coder[key] = value
+        if key == 'first_message':
+            coder['status'], coder['reserved_slot'] = 'not_started', n
+    roles['Coder'] = coder
+    slots[n - 1]['role'] = None
+    argv, out, segment = plan['wt_argv'], [], []
+    for token in argv + [';']:
+        if token != ';':
+            segment.append(token)
+            continue
+        if '--pane' in segment and segment[segment.index('--pane') + 1] == 'Coder':
+            d, pane = segment.index('-d'), segment.index('--pane')
+            head = segment[:d + 2]
+            if '--colorScheme' in head:
+                i = head.index('--colorScheme')
+                del head[i:i + 2]
+            segment = head + ['cmd.exe', '/k', *segment[d + 2:pane], '--slot',
+                              segment[segment.index('--slot') + 1], '--state-dir',
+                              segment[segment.index('--state-dir') + 1]]
+        out.extend(segment + [';'])
+        segment = []
+    plan['wt_argv'] = out[:-1]
+    return plan
+
+
+def oracle_with_reserved_coder(args, data):
+    """The oracle's start --dry-run stdout re-rendered with reserve_coder (json.dumps as the oracle prints it)."""
+    if args[:1] != ['start'] or '--dry-run' not in args or not data.lstrip().startswith(b'{'):
+        return data
+    plan = json.loads(data)
+    rendered = (json.dumps(reserve_coder(plan), indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+    return rendered.replace(b'\n', b'\r\n') if b'\r\n' in data else rendered
+
+
+def ngh056_expected(data):
+    """The oracle's bytes with the NGH-056 help deltas applied; (bytes, number of deltas applied)."""
+    applied = 0
+    for old, new in NGH056_HELP_DELTAS:
+        pattern = rb'\r?\n'.join(re.escape(line) for line in old) + rb'(?=\r?\n)'
+        match = re.search(pattern, data)
+        if match:
+            nl = b'\r\n' if b'\r\n' in match[0] or b'\r\n' in data else b'\n'
+            data = data[:match.start()] + nl.join(new) + data[match.end():]
+            applied += 1
+    return data, applied
+
+
+def test_ngh056_help_deltas_hit_the_oracle_text(tmp_path):
+    """Guard the exception itself: every delta matches the oracle exactly once per help it belongs to."""
+    env = base_env(tmp_path / 'help space', None)
+    start_help = run(['start', '-h'], env, native=False).stdout
+    top_help = run(['-h'], env, native=False).stdout
+    assert ngh056_expected(start_help)[1] == 2 and ngh056_expected(top_help)[1] == 2
+    for old, _ in NGH056_HELP_DELTAS:
+        assert sum(normalise(h).count(old[0]) for h in (start_help, top_help)) == 1, old[0]
+
+
 def parity(args, env, launcher=None, expect_exit=None):
     """Oracle then native on the same world; both must leave the state roots untouched."""
     before = state_snapshot(env)
@@ -275,8 +382,10 @@ def parity(args, env, launcher=None, expect_exit=None):
     if unported(actual):
         pytest.skip(f'native binary has not ported {args[0]} yet: {actual.stderr[:80]!r}')
     assert state_snapshot(env) == before, f'native binary wrote state for dry-run/usage case {args}'
-    for label, a, e in (('stdout', actual.stdout, expected.stdout), ('stderr', actual.stderr, expected.stderr)):
-        assert_equal_bytes(normalise(a, launcher, True), normalise(e, launcher, False), f'{args} {label}')
+    for label, a, e in (('stdout', actual.stdout, oracle_with_reserved_coder(args, expected.stdout)),
+                        ('stderr', actual.stderr, expected.stderr)):
+        assert_equal_bytes(normalise(a, launcher, True), ngh056_expected(normalise(e, launcher, False))[0],
+                           f'{args} {label}')
     assert actual.returncode == expected.returncode, (args, actual.stderr)
     return expected
 
@@ -445,7 +554,8 @@ def test_native_copy_without_crews_beside_it_uses_embedded_assets(start_world, p
             pytest.skip('native binary has not ported start yet')
         assert actual.returncode == expected.returncode == 0, actual.stderr
         assert_equal_bytes(normalise(actual.stdout, python_launcher, True, exe=copied),
-                           normalise(expected.stdout, python_launcher, False), f'embedded {args}')
+                           normalise(oracle_with_reserved_coder(args, expected.stdout), python_launcher, False),
+                           f'embedded {args}')
     assert sorted(p.name for p in lonely.iterdir()) == ['nightshift.exe'], 'embedded assets must not be unpacked'
 
 

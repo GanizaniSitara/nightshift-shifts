@@ -31,6 +31,7 @@ const (
 	foremanStartMessage = "Begin the assignment: the task text is at the end of your role instructions, after \"The human task for this shift follows, verbatim:\"."
 	humanTaskMarker     = "The human task for this shift follows, verbatim:"
 	advisorLabel        = "Advisor"
+	coderLabel          = "Coder"
 	agyStatuslineCmd    = "C:/scripts/nightshift.cmd statusline"
 )
 
@@ -380,6 +381,7 @@ type crewManifest struct {
 	slots                                         int
 	roles                                         []*crewRole
 	maxCredits                                    any
+	overrides                                     object // start's overrides as recorded; nil when none
 }
 
 type crewMember struct {
@@ -405,25 +407,282 @@ func (m crewMember) object() object {
 
 func yamlScalar(m yaml.MapSlice, key string) any { v, _ := yamlValue(m, key); return v }
 
-func loadCrew(name, repoRoot string) (*crewManifest, error) {
+// crewSource is one visible manifest file: machine (<state root>/crews), repo
+// (<repo>/.nightshift/crews) or built-in (crews/, possibly embedded).
+type crewSource struct {
+	name, source, path string
+	read               func() (string, error)
+}
+
+// crewSources lists every visible manifest, by name, each name's sources in
+// lookup order (machine > repo > built-in): the first one is what --crew picks.
+func crewSources(repoRoot string) []crewSource {
+	byName := map[string][]crewSource{}
+	add := func(dir, source string) {
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.yaml"))
+		for _, m := range matches {
+			if path := m; isFile(path) {
+				name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+				byName[name] = append(byName[name], crewSource{name, source, path, func() (string, error) { return readTextUniversal(path) }})
+			}
+		}
+	}
+	add(filepath.Join(stateRoot(), "crews"), "machine")
+	if repoRoot != "" {
+		add(filepath.Join(repoRoot, ".nightshift", "crews"), "repo")
+	}
+	for _, stem := range assetStems("crews") {
+		file := stem + ".yaml"
+		byName[stem] = append(byName[stem], crewSource{stem, "built-in", assetPath("crews", file), func() (string, error) { return assetRead("crews", file) }})
+	}
+	names := []string{}
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	sources := []crewSource{}
+	for _, name := range names {
+		sources = append(sources, byName[name]...)
+	}
+	return sources
+}
+
+// crewOverrides are start's --crew-file/--without/--role/--max-credits,
+// applied to the manifest's YAML before validation.
+type crewOverrides struct {
+	crewFile   string
+	without    []string
+	roles      []string
+	maxCredits string // the raw --max-credits value; "" = not given
+}
+
+// overridesFromObject reads the "overrides" a started shift recorded in crew.json.
+func overridesFromObject(o object) *crewOverrides {
+	if o == nil {
+		return nil
+	}
+	ov := &crewOverrides{crewFile: objectString(o, "crew_file")}
+	for _, item := range anyList(rowValue(o, "without")) {
+		ov.without = append(ov.without, valueText(item))
+	}
+	for _, item := range anyList(rowValue(o, "role")) {
+		ov.roles = append(ov.roles, valueText(item))
+	}
+	if v := rowValue(o, "max_credits"); v != nil {
+		ov.maxCredits = valueText(v)
+	}
+	return ov
+}
+
+func anyList(v any) []any { items, _ := v.([]any); return items }
+
+// record is the "overrides" object for crew.json, the bus start event and the
+// dry-run plan; machineFile is the manifest path when --crew found it in the
+// machine folder. nil when nothing was overridden.
+func (ov *crewOverrides) record(machineFile string) object {
+	o := object{}
+	if ov == nil {
+		ov = &crewOverrides{}
+	}
+	if ov.crewFile != "" {
+		o = append(o, pair{"crew_file", ov.crewFile})
+	} else if machineFile != "" {
+		o = append(o, pair{"crew_file", machineFile})
+	}
+	if len(ov.without) > 0 {
+		o = append(o, pair{"without", stringsToAny(ov.without)})
+	}
+	if len(ov.roles) > 0 {
+		o = append(o, pair{"role", stringsToAny(ov.roles)})
+	}
+	if ov.maxCredits != "" {
+		n, _ := parseInteger(ov.maxCredits)
+		o = append(o, pair{"max_credits", int(n)})
+	}
+	if len(o) == 0 {
+		return nil
+	}
+	return o
+}
+
+func yamlSet(m yaml.MapSlice, key string, value any) yaml.MapSlice {
+	out := append(yaml.MapSlice{}, m...)
+	for i, item := range out {
+		if yamlKeyText(item.Key) == key {
+			out[i].Value = value
+			return out
+		}
+	}
+	return append(out, yaml.MapItem{Key: key, Value: value})
+}
+
+func yamlDelete(m yaml.MapSlice, key string) yaml.MapSlice {
+	out := yaml.MapSlice{}
+	for _, item := range m {
+		if yamlKeyText(item.Key) != key {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func entryTool(entry yaml.MapSlice) string {
+	if t := yamlScalar(entry, "tool"); truthy(t) {
+		return pyStr(t)
+	}
+	return "claude"
+}
+
+// applyCrewOverrides drops --without roles, rewrites --role roles and sets or
+// drops max_credits, leaving every other check to loadCrew's validation.
+func applyCrewOverrides(name string, data yaml.MapSlice, roles []any, ov *crewOverrides) (yaml.MapSlice, []any, error) {
+	roleIndex := func(entries []any, role string) int {
+		for i, raw := range entries {
+			if entry, ok := raw.(yaml.MapSlice); ok && truthy(yamlScalar(entry, "role")) && strings.EqualFold(pyStr(yamlScalar(entry, "role")), role) {
+				return i
+			}
+		}
+		return -1
+	}
+	roleNames := func(entries []any) string {
+		names := []string{}
+		for _, raw := range entries {
+			if entry, ok := raw.(yaml.MapSlice); ok && truthy(yamlScalar(entry, "role")) {
+				names = append(names, pyStr(yamlScalar(entry, "role")))
+			}
+		}
+		return strings.Join(names, ", ")
+	}
+	dropped := map[int]bool{}
+	for _, w := range ov.without {
+		i := roleIndex(roles, w)
+		if i < 0 {
+			return nil, nil, fmt.Errorf("--without %s: crew %s has no role %s; roles: %s", w, name, w, roleNames(roles))
+		}
+		if yamlScalar(roles[i].(yaml.MapSlice), "human_contact") == true {
+			return nil, nil, fmt.Errorf("--without %s: the human_contact role cannot be dropped", w)
+		}
+		dropped[i] = true
+	}
+	kept := []any{}
+	for i, raw := range roles {
+		if !dropped[i] {
+			kept = append(kept, raw)
+		}
+	}
+	given := map[string]bool{}
+	for _, spec := range ov.roles {
+		role, rest, ok := strings.Cut(spec, "=")
+		parts := strings.Split(rest, ":")
+		valid := ok && role != "" && len(parts) >= 2 && len(parts) <= 3
+		for _, p := range parts {
+			valid = valid && p != ""
+		}
+		if !valid {
+			return nil, nil, fmt.Errorf("--role %s: use ROLE=TOOL:MODEL[:REASONING]", spec)
+		}
+		i := roleIndex(kept, role)
+		if i < 0 {
+			return nil, nil, fmt.Errorf("--role %s: crew %s has no role %s; roles: %s", spec, name, role, roleNames(kept))
+		}
+		entry := kept[i].(yaml.MapSlice)
+		if key := strings.ToLower(pyStr(yamlScalar(entry, "role"))); given[key] {
+			return nil, nil, fmt.Errorf("--role %s: role %s is given twice", spec, pyStr(yamlScalar(entry, "role")))
+		} else {
+			given[key] = true
+		}
+		oldTool, tool := entryTool(entry), parts[0]
+		entry = yamlSet(yamlSet(entry, "tool", tool), "model", parts[1])
+		if len(parts) == 3 {
+			entry = yamlSet(entry, "reasoning", parts[2])
+		} else {
+			entry = yamlDelete(entry, "reasoning")
+		}
+		if tool != oldTool {
+			if !contains(contextTools, tool) {
+				entry = yamlDelete(entry, "context")
+			}
+			brief := pyStr(yamlScalar(entry, "brief"))
+			if oldTool == "claude" && !strings.HasSuffix(brief, "-cli.md") {
+				if cli := strings.TrimSuffix(brief, ".md") + "-cli.md"; assetIsFile("briefs", cli) {
+					entry = yamlSet(entry, "brief", cli)
+				}
+			} else if tool == "claude" && strings.HasSuffix(brief, "-cli.md") {
+				if plain := strings.TrimSuffix(brief, "-cli.md") + ".md"; assetIsFile("briefs", plain) {
+					entry = yamlSet(entry, "brief", plain)
+				}
+			}
+		}
+		kept[i] = entry
+	}
+	if ov.maxCredits != "" {
+		if n, err := parseInteger(ov.maxCredits); err == nil {
+			data = yamlSet(data, "max_credits", int(n))
+		} else {
+			data = yamlSet(data, "max_credits", ov.maxCredits)
+		}
+	} else if len(ov.without)+len(ov.roles) > 0 && yamlScalar(data, "max_credits") != nil {
+		copilot := false
+		for _, raw := range kept {
+			if entry, ok := raw.(yaml.MapSlice); ok && entryTool(entry) == "copilot" {
+				copilot = true
+			}
+		}
+		if !copilot {
+			data = yamlDelete(data, "max_credits")
+		}
+	}
+	return data, kept, nil
+}
+
+// loadCrew reads crew NAME by the lookup order machine > repo > built-in.
+func loadCrew(name, repoRoot string) (*crewManifest, error) { return loadCrewWith(name, repoRoot, nil) }
+
+// loadSavedCrew reloads a started shift's effective crew from its crew.json:
+// the recorded crew_file when there is one, with the recorded overrides.
+func loadSavedCrew(saved object, repoRoot string) (*crewManifest, error) {
+	name := objectString(saved, "crew")
+	if name == "" {
+		name = "default"
+	}
+	ov, _ := rowValue(saved, "overrides").(object)
+	return loadCrewWith(name, repoRoot, overridesFromObject(ov))
+}
+
+// loadCrewWith is loadCrew with start's overrides; with ov.crewFile the
+// manifest is that file and name is its stem.
+func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, error) {
 	fail := func(format string, args ...any) (*crewManifest, error) {
 		return nil, fmt.Errorf("crew %s: "+format, append([]any{name}, args...)...)
 	}
-	path := assetPath("crews", name+".yaml")
-	read := func() (string, error) { return assetRead("crews", name+".yaml") }
-	found := assetIsFile("crews", name+".yaml")
-	if repoRoot != "" {
-		if local := filepath.Join(repoRoot, ".nightshift", "crews", name+".yaml"); isFile(local) {
-			path, found = local, true
-			read = func() (string, error) { return readTextUniversal(local) }
+	var path, machineFile string
+	var read func() (string, error)
+	if ov != nil && ov.crewFile != "" {
+		path = ov.crewFile
+		if !isFile(path) {
+			return nil, fmt.Errorf("no crew manifest %s", path)
 		}
-	}
-	if !found {
-		list := strings.Join(assetStems("crews"), ", ")
-		if list == "" {
-			list = "(none)"
+		read = func() (string, error) { return readTextUniversal(path) }
+	} else {
+		names := []string{}
+		for _, src := range crewSources(repoRoot) {
+			if src.name == name && read == nil {
+				path, read = src.path, src.read
+				if src.source == "machine" {
+					machineFile = src.path
+				}
+			}
+			if !contains(names, src.name) {
+				names = append(names, src.name)
+			}
 		}
-		return nil, fmt.Errorf("no crew manifest %s; available crews: %s", path, list)
+		if read == nil {
+			list := strings.Join(names, ", ")
+			if list == "" {
+				list = "(none)"
+			}
+			return nil, fmt.Errorf("no crew manifest %s; available crews: %s", assetPath("crews", name+".yaml"), list)
+		}
 	}
 	text, err := read()
 	if err != nil {
@@ -443,6 +702,11 @@ func loadCrew(name, repoRoot string) (*crewManifest, error) {
 	roles, ok := yamlScalar(data, "roles").([]any)
 	if !ok || len(roles) == 0 {
 		return fail("roles must be a non-empty list")
+	}
+	if ov != nil {
+		if data, roles, err = applyCrewOverrides(name, data, roles, ov); err != nil {
+			return nil, err
+		}
 	}
 	checked := []*crewRole{}
 	for i, raw := range roles {
@@ -572,7 +836,8 @@ func loadCrew(name, repoRoot string) (*crewManifest, error) {
 	if slots != 0 && panes > slots {
 		return fail("%d panes do not fit layout %s (%d slots)", panes, layout, slots)
 	}
-	crew := &crewManifest{name: name, model: launcherModel, permissionMode: startPermissionMode, contract: "result.json", layout: layout, slots: slots, roles: checked}
+	crew := &crewManifest{name: name, model: launcherModel, permissionMode: startPermissionMode, contract: "result.json", layout: layout, slots: slots, roles: checked,
+		overrides: ov.record(machineFile)}
 	if v := yamlScalar(data, "model"); truthy(v) {
 		crew.model = pyStr(v)
 	}
@@ -920,6 +1185,18 @@ func crewEnv(environ []string, tool string, account any, role string) []string {
 
 // isAdvisor: the single manifest Advisor, whose pane is held until Foreman consults it.
 func isAdvisor(m *crewMember) bool { return m.role == advisorLabel && m.label == advisorLabel }
+
+// isCoder: the single manifest Coder, held until Foreman summons it when the crew has an Apprentice (NGH-056).
+func isCoder(m *crewMember) bool { return m.role == coderLabel && m.label == coderLabel }
+
+func crewHasRole(crew *crewManifest, role string) bool {
+	for _, r := range crew.roles {
+		if r.role == role {
+			return true
+		}
+	}
+	return false
+}
 
 // installAgyStatusline points agy's status line at the generic Nightshift command, keeping a user's own.
 func installAgyStatusline() bool {

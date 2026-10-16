@@ -24,7 +24,10 @@ import (
 
 const startUsage = `usage: nightshift start [-h] [--prompt-file PROMPT_FILE] [--cwd CWD]
                         [--no-worktree] [--target-branch TARGET_BRANCH]
-                        [--continue-from SHIFT_DIR] [--crew CREW] [--dry-run]
+                        [--continue-from SHIFT_DIR] [--crew CREW]
+                        [--crew-file CREW_FILE] [--without ROLE]
+                        [--role ROLE=TOOL:MODEL[:REASONING]]
+                        [--max-credits N] [--dry-run]
                         [prompt]`
 
 const startHelp = startUsage + `
@@ -61,9 +64,20 @@ options:
   --continue-from SHIFT_DIR
                         an earlier shift folder for the same task: its
                         handover.md is appended so the crew carries on
-  --crew CREW           crew manifest crews/CREW.yaml: roles, briefs, colours,
-                        counts, model (default: default = one Foreman, one
-                        Advisor, one Coder, one Tester)
+  --crew CREW           crew manifest CREW.yaml, first found in
+                        <state root>/crews, <repo>/.nightshift/crews, then the
+                        built-in crews/: roles, briefs, colours, counts, model
+                        (default: default = one Foreman, one Advisor, one
+                        Coder, one Tester); nightshift crews lists them
+  --crew-file CREW_FILE
+                        use this crew manifest file instead of --crew
+  --without ROLE        drop ROLE from the crew (repeatable; not the
+                        human_contact role)
+  --role ROLE=TOOL:MODEL[:REASONING]
+                        run ROLE on TOOL with MODEL and optional reasoning
+                        (repeatable)
+  --max-credits N       the shift's Copilot credit budget, split across the
+                        Copilot panes (replaces the manifest's max_credits)
   --dry-run             print the intended command, roles and prompt as JSON;
                         launch and write nothing
 
@@ -103,7 +117,8 @@ func startUsageError(message string) error {
 // runStart is start(); print=false is the oracle's redirect_stdout (gaffer).
 func runStart(argv []string, print bool) (string, error) {
 	options := []writeOption{{name: "--prompt-file"}, {name: "--cwd"}, {name: "--no-worktree", flag: true}, {name: "--target-branch"},
-		{name: "--continue-from"}, {name: "--crew"}, {name: "--dry-run", flag: true}}
+		{name: "--continue-from"}, {name: "--crew"}, {name: "--crew-file"}, {name: "--without", multi: true}, {name: "--role", multi: true},
+		{name: "--max-credits"}, {name: "--dry-run", flag: true}}
 	args, parseError := parseWriteArgs(argv, options, nil, []string{"prompt"})
 	if args.help {
 		if print {
@@ -117,6 +132,9 @@ func runStart(argv []string, print bool) (string, error) {
 	var prompt *string
 	if len(args.pos) > 0 {
 		prompt = &args.pos[0]
+	}
+	if args.present["--crew"] && args.present["--crew-file"] {
+		return "", startUsageError("give either --crew or --crew-file, not both")
 	}
 	if prompt != nil && args.present["--prompt-file"] {
 		return "", startUsageError("give the task either as an argument or with --prompt-file, not both")
@@ -185,7 +203,18 @@ func runStart(argv []string, print bool) (string, error) {
 	if crewName == "" {
 		crewName = "default"
 	}
-	crew, err := loadCrew(crewName, repoRoot)
+	var overrides *crewOverrides
+	if args.present["--crew-file"] || args.present["--without"] || args.present["--role"] || args.present["--max-credits"] {
+		overrides = &crewOverrides{without: args.lists["--without"], roles: args.lists["--role"], maxCredits: args.values["--max-credits"]}
+		if file := args.values["--crew-file"]; args.present["--crew-file"] {
+			if abs, err := filepath.Abs(file); err == nil {
+				file = abs
+			}
+			overrides.crewFile = file
+			crewName = strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+		}
+	}
+	crew, err := loadCrewWith(crewName, repoRoot, overrides)
 	if err != nil {
 		return "", startExit(err.Error())
 	}
@@ -210,12 +239,17 @@ func runStart(argv []string, print bool) (string, error) {
 	}
 	members := crewMembersOf(crew, name)
 	// The manifest Advisor is not started with the crew: its cell is an empty, reserved slot (acc1f52).
+	// With an Apprentice in the crew the Coder is held the same way until summon (NGH-056).
 	labels, cells := []string{}, []string{}
-	advisorSlot := 0
+	advisorSlot, coderSlot := 0, 0
+	reserveCoder := crewHasRole(crew, "Apprentice")
 	colours := map[string]string{}
 	for i, m := range members {
 		if isAdvisor(m) && advisorSlot == 0 {
 			advisorSlot = i + 1
+			cells = append(cells, "")
+		} else if reserveCoder && isCoder(m) && coderSlot == 0 {
+			coderSlot = i + 1
 			cells = append(cells, "")
 		} else {
 			labels = append(labels, m.label)
@@ -226,7 +260,7 @@ func runStart(argv []string, print bool) (string, error) {
 		}
 	}
 	slots := crew.slots
-	if slots == 0 && advisorSlot != 0 {
+	if slots == 0 && (advisorSlot != 0 || coderSlot != 0) {
 		slots = len(members)
 	}
 	for len(cells) < slots {
@@ -241,7 +275,7 @@ func runStart(argv []string, print bool) (string, error) {
 	if args.present["--dry-run"] {
 		if print {
 			outLine(renderJSON(startPlan(name, stateDir, cwd, ticket, title, task, required, crew, members, cells, slots, advisorSlot,
-				command, worktree, config), true, false))
+				coderSlot, command, worktree, config), true, false))
 		}
 		return "", nil
 	}
@@ -275,8 +309,16 @@ func runStart(argv []string, print bool) (string, error) {
 	for _, m := range members {
 		memberObjects = append(memberObjects, m.object())
 	}
-	crewJSON := object{{"crew", crew.name}, {"members", memberObjects}, {"slots", slotsValue(slots)},
-		{"advisor_slot", slotsValue(advisorSlot)}, {"permission_mode", crew.permissionMode}, {"model", crew.model}, {"cwd", cwd}}
+	crewJSON := object{{"crew", crew.name}}
+	if crew.overrides != nil {
+		crewJSON = append(crewJSON, pair{"overrides", crew.overrides})
+	}
+	crewJSON = append(crewJSON, object{{"members", memberObjects}, {"slots", slotsValue(slots)},
+		{"advisor_slot", slotsValue(advisorSlot)}}...)
+	if coderSlot != 0 {
+		crewJSON = append(crewJSON, pair{"coder_slot", coderSlot})
+	}
+	crewJSON = append(crewJSON, object{{"permission_mode", crew.permissionMode}, {"model", crew.model}, {"cwd", cwd}}...)
 	if crew.maxCredits != nil {
 		crewJSON = append(crewJSON, pair{"max_credits", crew.maxCredits})
 	}
@@ -291,7 +333,11 @@ func runStart(argv []string, print bool) (string, error) {
 		}
 	}
 	labelValues := stringsToAny(labels)
-	busAppend(stateDir, "start", object{{"shift", name}, {"ticket", nullable(ticket)}, {"cwd", cwd}, {"crew", crew.name}, {"members", labelValues}})
+	startEvent := object{{"shift", name}, {"ticket", nullable(ticket)}, {"cwd", cwd}, {"crew", crew.name}}
+	if crew.overrides != nil {
+		startEvent = append(startEvent, pair{"overrides", crew.overrides})
+	}
+	busAppend(stateDir, "start", append(startEvent, pair{"members", labelValues}))
 	if err := installProfile(stateDir); err != nil {
 		return "", startExit(err.Error())
 	}
@@ -341,7 +387,7 @@ func firstSplitLine(s string) string {
 }
 
 func startPlan(name, stateDir, cwd, ticket, title, prompt, required string, crew *crewManifest, members []*crewMember, cells []string,
-	slotCount, advisorSlot int, command []string, worktree, config object) object {
+	slotCount, advisorSlot, coderSlot int, command []string, worktree, config object) object {
 	var lock any
 	if worktree == nil {
 		lock = lockPath(cwd)
@@ -354,8 +400,10 @@ func startPlan(name, stateDir, cwd, ticket, title, prompt, required string, crew
 		}
 		role := object{{"session_name", m.identity}, {"pane_title", title}, {"peer", m.peer}, {"receives_prompt", m.human},
 			{"first_message", openingMessage(m, "")}}
-		if advisorSlot != 0 && advisorSlot <= len(cells) && cells[advisorSlot-1] == "" && members[advisorSlot-1] == m {
-			role = append(role, pair{"status", "not_started"}, pair{"reserved_slot", advisorSlot})
+		for _, reserved := range []int{advisorSlot, coderSlot} {
+			if reserved != 0 && reserved <= len(cells) && cells[reserved-1] == "" && members[reserved-1] == m {
+				role = append(role, pair{"status", "not_started"}, pair{"reserved_slot", reserved})
+			}
 		}
 		role = append(role, pair{"compaction", compactionControl(m.tool, m.role)})
 		if m.tool != "claude" {
@@ -400,6 +448,9 @@ func startPlan(name, stateDir, cwd, ticket, title, prompt, required string, crew
 	}
 	if crew.name != "default" {
 		plan = append(plan, pair{"crew", crew.name})
+	}
+	if crew.overrides != nil {
+		plan = append(plan, pair{"overrides", crew.overrides})
 	}
 	if crew.maxCredits != nil {
 		plan = append(object{{"max_credits", crew.maxCredits}}, plan...)

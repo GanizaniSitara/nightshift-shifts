@@ -295,32 +295,40 @@ func runSpawn(argv []string, quiet bool) error {
 		}
 	}
 
-	// The manifest Advisor's slot stays reserved until `consult` starts it (acc1f52).
-	advisorSlot := intValue(rowValue(saved, "advisor_slot"))
-	isManifestAdvisor := strings.EqualFold(role, advisorLabel)
-	if advisorSlot != 0 && !isManifestAdvisor {
-		if args.present["--slot"] && slotArg == advisorSlot {
-			return spawnExit(fmt.Sprintf("%s slot %d is reserved until consultation", advisorLabel, advisorSlot))
+	// The manifest Advisor's slot stays reserved until `consult` starts it (acc1f52), and a reserved
+	// Coder's until `summon` does (NGH-056): no other label is given either slot.
+	ownSlot := 0
+	for _, r := range []struct{ label, key, pending, command, until string }{
+		{advisorLabel, "advisor_slot", "consult", "consult", "consultation"},
+		{coderLabel, "coder_slot", "summon", "summon", "summon"},
+	} {
+		reserved := intValue(rowValue(saved, r.key))
+		if reserved == 0 {
+			continue
 		}
-		kept := []int{}
-		for _, n := range free {
-			if n != advisorSlot {
-				kept = append(kept, n)
+		if !strings.EqualFold(role, r.label) {
+			if args.present["--slot"] && slotArg == reserved {
+				return spawnExit(fmt.Sprintf("%s slot %d is reserved until %s", r.label, reserved, r.until))
+			}
+			kept := []int{}
+			for _, n := range free {
+				if n != reserved {
+					kept = append(kept, n)
+				}
+			}
+			free = kept
+			continue
+		}
+		if args.present["--slot"] && slotArg != reserved {
+			return spawnExit(fmt.Sprintf("%s is reserved for slot %d", r.label, reserved))
+		}
+		if !truthy(rowValue(saved, r.pending)) {
+			info, _ := readObject(filepath.Join(stateDir, role+".json"))
+			if !truthy(rowValue(info, "pid")) {
+				return spawnExit(fmt.Sprintf("use %s to start the %s", r.command, r.label))
 			}
 		}
-		free = kept
-	}
-	if !isManifestAdvisor {
-		advisorSlot = 0
-	}
-	if advisorSlot != 0 && args.present["--slot"] && slotArg != advisorSlot {
-		return spawnExit(fmt.Sprintf("%s is reserved for slot %d", advisorLabel, advisorSlot))
-	}
-	if advisorSlot != 0 && !truthy(rowValue(saved, "consult")) {
-		info, _ := readObject(filepath.Join(stateDir, role+".json"))
-		if !truthy(rowValue(info, "pid")) {
-			return spawnExit(fmt.Sprintf("use consult to start the %s", advisorLabel))
-		}
+		ownSlot = reserved
 	}
 
 	var slot int
@@ -328,9 +336,9 @@ func runSpawn(argv []string, quiet bool) error {
 		if containsInt(free, slotArg) {
 			slot = slotArg
 		}
-	} else if advisorSlot != 0 {
-		if containsInt(free, advisorSlot) {
-			slot = advisorSlot
+	} else if ownSlot != 0 {
+		if containsInt(free, ownSlot) {
+			slot = ownSlot
 		}
 	} else {
 		var own []int
@@ -435,11 +443,7 @@ func runSpawn(argv []string, quiet bool) error {
 	}
 
 	if existing == nil {
-		crewName := objectString(saved, "crew")
-		if crewName == "" {
-			crewName = "default"
-		}
-		if manifest, err := loadCrew(crewName, repoRoot); err == nil && manifest != nil {
+		if manifest, err := loadSavedCrew(saved, repoRoot); err == nil && manifest != nil {
 			var manifestRole *crewRole
 			for _, r := range manifest.roles {
 				if strings.EqualFold(r.role, role) {

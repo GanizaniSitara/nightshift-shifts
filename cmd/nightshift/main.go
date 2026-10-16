@@ -695,6 +695,7 @@ func statusRecord(dir string) (object, error) {
 	_, members := crewMembers(dir)
 	crew, hasCrew := readObject(filepath.Join(dir, "crew.json"))
 	advisorSlot, hasAdvisorSlot := objectNumber(crew, "advisor_slot")
+	coderSlot, hasCoderSlot := objectNumber(crew, "coder_slot")
 	roles := record[2].val.(object)
 	alive := false
 	home := envOr("NIGHTSHIFT_HOME", userHome())
@@ -704,6 +705,8 @@ func statusRecord(dir string) (object, error) {
 		if !exists {
 			if label == "Advisor" && hasAdvisorSlot {
 				roles = append(roles, pair{label, object{{"status", "not_started"}, {"reserved_slot", advisorSlot}, {"alive", false}}})
+			} else if label == "Coder" && hasCoderSlot {
+				roles = append(roles, pair{label, object{{"status", "not_started"}, {"reserved_slot", coderSlot}, {"alive", false}}})
 			}
 			continue
 		}

@@ -148,16 +148,18 @@ type writeOption struct {
 	flag    bool
 	choices []string
 	number  string
+	multi   bool // repeatable: every value is kept in lists, in order
 }
 type writeArgs struct {
 	pos     []string
 	values  map[string]string
 	present map[string]bool
+	lists   map[string][]string
 	help    bool
 }
 
 func parseWriteArgs(args []string, options []writeOption, required, optional []string) (writeArgs, string) {
-	r := writeArgs{values: map[string]string{}, present: map[string]bool{}}
+	r := writeArgs{values: map[string]string{}, present: map[string]bool{}, lists: map[string][]string{}}
 	names := []string{"--help"}
 	for _, o := range options {
 		names = append(names, o.name)
@@ -219,6 +221,9 @@ func parseWriteArgs(args []string, options []writeOption, required, optional []s
 				}
 				r.values[name] = value
 				r.present[name] = true
+				if o.multi {
+					r.lists[name] = append(r.lists[name], value)
+				}
 				break
 			}
 			if !found {

@@ -212,9 +212,23 @@ func requireReleasedClaims(dir, label string) error {
 	return nil
 }
 func storeDispatchMessage(db *sql.DB, dir string, args writeArgs, sender, recipient string) (any, error) {
+	metadata, existing, err := dispatchMetadata(db, dir, args, sender, recipient)
+	if err != nil || existing != nil {
+		return existing, err
+	}
+	var asgValue any
+	if args.present["--asg"] {
+		asgValue = args.values["--asg"]
+	}
+	return insertMessage(db, dir, args.values["--kind"], sender, recipient, args.values["--body"], asgValue, metadata)
+}
+
+// dispatchMetadata validates a msg send (uplift triggers, claims released) and returns the row metadata, or the
+// id of an identical uplift already stored; summon runs it before starting the reserved Coder and again to record.
+func dispatchMetadata(db *sql.DB, dir string, args writeArgs, sender, recipient string) (object, any, error) {
 	rows, err := queryMessages(db, "SELECT * FROM messages ORDER BY id")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	lead := humanLabel(dir)
 	latest := dispatches(dir, rows)
@@ -229,7 +243,7 @@ func storeDispatchMessage(db *sql.DB, dir string, args writeArgs, sender, recipi
 	metadata := object{}
 	if coding := args.values["--coding-asg"]; coding != "" {
 		if kind != "assignment" || sender != lead || memberRole(dir, recipient) != "Tester" || asg == "" {
-			return nil, fmt.Errorf("--coding-asg requires a Foreman verification assignment with --asg")
+			return nil, nil, fmt.Errorf("--coding-asg requires a Foreman verification assignment with --asg")
 		}
 		found := false
 		for _, r := range latest {
@@ -239,33 +253,33 @@ func storeDispatchMessage(db *sql.DB, dir string, args writeArgs, sender, recipi
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("--coding-asg must name a coding assignment")
+			return nil, nil, fmt.Errorf("--coding-asg must name a coding assignment")
 		}
 		metadata = append(metadata, pair{"coding_asg", coding})
 	}
 	if reason != "" && kind != "uplift" {
-		return nil, fmt.Errorf("--reason requires --kind uplift")
+		return nil, nil, fmt.Errorf("--reason requires --kind uplift")
 	}
 	if kind == "uplift" {
 		if sender != lead || memberRole(dir, recipient) != "Coder" || asg == "" || reason == "" {
-			return nil, fmt.Errorf("uplift requires Foreman -> Coder, --asg and --reason")
+			return nil, nil, fmt.Errorf("uplift requires Foreman -> Coder, --asg and --reason")
 		}
 		if source != nil && rowString(source, "kind") == "uplift" {
 			if rowString(source, "recipient") != recipient || rowString(source, "reason") != reason {
-				return nil, fmt.Errorf("assignment already uplifted to a different recipient or reason")
+				return nil, nil, fmt.Errorf("assignment already uplifted to a different recipient or reason")
 			}
-			return rowValue(source, "id"), nil
+			return nil, rowValue(source, "id"), nil
 		}
 		inc, ok := currentIncarnation(dir, rowString(source, "recipient"))
 		if source == nil || memberRole(dir, rowString(source, "recipient")) != "Apprentice" || !sameNumber(inc, ok, rowValue(source, "recipient_incarnation")) {
-			return nil, fmt.Errorf("uplift requires a current Apprentice coding assignment")
+			return nil, nil, fmt.Errorf("uplift requires a current Apprentice coding assignment")
 		}
 		evidence := writeUpliftEvidence(dir, source, rows)[reason]
 		if len(evidence) == 0 {
-			return nil, fmt.Errorf("uplift trigger not satisfied: %s", reason)
+			return nil, nil, fmt.Errorf("uplift trigger not satisfied: %s", reason)
 		}
 		if err := requireReleasedClaims(dir, rowString(source, "recipient")); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		items := []any{}
 		for _, r := range evidence {
@@ -274,17 +288,13 @@ func storeDispatchMessage(db *sql.DB, dir string, args writeArgs, sender, recipi
 		metadata = append(metadata, pair{"source_dispatch_id", rowValue(source, "id")}, pair{"reason", reason}, pair{"evidence", renderJSON(items, false, true)})
 	} else if kind == "assignment" && sender == lead && source != nil && rowString(source, "recipient") != recipient && contains([]string{"Apprentice", "Coder"}, memberRole(dir, recipient)) {
 		if memberRole(dir, rowString(source, "recipient")) == "Apprentice" && memberRole(dir, recipient) == "Coder" {
-			return nil, fmt.Errorf("use --kind uplift with a validated reason for Apprentice -> Coder transfer")
+			return nil, nil, fmt.Errorf("use --kind uplift with a validated reason for Apprentice -> Coder transfer")
 		}
 		if err := requireReleasedClaims(dir, rowString(source, "recipient")); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	var asgValue any
-	if args.present["--asg"] {
-		asgValue = asg
-	}
-	return insertMessage(db, dir, kind, sender, recipient, args.values["--body"], asgValue, metadata)
+	return metadata, nil, nil
 }
 
 const msgUsage = "usage: nightshift msg [-h] {send,sent} ..."
