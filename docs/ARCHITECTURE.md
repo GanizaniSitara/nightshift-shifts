@@ -72,8 +72,9 @@ and `--dry-run` is the inspection mode for all three.
 ## Standalone Go view and in-shift writes (NGH-021, Increment 2)
 
 The repository also builds a standalone `build\nightshift.exe` containing the four read-only views
-`status`, `claims`, `inbox`, and `log`. It reads the same shift-folder contract as the Python
-launcher and never delegates to Python or replaces the `nightshift.cmd` shim. The state roots may
+`status`, `claims`, `inbox`, and `log`, the native in-shift writes, and the native lifecycle commands
+`land`, `down`, and `cleaner`. It reads the same shift-folder contract as the Python launcher and
+never delegates to Python or replaces the `nightshift.cmd` shim. The state roots may
 be isolated for inspection with `NIGHTSHIFT_STATE_ROOT` (default `C:\nightshift`),
 `NIGHTSHIFT_LEGACY_ROOT` (default `C:\Data\nightshift`), and `NIGHTSHIFT_HOME` (the home used
 for Claude session-registration lookup).
@@ -108,8 +109,20 @@ acks create the protocol-violation note and exit `5` without handing a body to t
 uses the per-folder build lock, reserves and updates `<state_dir>/builds/<N>.json`, records command
 exit/head/dirty/log evidence, and preserves the Python wait-timeout (`6`) and command exit codes.
 All of these writes use the same mailbox/build file contracts and bus records as the Python oracle.
-They do not launch sessions, manage Windows Terminal, replace `start`/`spawn`/`down`, or make the
-standalone executable a general launcher.
+
+Increment 3 adds native lifecycle operations for the existing worktree and teardown contracts. `land`
+refuses dirty or untested revisions, fast-forwards an unchanged target, returns a rebase-needed result
+when the target moved, and returns a conflict result without holding the repository landing lock. `down`
+captures pane tails and classifier denials, writes `handover.md`, emits the final bus evidence, releases
+runtime locks and stops the crew; landed worktrees are reclaimed while unlanded work is preserved or
+held according to the recovery contract. `cleaner` retries pending worktree/branch cleanup for dead or
+finished shifts and preserves unexpected files.
+
+The lifecycle helpers are native Go: `handoverReport` renders the result, denial, claim, mailbox, build,
+commit and test-evidence sections; `recordDenials` deduplicates pane lines and persists `denials.json`;
+and `paneTail` reads visible pane lines through `agents-cli`. These lifecycle operations do not launch
+sessions; `down --close` preserves the existing WM_CLOSE window-closing contract, and `start`/`spawn`
+remain Python launcher operations.
 
 ## Container, not loop (owner decision, 16 Oct 2026; NGH-025)
 
@@ -514,7 +527,8 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 
 | Piece | Role | Where |
 |---|---|---|
-| `nightshift_shifts.py` | the launcher: `start` (`--no-worktree` supported by NGH-040), `status`, `down` (`--close` default, explicit `--hold`), `spawn` (NGH-025), `land` (NGH-040), `cleaner`, `warden`, `gaffer` and `floor.json` (NGH-035), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), `log` (the shift bus, NGH-026) | this repo |
+| `nightshift_shifts.py` | the launcher/oracle: `start` (`--no-worktree` supported by NGH-040), `status`, `down` (`--close` default, explicit `--hold`), `spawn` (NGH-025), `land` (NGH-040), `cleaner`, `warden`, `gaffer` and `floor.json` (NGH-035), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), and `log` (the shift bus, NGH-026) | this repo |
+| `cmd/nightshift` | standalone Go CLI: `status`, `claims`, `inbox`, `log`, `claim/release`, `msg/inbox/ack`, `build`, and native `land`, `down`, `cleaner` lifecycle operations with handover reporting | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`; copilot also `none`\|`minimal`\|`max`), `context` (`default`\|`long_context`, copilot only), `account` (`1`\|`2`), `permissions` (`skip`\|`auto`\|`default`) and the top-level `max_credits` (the shift's Copilot credit budget, split evenly across the Copilot panes), pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
 | `personas/*.yaml` | each role's persona (identity, what good looks like, how you work, never), rendered above the brief (NGH-032) | this repo |
@@ -980,7 +994,7 @@ with **Foreman-driven landing (`nightshift land`)**:
 | `down` with handover; `resume` re-dispatches acked-but-unfinished work | `down`/handover, loop retries with handover carry-over, `resume` after reboot | matches |
 | Advisors as bounded consultants; later Tester/Reviewer/DevOps/Controller | Tester (NGH-024) and a dormant Fable Advisor that only Foreman may consult (NGH-027) built into the default crew; out-of-shift floor CLI roles `cleaner`, `warden`, `gaffer` built (NGH-035) | matches / extended |
 | Second coder, heterogeneous CLIs later | Apprentice in slot 5 (NGH-029), Codex crew (NGH-033), Copilot crew (NGH-037/NGH-039) | built |
-| "Portable package", CLI language open | Python launcher plus the standalone Go views and native in-shift claim/release/msg/ack/build writes; start/spawn/down/land remain Python | NGH-021 Increment 2 built |
+| "Portable package", CLI language open | Python launcher plus the standalone Go views, native in-shift claim/release/msg/ack/build writes, and native `land`/`down`/`cleaner` lifecycle commands with lifecycle-report helpers; `start`/`spawn` remain launcher operations | NGH-021 Increment 2 and Increment 3 built |
 | — (not in the design) | loop, result ladder, crew manifest, opt-in Mailkeep notification, denial capture | additions |
 | — (owner, 16 Oct) | container with slot grid (2x4/1x4), `slots/`, `spawn`, Foreman-owned `down --close/--hold` (close default), launcher exits; loop optional | NGH-025, built |
 | — (owner, 16 Oct) | `C:\nightshift\` state root, `floor.json`, and `nightshift cleaner / warden / gaffer` CLI subcommands | NGH-035, built |

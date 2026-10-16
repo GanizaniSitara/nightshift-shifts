@@ -151,6 +151,8 @@ func objectNumber(o object, key string) (json.Number, bool) {
 		return json.Number(strconv.FormatFloat(n, 'g', -1, 64)), true
 	case int:
 		return json.Number(strconv.Itoa(n)), true
+	case int64:
+		return json.Number(strconv.FormatInt(n, 10)), true
 	}
 	return "", false
 }
@@ -937,6 +939,10 @@ func mutexName(path string) (string, error) {
 }
 
 func withMailboxMutex(path string, fn func() error) error {
+	return withMailboxMutexTimeout(path, 10000, fn)
+}
+
+func withMailboxMutexTimeout(path string, timeout uint32, fn func() error) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	nameText, err := mutexName(path)
@@ -955,13 +961,13 @@ func withMailboxMutex(path string, fn func() error) error {
 		return err
 	}
 	defer windows.CloseHandle(h)
-	outcome, err := windows.WaitForSingleObject(h, 10000)
+	outcome, err := windows.WaitForSingleObject(h, timeout)
 	if err != nil {
 		return err
 	}
 	if outcome != windows.WAIT_OBJECT_0 && outcome != windows.WAIT_ABANDONED {
 		if outcome == 258 {
-			return fmt.Errorf("mailbox %s is still held after 10s", path)
+			return fmt.Errorf("mailbox %s is still held after %gs", path, float64(timeout)/1000)
 		}
 		return fmt.Errorf("mailbox mutex wait failed: %d", outcome)
 	}
@@ -1828,6 +1834,12 @@ func main() {
 		code = ackCommand(os.Args[2:])
 	case "build":
 		code = buildCommand(os.Args[2:])
+	case "land":
+		code = landCommand(os.Args[2:])
+	case "down":
+		code = downCommand(os.Args[2:])
+	case "cleaner":
+		code = cleanerCommand(os.Args[2:])
 	case "inbox":
 		code = inboxCommand(os.Args[2:])
 	case "log":
