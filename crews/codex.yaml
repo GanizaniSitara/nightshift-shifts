@@ -1,11 +1,11 @@
 # Five-role Codex crew in the 2x4 container (slots 1..5 crew, slots 6..8 empty for `nightshift spawn`):
-# Foreman (Sol 6.1), Advisor (Astra 6 xhigh, dormant), Coder (Sol 6.1), Tester (Sol 6.1); every Sol role at medium reasoning (owner, 16 Oct: not high), Apprentice (Luna 5.6 xhigh).
+# Foreman (Sol 6.1), Advisor (Astra 6, dormant), Coder (Sol 6.1), Tester (Sol 6.1), Apprentice (Luna 5.6); every model on high reasoning (owner, 16 Oct).
 name: codex
 model: gpt-6.1-sol
 layout: 2x4
 roles:
-  - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: codex, model: gpt-6.1-sol, reasoning: medium}
-  - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: codex, model: gpt-6-astra, reasoning: xhigh}
-  - {role: Coder, brief: coder-cli.md, colour: green, tool: codex, model: gpt-6.1-sol, reasoning: medium}
-  - {role: Tester, brief: tester-cli.md, colour: blue, tool: codex, model: gpt-6.1-sol, reasoning: medium}
-  - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: codex, model: gpt-5.6-luna, reasoning: xhigh}
+  - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: codex, model: gpt-6.1-sol, reasoning: high}
+  - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: codex, model: gpt-6-astra, reasoning: high}
+  - {role: Coder, brief: coder-cli.md, colour: green, tool: codex, model: gpt-6.1-sol, reasoning: high}
+  - {role: Tester, brief: tester-cli.md, colour: blue, tool: codex, model: gpt-6.1-sol, reasoning: high}
+  - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: codex, model: gpt-5.6-luna, reasoning: high}
