@@ -166,6 +166,7 @@ As built (NGH-027):
 | `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--hold`/`--close`), `spawn` (NGH-025), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), `log` (the shift bus, NGH-026) | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`), `account` (`1`\|`2`) and `permissions` (`skip`\|`auto`\|`default`), pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
+| `personas/*.yaml` | each role's persona (identity, what good looks like, how you work, never), rendered above the brief (NGH-032) | this repo |
 | shift folder | `C:\Data\nightshift\shifts\<shift>\` — the source of truth for one shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | `C:\Tools\tasks-cli.exe` |
 | agents-cli | universal console driver for any agent TUI: peek a pane, inject a line, press a key, name/wait on a session | `C:\Tools\agents-cli` |
@@ -303,6 +304,23 @@ No per-role Codex syntax-theme override is required.
 The launcher extracts a literal `Ticket <ID>:` header from the first line of the prompt or UTF-8
 prompt file, with `<ID>` matching `TICKET_RE`. Extraction precedes the continuation handover append.
 It writes the ID to `ticket.txt` and uses it for the common `<ticket> shift` title.
+
+## Personas above the protocol (NGH-032)
+
+Each role's persona lives in `personas/<role>.yaml` (`role`, `identity`, `good_looks_like`,
+`how_you_work`, `never`). `role_brief` renders it first, as markdown: a `# <Role>` heading, the
+identity paragraph, then "What good looks like", "How you work" and "What you never do" as bullet
+lists, then `---` and a `# Protocol` heading, followed by `common.md` and the role's brief. The
+placeholders (`{identity}`, `{shift}`, `{nightshift}`, ...) are filled across the whole text. Every
+CLI (claude, agy, codex, copilot) gets this text, because `--start` builds all of them from `role_brief`.
+
+A manifest role may name its file with `persona:` (relative to `personas/`, as `brief:` is to
+`briefs/`); without the key a role gets `personas/<role lower>.yaml` when that file exists, and a
+custom role with neither gets no persona block. `load_crew` refuses a named persona that is missing
+or not a YAML mapping. The persona is carried on each member in `crew.json`; a shift whose
+`crew.json` predates it falls back to the default lookup. `spawn` of a label that is not a role
+(`Coder2`, `Helper`, `Advisor2`) gets `<label>.yaml` if it exists, else `coder.yaml`, matching its
+`coder.md` brief fallback.
 
 ## The shift folder is the source of truth
 

@@ -72,6 +72,7 @@ SUITE_PYTHON = 'C:/miniconda3/envs/python312/python.exe'
 REPO_DIR = Path(__file__).resolve().parent                 # C:/git/nightshift-shifts
 SUITE_TESTS = str(REPO_DIR / 'test_nightshift_shifts.py')  # run by `down` for the handover
 BRIEFS_DIR = REPO_DIR / 'briefs'                           # common.md, foreman.md, coder.md, tester.md
+PERSONAS_DIR = REPO_DIR / 'personas'                       # <role>.yaml: identity, good_looks_like, how_you_work, never
 CREWS_DIR = REPO_DIR / 'crews'                             # <crew>.yaml manifests; default.yaml
 START_PERMISSION_MODE = 'auto'  # owner decision 2026-10-15: auto (classifier-guarded), not manual or bypass
 START_MESSAGES = {'Foreman': 'Begin the assignment: the task text is at the end of your role instructions, after '
@@ -168,6 +169,15 @@ def load_crew(name='default'):
             raise SystemExit(f'crew {name}: role {role} is listed twice; use count: instead')
         if not (BRIEFS_DIR / brief).is_file():
             raise SystemExit(f'crew {name}: brief {brief} for {role} is not in {BRIEFS_DIR}')
+        # persona: names a file in personas/; without the key a role gets personas/<role>.yaml when it exists
+        persona = str(entry['persona']) if entry.get('persona') else default_persona(role)
+        if entry.get('persona'):
+            try:
+                persona_data = yaml.safe_load((PERSONAS_DIR / persona).read_text(encoding='utf-8'))
+            except (OSError, yaml.YAMLError):
+                persona_data = None
+            if not isinstance(persona_data, dict):
+                raise SystemExit(f'crew {name}: persona {persona} for {role} is not a YAML mapping in {PERSONAS_DIR}')
         count = entry.get('count', 1)
         if type(count) is not int or count < 1:
             raise SystemExit(f'crew {name}: count for {role} must be a whole number >= 1, not {count!r}')
@@ -175,7 +185,7 @@ def load_crew(name='default'):
         tool = str(entry.get('tool') or 'claude')
         if tool not in TOOLS:
             raise SystemExit(f'crew {name}: tool {tool!r} for {role} is not supported; use one of: {", ".join(TOOLS)}')
-        role_dict = {'role': role, 'brief': brief, 'count': count, 'human_contact': human,
+        role_dict = {'role': role, 'brief': brief, 'persona': persona, 'count': count, 'human_contact': human,
                      'colour': str(entry.get('colour') or ('red' if human else 'green')),
                      'tool': tool, 'model': str(entry.get('model') or '')}
         if entry.get('reasoning') is not None:
@@ -229,6 +239,7 @@ def crew_members(crew, shift):
             suffix = f'-{n}' if r['count'] > 1 else ''
             member = {'role': r['role'], 'label': r['role'] + suffix,
                       'identity': f"{shift}-{r['role'].lower()}{suffix}", 'brief': r['brief'],
+                      'persona': r.get('persona'),
                       'colour': r['colour'], 'human_contact': r['human_contact'],
                       'tool': r['tool'], 'model': r['model']}
             for opt in ('reasoning', 'account', 'permissions'):
@@ -249,13 +260,35 @@ def opening_message(member):
         f"Begin your {member['role']} role: send READY to Foreman and await assignments."
 
 
-def role_brief(role, identity, peer_name, state_dir='', brief=None):
-    """Crew instructions: BRIEFS_DIR/common.md + the role's brief file (default <role>.md), with
+def default_persona(role):
+    """personas/<role lower>.yaml when that file exists, else None (a custom role without one gets no persona)."""
+    name = f'{role.lower()}.yaml'
+    return name if (PERSONAS_DIR / name).is_file() else None
+
+
+def persona_text(role, persona):
+    """The persona file PERSONAS_DIR/<persona> as markdown: a heading naming the role, the identity paragraph,
+    then What good looks like / How you work / What you never do as bullet lists, closed by a Protocol heading."""
+    data = yaml.safe_load((PERSONAS_DIR / persona).read_text(encoding='utf-8')) or {}
+    text = f'# {role}\n\n' + str(data.get('identity') or '').strip() + '\n\n'
+    for key, heading in (('good_looks_like', 'What good looks like'), ('how_you_work', 'How you work'),
+                         ('never', 'What you never do')):
+        items = data.get(key) or []
+        if items:
+            text += f'## {heading}\n\n' + ''.join(f'- {str(i).strip()}\n' for i in items) + '\n'
+    return text + '---\n\n# Protocol\n\n'
+
+
+def role_brief(role, identity, peer_name, state_dir='', brief=None, persona=None):
+    """Crew instructions: the role's persona (PERSONAS_DIR/<persona>, default <role>.yaml when it exists; none
+    otherwise) rendered first, then BRIEFS_DIR/common.md + the role's brief file (default <role>.md), with
     {role}/{identity}/{peer_name}/{state_dir}/{shift} filled in ({shift} is the state folder's name, '' without one).
+    Every CLI (claude, agy, codex, copilot) gets its brief from here.
 
     Edit those files to change how a crew behaves; nothing here needs touching.
     """
-    text = ''
+    persona = persona or default_persona(role)
+    text = persona_text(role, persona) if persona else ''
     for name in ('common.md', brief or role.lower() + '.md'):
         text += (BRIEFS_DIR / name).read_text(encoding='utf-8').strip() + '\n\n'
     shift = Path(state_dir).name if state_dir else ''
@@ -618,7 +651,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             # a role's own permissions: (skip | auto | default) wins over the crew-level permission_mode
             permission_mode = member.get('permissions') or permission_mode or START_PERMISSION_MODE
             first_message = opening_message(member)
-            brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'])
+            brief = role_brief(member['role'], identity, peer_name, state_dir, member['brief'], member.get('persona'))
             if member['human_contact']:
                 brief += Path(state_dir, 'prompt.txt').read_text(encoding='utf-8')
         if tool == 'agy':
@@ -1498,6 +1531,8 @@ def spawn(argv):
         model = (saved.get('model') or MODEL) if tool == 'claude' else DEFAULT_TOOL_MODELS[tool]
     member = {'role': same_role['role'] if same_role else role, 'label': role, 'identity': f'{shift}-{role.lower()}',
               'brief': f'{role.lower()}.md' if (BRIEFS_DIR / f'{role.lower()}.md').is_file() else 'coder.md',
+              # like the brief: the role's own persona, else the Coder's (a new label such as Coder2 is a coder)
+              'persona': default_persona(same_role['role'] if same_role else role) or default_persona('Coder'),
               'colour': same_role['colour'] if same_role else 'yellow', 'human_contact': False, 'tool': tool,
               'model': model, 'peer': lead['identity']}
     if not existing:
@@ -1510,7 +1545,7 @@ def spawn(argv):
         manifest_role = next((r for r in manifest_roles if r['role'].lower() == role.lower()), None)
         if manifest_role:
             member.update(role=manifest_role['role'], label=manifest_role['role'], brief=manifest_role['brief'],
-                          colour=manifest_role['colour'])
+                          persona=manifest_role.get('persona'), colour=manifest_role['colour'])
             if manifest_role['tool'] == tool:
                 member['model'] = manifest_role['model']
                 for opt in ('reasoning', 'account', 'permissions'):
@@ -1520,7 +1555,8 @@ def spawn(argv):
         # a gone member is restarted with its own role, label, identity, brief, colour and (on the same tool) model
         member.update(role=existing.get('role', existing['label']), label=existing['label'],
                       identity=existing.get('identity', f"{shift}-{existing['label'].lower()}"),
-                      brief=existing.get('brief', member['brief']), colour=existing.get('colour', member['colour']))
+                      brief=existing.get('brief', member['brief']), persona=existing.get('persona', member['persona']),
+                      colour=existing.get('colour', member['colour']))
         if tool == existing.get('tool', 'claude') and existing.get('model'):
             member['model'] = existing['model']
             for opt in ('reasoning', 'account', 'permissions'):
@@ -1529,7 +1565,8 @@ def spawn(argv):
     if crew_role:
         # --crew NAME wins over the shift's manifest and the gone member's record; the model, reasoning and account
         # only when the spawned tool is the one NAME gives the role (an explicit --cli falls back as above)
-        member.update(role=crew_role['role'], brief=crew_role['brief'], colour=crew_role['colour'])
+        member.update(role=crew_role['role'], brief=crew_role['brief'], persona=crew_role.get('persona'),
+                      colour=crew_role['colour'])
         if not existing:
             member['label'] = crew_role['role']
         for opt in ('reasoning', 'account', 'permissions'):

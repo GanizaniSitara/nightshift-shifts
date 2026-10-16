@@ -147,15 +147,15 @@ def test_default_manifest_is_foreman_advisor_coder_tester_apprentice():
     crew = launcher.load_crew()
     assert crew == {'name': 'default', 'model': 'claude-opus-5-5', 'permission_mode': 'auto',
                     'contract': 'result.json', 'layout': '2x4', 'slots': 8, 'roles': [
-                        {'role': 'Foreman', 'brief': 'foreman.md', 'count': 1, 'human_contact': True, 'colour': 'red',
+                        {'role': 'Foreman', 'brief': 'foreman.md', 'persona': 'foreman.yaml', 'count': 1, 'human_contact': True, 'colour': 'red',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
-                        {'role': 'Advisor', 'brief': 'advisor.md', 'count': 1, 'human_contact': False,
+                        {'role': 'Advisor', 'brief': 'advisor.md', 'persona': 'advisor.yaml', 'count': 1, 'human_contact': False,
                          'colour': 'purple', 'tool': 'claude', 'model': 'claude-fable-5-1'},
-                        {'role': 'Coder', 'brief': 'coder.md', 'count': 1, 'human_contact': False, 'colour': 'green',
+                        {'role': 'Coder', 'brief': 'coder.md', 'persona': 'coder.yaml', 'count': 1, 'human_contact': False, 'colour': 'green',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
-                        {'role': 'Tester', 'brief': 'tester.md', 'count': 1, 'human_contact': False, 'colour': 'blue',
+                        {'role': 'Tester', 'brief': 'tester.md', 'persona': 'tester.yaml', 'count': 1, 'human_contact': False, 'colour': 'blue',
                          'tool': 'claude', 'model': 'claude-opus-5-5'},
-                        {'role': 'Apprentice', 'brief': 'apprentice.md', 'count': 1, 'human_contact': False,
+                        {'role': 'Apprentice', 'brief': 'apprentice.md', 'persona': 'apprentice.yaml', 'count': 1, 'human_contact': False,
                          'colour': 'yellow', 'tool': 'agy', 'model': 'gemini-3.8-flash-high', 'permissions': 'skip'}]}
     members = launcher.crew_members(crew, 'S')
     assert [(m['label'], m['identity'], m['peer']) for m in members] == [
@@ -219,6 +219,146 @@ def test_missing_crew_names_the_available_ones(monkeypatch, tmp_path):
     _crew_file(monkeypatch, tmp_path, 'trio', TRIO)
     with pytest.raises(SystemExit, match='available crews: trio'):
         launcher.load_crew('ghost')
+
+
+# ── personas above the protocol (NGH-032) ────────────────────────────────────
+
+def test_every_default_role_brief_starts_with_its_persona():
+    """The persona's identity comes before common.md; placeholders are filled across the whole text."""
+    import yaml
+    common = 'in a Nightshift crew.'   # common.md's opening line, after {role} is filled
+    members = launcher.crew_members(launcher.load_crew(), 'Nightshift-shift-abc')
+    for m in members:
+        persona = yaml.safe_load((launcher.PERSONAS_DIR / m['persona']).read_text(encoding='utf-8'))
+        identity = ' '.join(persona['identity'].split())
+        brief = launcher.role_brief(m['role'], m['identity'], m['peer'], 'C:/x/Nightshift-shift-abc', m['brief'],
+                                    m['persona'])
+        assert brief.startswith(f"# {m['role']}\n"), m['role']
+        assert identity in ' '.join(brief.split()), m['role']
+        assert brief.index('## What good looks like') < brief.index('## How you work') < \
+            brief.index('## What you never do') < brief.index('# Protocol') < brief.index(common), m['role']
+        for placeholder in ('{identity}', '{shift}', '{nightshift}', '{role}', '{peer_name}', '{state_dir}'):
+            assert placeholder not in brief, (m['role'], placeholder)
+        assert m['identity'] in brief and 'Nightshift-shift-abc' in brief
+
+
+def test_advisor_persona_names_the_search_order():
+    advisor = ' '.join(launcher.role_brief('Advisor', 'S-advisor', 'S-foreman', 'C:/x/S', 'advisor.md').split())
+    order = [advisor.index(s) for s in ('tasks-cli', 'memory store_search', 'confluence-cli', 'the web')]
+    assert order == sorted(order) and order[-1] < advisor.index('# Protocol')
+
+
+def _persona_dir(monkeypatch, tmp_path, files):
+    personas = tmp_path / 'personas'
+    personas.mkdir()
+    for name, text in files.items():
+        (personas / name).write_text(text, encoding='utf-8')
+    monkeypatch.setattr(launcher, 'PERSONAS_DIR', personas)
+
+
+PERSONA_CREW = ('roles:\n  - {role: Foreman, brief: foreman.md, human_contact: true}\n'
+                '  - {role: Coder, brief: coder.md, persona: %s}\n')
+
+
+def test_manifest_persona_key_overrides_the_default(monkeypatch, tmp_path):
+    _persona_dir(monkeypatch, tmp_path, {'coder.yaml': 'identity: plain coder\n',
+                                         'careful.yaml': 'identity: careful {identity}\nnever: [guess]\n'})
+    _crew_file(monkeypatch, tmp_path, 'p', PERSONA_CREW % 'careful.yaml')
+    coder = launcher.crew_members(launcher.load_crew('p'), 'S')[1]
+    assert coder['persona'] == 'careful.yaml'
+    brief = launcher.role_brief('Coder', coder['identity'], coder['peer'], '', coder['brief'], coder['persona'])
+    assert brief.startswith('# Coder\n\ncareful S-coder\n') and '- guess' in brief and 'plain coder' not in brief
+
+
+@pytest.mark.parametrize('files, message', [({}, 'persona ghost.yaml for Coder'),
+                                            ({'ghost.yaml': '- a list\n'}, 'not a YAML mapping')])
+def test_load_crew_refuses_a_missing_or_unusable_persona(monkeypatch, tmp_path, files, message):
+    _persona_dir(monkeypatch, tmp_path, files)
+    _crew_file(monkeypatch, tmp_path, 'p', PERSONA_CREW % 'ghost.yaml')
+    with pytest.raises(SystemExit, match=message):
+        launcher.load_crew('p')
+
+
+def test_role_without_a_persona_file_still_renders(monkeypatch, tmp_path):
+    _crew_file(monkeypatch, tmp_path, 'rev', 'roles:\n  - {role: Foreman, brief: foreman.md, human_contact: true}\n'
+                                             '  - {role: Reviewer, brief: coder.md}\n')
+    reviewer = launcher.crew_members(launcher.load_crew('rev'), 'S')[1]
+    assert reviewer['persona'] is None
+    brief = launcher.role_brief('Reviewer', 'S-reviewer', 'S-foreman', '', 'coder.md', reviewer['persona'])
+    assert '# Protocol' not in brief and brief.startswith('You are Reviewer in a Nightshift crew.')
+
+
+def test_committed_personas_have_every_section_as_text_and_lists_of_text():
+    """persona_text iterates the list keys: a bare string there would render one bullet per character."""
+    import yaml
+    files = sorted(launcher.PERSONAS_DIR.glob('*.yaml'))
+    assert {p.stem for p in files} >= {'foreman', 'advisor', 'coder', 'tester', 'apprentice'}
+    for path in files:
+        data = yaml.safe_load(path.read_text(encoding='utf-8'))
+        assert isinstance(data, dict) and isinstance(data.get('identity'), str) and data['identity'].strip(), path
+        for key in ('good_looks_like', 'how_you_work', 'never'):
+            assert isinstance(data.get(key), list) and data[key], (path, key)
+            assert all(isinstance(i, str) and i.strip() for i in data[key]), (path, key)
+
+
+@pytest.mark.parametrize('crew', sorted(p.stem for p in launcher.CREWS_DIR.glob('*.yaml')))
+def test_every_shipped_crew_loads_and_renders_its_personas(crew):
+    """Not only default.yaml: every manifest still loads, and each persona-bearing role's brief opens with it."""
+    for m in launcher.crew_members(launcher.load_crew(crew), 'Nightshift-shift-abc'):
+        brief = launcher.role_brief(m['role'], m['identity'], m['peer'], 'C:/x/Nightshift-shift-abc', m['brief'],
+                                    m['persona'])
+        assert not any(p in brief for p in ('{role}', '{identity}', '{peer_name}', '{state_dir}', '{shift}',
+                                            '{nightshift}')), (crew, m['label'])
+        if m['persona']:
+            assert brief.startswith(f"# {m['role']}\n") and '\n# Protocol\n' in brief, (crew, m['label'])
+
+
+@pytest.mark.parametrize('persona', ['team/careful.yaml', 'team\\careful.yaml'])
+def test_manifest_persona_in_a_subfolder_with_either_slash(monkeypatch, tmp_path, persona):
+    _persona_dir(monkeypatch, tmp_path, {})
+    (tmp_path / 'personas' / 'team').mkdir()
+    (tmp_path / 'personas' / 'team' / 'careful.yaml').write_text('identity: careful one\n', encoding='utf-8')
+    _crew_file(monkeypatch, tmp_path, 'p', PERSONA_CREW % f"'{persona}'")
+    coder = launcher.crew_members(launcher.load_crew('p'), 'S')[1]
+    assert launcher.role_brief('Coder', coder['identity'], coder['peer'], '', coder['brief'],
+                               coder['persona']).startswith('# Coder\n\ncareful one\n')
+
+
+@pytest.mark.parametrize('tool, model', [('claude', 'claude-opus-5-5'), ('codex', 'gpt-5.5'),
+                                         ('agy', 'gemini-3.8-flash-high'), ('copilot', 'gpt-5.5')])
+def test_pane_start_carries_the_persona_to_every_cli_from_an_old_crew_json(monkeypatch, tmp_path, tool, model):
+    """A crew.json written before NGH-032 has no persona key: --start falls back to personas/<role>.yaml,
+    and the brief that reaches the CLI's argv (system prompt or initial prompt) opens with it."""
+    import yaml
+    shift = 'Nightshift-shift-pers0001'
+    state = tmp_path / shift
+    state.mkdir()
+    (state / 'prompt.txt').write_text('THE TASK', encoding='utf-8')
+    members = [_member(shift, 'Foreman', human=True, colour='red', peer=f'{shift}-tester'),
+               _member(shift, 'Tester', colour='blue', tool=tool, model=model)]
+    assert all('persona' not in m for m in members)
+    (state / 'crew.json').write_text(json.dumps({'crew': 'default', 'members': members, 'slots': 2,
+                                                 'permission_mode': 'auto'}), encoding='utf-8')
+    seen = {}
+
+    class Child:
+        pid = 91
+
+        def wait(self):
+            return 0
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: None)
+    for name in ('accept_trust_prompt', 'set_role_colour', 'register_name', 'set_codex_role_name',
+                 'set_pane_background'):
+        monkeypatch.setattr(launcher, name, lambda *a, **k: None)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane('Tester', str(state), start=True, cwd=str(tmp_path))
+    identity = ' '.join(yaml.safe_load((launcher.PERSONAS_DIR / 'tester.yaml').read_text(encoding='utf-8'))
+                        ['identity'].split())
+    carrier = [a for a in seen['cmd'] if '# Protocol' in a]
+    assert len(carrier) == 1, tool
+    assert carrier[0].startswith('# Tester\n') and identity in ' '.join(carrier[0].split()), tool
+    assert f'{shift}-tester' in carrier[0] and '{identity}' not in carrier[0], tool
 
 
 # ── wt layout for 2-8 panes ───────────────────────────────────────────────────
@@ -2816,6 +2956,7 @@ def test_spawn_takes_the_first_free_slot(tmp_path, injected, capsys):
     assert out['slot'] == 4 and injected[0][3] == '2504'
     helper = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
     assert helper['brief'] == 'coder.md' and helper['colour'] == 'yellow'   # not a manifest role, no helper.md
+    assert helper['persona'] == 'coder.yaml'   # NGH-032: like the brief, no helper.yaml falls back to the Coder's
 
 
 @pytest.mark.usefixtures('_container_isolated')
@@ -2825,6 +2966,7 @@ def test_spawn_gemini_runs_agy(tmp_path, injected, capsys):
     assert json.loads(capsys.readouterr().out)['tool'] == 'agy'
     member = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
     assert member['tool'] == 'agy' and member['model'] == launcher.AGY_MODEL
+    assert member['brief'] == 'coder.md' and member['persona'] == 'coder.yaml'
 
 
 @pytest.mark.usefixtures('_container_isolated')
@@ -2953,6 +3095,8 @@ def test_spawn_takes_a_dead_members_slot_before_a_higher_empty_one(tmp_path, inj
     launcher.spawn([CONT_SHIFT, '--role', 'Advisor'])
     assert json.loads(capsys.readouterr().out)['slot'] == 2 and injected[0][3] == '2502'
     assert launcher.read_slot(d, 2)['role'] == 'Advisor' and launcher.read_slot(d, 4)['role'] is None
+    advisor = json.loads((d / 'crew.json').read_text(encoding='utf-8'))['members'][-1]
+    assert advisor['persona'] == 'advisor.yaml'
 
 
 @pytest.mark.usefixtures('_container_isolated')
