@@ -814,7 +814,8 @@ def test_pane_start_agy_coder_runs_agy_and_registers_its_name(monkeypatch, tmp_p
     monkeypatch.setattr('builtins.input', lambda *a: '')
     launcher.pane('Coder', str(state), start=True, cwd=str(tmp_path), crew='gemini-coder')
     s = 'Nightshift-shift-agy00001'
-    brief = launcher.role_brief('Coder', f'{s}-coder', f'{s}-foreman', str(state), 'coder-agy.md')
+    brief = launcher.role_brief('Coder', f'{s}-coder', f'{s}-foreman', str(state), 'coder-agy.md',
+                                cwd=str(tmp_path))
     assert seen['cmd'] == launcher.agy_command('gemini-3.8-flash-high', brief, launcher.START_MESSAGES['Coder'])
     assert seen['cwd'] == str(tmp_path) and 'CLAUDECODE' not in seen['env'] and seen['env']['FORCE_COLOR'] == '3'
     assert seen['runs'] == [['agents-cli', 'name', '77', f'{s}-coder']] and seen['trust'] == 'agy'
@@ -4112,9 +4113,9 @@ def test_default_crew_leaves_three_empty_slots():
     assert crew['slots'] - sum(r['count'] for r in crew['roles']) == 3
 
 
-def test_apprentice_brief_fills_every_placeholder_and_relays_the_verdict():
-    brief = launcher.role_brief('Apprentice', 'S-apprentice', 'S-foreman', 'C:/nightshift/shifts/S',
-                                'apprentice.md')
+def test_apprentice_brief_fills_every_placeholder_and_relays_the_verdict(tmp_path):
+    brief = launcher.role_brief('Apprentice', 'S-apprentice', 'S-foreman', tmp_path / 'S',
+                                'apprentice.md', cwd=tmp_path)
     assert 'S-apprentice' in brief and 'S-foreman' in brief and ' S ' in brief
     assert launcher.SUITE_PYTHON in brief and '{' not in brief and '}' not in brief
     assert 'TESTED-FAIL' in brief and brief.rstrip().endswith('on its own line.')
