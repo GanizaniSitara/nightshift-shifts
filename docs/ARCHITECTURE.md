@@ -347,8 +347,10 @@ As built (NGH-027):
 - Every `start` pane, crew panes and empty container slots alike, is titled `<ticket or shift> shift`:
   `NGH-025 shift`; a free-text shift uses its shift name (`Nightshift-shift-1a2b3c4d shift`). So the
   window reads the same whichever pane has focus. `--suppressApplicationTitle` keeps the CLI from
-  overwriting it. One helper (`pane_title`) builds it for `wt_command` and the dry-run plan
-  (`roles` and `slots`). Before NGH-028 panes were `<ticket or shift> <Role>` and empty slots
+  overwriting it. Copilot needs `COPILOT_DISABLE_TERMINAL_TITLE=1` because
+  `--suppressApplicationTitle` alone does not hold. One helper (`pane_title`) builds it for
+  `wt_command` and the dry-run plan (`roles` and `slots`). Before NGH-028 panes were
+  `<ticket or shift> <Role>` and empty slots
   `<ticket or shift> slot N`.
 - The legacy trial modes keep `Nightshift | <Role> | <trial>`.
 - `loop` sets its own console title to `Nightshift <first>..<last>` (`Nightshift NGH-019` for one
@@ -375,6 +377,22 @@ No per-role Codex syntax-theme override is required.
 The launcher extracts a literal `Ticket <ID>:` header from the first line of the prompt or UTF-8
 prompt file, with `<ID>` matching `TICKET_RE`. Extraction precedes the continuation handover append.
 It writes the ID to `ticket.txt` and uses it for the common `<ticket> shift` title.
+
+## Copilot identity, colour and terminal setup (NGH-039)
+
+- `copilot_command` passes `--name '<pane label> (<identity>)'` so the role is the Copilot session
+  name, the same idea as Codex `/rename`. No `/rename` injection for Copilot.
+- `crew_env` sets `COPILOT_DISABLE_TERMINAL_TITLE=1` for Copilot only. Copilot's
+  `updateTerminalTitle` retitles the pane to `"<task> - GitHub Copilot"`, which beats
+  `--suppressApplicationTitle`. The env var is the documented opt-out and keeps the
+  `'<ticket> shift'` title.
+- Copilot asks once per terminal it detects as VS Code, Cursor or Windsurf (remembered in
+  asked_setup_terminals); its check returns early when COPILOT_SETUP_TERMINAL is the string false,
+  before any terminal detection, so crew_env sets it for Copilot panes and no pane waits on the
+  prompt; Nightshift writes no Shift+Enter binding.
+- Copilot panes get the same per-role Windows Terminal scheme (Nightshift `<colour>`) and the
+  same OSC 11 background tint as Codex panes, including the Campbell restore on exit. Claude
+  and agy stay on Campbell.
 
 ## Personas above the protocol (NGH-032)
 

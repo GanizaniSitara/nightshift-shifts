@@ -361,9 +361,11 @@ def crew_env(environ, tool='claude', account=None):
         if account == 2:
             env['CODEX_HOME'] = str(Path.home() / '.codex-second')
     if tool == 'copilot':
-        # Copilot retitles its pane after the session ("<task> - GitHub Copilot"), which beats
+        # Copilot retitles the pane after the session ("<task> - GitHub Copilot"), which beats
         # --suppressApplicationTitle; this documented opt-out keeps the '<ticket> shift' title (NGH-039).
         env['COPILOT_DISABLE_TERMINAL_TITLE'] = '1'
+        # The startup "Set up terminal for multi-line input" prompt must never block a pane.
+        env['COPILOT_SETUP_TERMINAL'] = 'false'
     return env
 
 
@@ -398,7 +400,7 @@ def codex_command(model, brief, first_message, reasoning=None, permissions=None)
     return cmd + [brief + '\n\n' + first_message]
 
 
-def copilot_command(model, brief, first_message, permissions=None, reasoning=None, context=None):
+def copilot_command(model, brief, first_message, permissions=None, reasoning=None, context=None, session_name=None):
     """argv for a Copilot CLI crew member: tools per `permissions`, no auto-update, optional reasoning effort and
     context tier, interactive initial prompt."""
     cmd = [str(COPILOT_EXE), *permission_flags('copilot', permissions), '--no-auto-update', '--model', model]
@@ -406,16 +408,20 @@ def copilot_command(model, brief, first_message, permissions=None, reasoning=Non
         cmd += ['--reasoning-effort', reasoning]
     if context:
         cmd += ['--context', context]
+    if session_name is not None:
+        cmd += ['--name', session_name]
     return cmd + ['-i', brief + '\n\n' + first_message]
 
 
-def tool_command(tool, model, brief, first_message, permissions=None, reasoning=None, context=None):
+def tool_command(tool, model, brief, first_message, permissions=None, reasoning=None, context=None,
+                 session_name=None):
     """argv for a non-Claude crew member (agy, codex or copilot), as pane() runs it and start --dry-run shows it."""
     if tool == 'agy':
         return agy_command(model, brief, first_message, permissions=permissions)
     if tool == 'codex':
         return codex_command(model, brief, first_message, reasoning=reasoning, permissions=permissions)
-    return copilot_command(model, brief, first_message, permissions=permissions, reasoning=reasoning, context=context)
+    return copilot_command(model, brief, first_message, permissions=permissions, reasoning=reasoning, context=context,
+                           session_name=session_name)
 
 
 def register_name(pid, identity):
@@ -720,7 +726,9 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             if member['human_contact']:
                 brief += Path(state_dir, 'prompt.txt').read_text(encoding='utf-8')
         if tool in TOOL_EXES:
-            command = tool_command(tool, model, brief, first_message, permission_mode, reasoning, context)
+            session_name = f'{role} ({identity})'
+            command = tool_command(tool, model, brief, first_message, permission_mode, reasoning, context,
+                                   session_name=session_name)
         else:
             exe = Path('C:/nvm4w/nodejs/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
             command = [str(exe), '--name', identity, '--model', model,
@@ -732,7 +740,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
             command.append(first_message)
         env = crew_env(os.environ) if tool == 'claude' and not account else crew_env(os.environ, tool=tool, account=account)
         set_pane_background(ROLE_BACKGROUNDS.get(colour, CAMPBELL_BACKGROUND)
-                            if tool == 'codex' else CAMPBELL_BACKGROUND)
+                            if tool in ('codex', 'copilot') else CAMPBELL_BACKGROUND)
         try:
             child = subprocess.Popen(command, cwd=cwd, env=env)
             record = {'pid': child.pid, 'wrapper_pid': os.getpid(), 'role': role, 'started': time.time(),
@@ -764,7 +772,7 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                 set_role_colour(child, colour, cwd)
             code = child.wait()
         finally:
-            if tool == 'codex':
+            if tool in ('codex', 'copilot'):
                 set_pane_background(CAMPBELL_BACKGROUND)
         print(f'{role} exited with code {code}.')
         if start and slot:
@@ -1156,7 +1164,7 @@ def start(argv):
     labels = [m['label'] for m in members]
     command = wt_command(name, state_dir, agents=True, mode_flag='--start', cwd=cwd, members=labels, crew=crew['name'],
                          ticket=ticket, slots=crew['slots'],
-                         codex_colours={m['label']: m['colour'] for m in members if m['tool'] == 'codex'})
+                         codex_colours={m['label']: m['colour'] for m in members if m['tool'] in ('codex', 'copilot')})
     if args.dry_run:
         plan = {
             'dry_run': True, 'shift': name, 'state_dir': str(state_dir), 'cwd': cwd, 'ticket': ticket,
@@ -1176,7 +1184,8 @@ def start(argv):
                                    # the argv pane() will run, with placeholders for the brief and opening message
                                    **({'command': tool_command(m['tool'], m['model'], '<brief>', '<first message>',
                                                                m.get('permissions') or crew['permission_mode'],
-                                                               m.get('reasoning'), m.get('context'))}
+                                                               m.get('reasoning'), m.get('context'),
+                                                               session_name=f"{m['label']} ({m['identity']})")}
                                       if m['tool'] != 'claude' else {}),
                                    'permission_flags': permission_flags(
                                        m['tool'], m.get('permissions') or crew['permission_mode'])}

@@ -865,6 +865,25 @@ def test_crew_env_drops_claude_markers_but_keeps_afk_and_forces_colour():
     assert 'NO_COLOR' not in env
     assert env['TERM'] == 'xterm-256color' and env['COLORTERM'] == 'truecolor' and env['FORCE_COLOR'] == '3'
     assert env['PATH'] == 'p'
+    assert 'COPILOT_DISABLE_TERMINAL_TITLE' not in env and 'COPILOT_SETUP_TERMINAL' not in env
+
+
+def test_crew_env_sets_copilot_title_and_setup_opt_outs_only_for_copilot():
+    """Copilot retitles the pane and can block on the multi-line setup prompt; only that tool opts out."""
+    base = {'PATH': 'p', 'TERM': 'dumb', 'NO_COLOR': '1'}
+    copilot = launcher.crew_env(base, tool='copilot')
+    assert copilot['COPILOT_DISABLE_TERMINAL_TITLE'] == '1'
+    assert copilot['COPILOT_SETUP_TERMINAL'] == 'false'
+    assert copilot['PATH'] == 'p' and 'NO_COLOR' not in copilot
+    # A parent value must not leave the prompt enabled or the title opt-out off.
+    forced = launcher.crew_env(
+        {**base, 'COPILOT_DISABLE_TERMINAL_TITLE': '0', 'COPILOT_SETUP_TERMINAL': 'true'}, tool='copilot')
+    assert forced['COPILOT_DISABLE_TERMINAL_TITLE'] == '1'
+    assert forced['COPILOT_SETUP_TERMINAL'] == 'false'
+    for kwargs in ({}, {'tool': 'claude'}, {'tool': 'codex'}, {'tool': 'agy'}):
+        env = launcher.crew_env(dict(base), **kwargs)
+        assert 'COPILOT_DISABLE_TERMINAL_TITLE' not in env
+        assert 'COPILOT_SETUP_TERMINAL' not in env
 
 
 # ── ticket -> prompt + folder ─────────────────────────────────────────────────
@@ -3660,20 +3679,29 @@ def test_role_schemes_preserve_user_settings_and_campbell_palette(monkeypatch, t
     assert json.loads(settings.read_text(encoding='utf-8')) == config
 
 
-@pytest.mark.parametrize('crew', ['codex', 'default', 'apprentice-codex', 'codex-copilot'])
+@pytest.mark.parametrize('crew', ['codex', 'default', 'apprentice-codex', 'codex-copilot', 'apprentice-gemini'])
 def test_start_selects_role_schemes_only_for_codex_members_and_no_empty_slots(monkeypatch, tmp_path, capsys, crew):
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('unexpected launch'))
     launcher.start(['--dry-run', '--cwd', str(tmp_path), '--crew', crew, 'task'])
     plan = json.loads(capsys.readouterr().out)
     members = {m['label']: m for m in launcher.crew_members(launcher.load_crew(crew), plan['shift'])}
+    assert 'codex_colours' in launcher.wt_command.__code__.co_varnames
     for cell in _cells(plan['wt_argv']):
         if '--slot' not in cell:
             continue
         member = members.get(cell[cell.index('--pane') + 1]) if '--pane' in cell else None
-        if member and member['tool'] == 'codex':
+        # Codex and Copilot start cells take a role scheme; Claude, agy and empty slots stay untinted.
+        if member and member['tool'] in ('codex', 'copilot'):
             assert cell[cell.index('--colorScheme') + 1] == 'Nightshift ' + member['colour']
         else:
             assert '--colorScheme' not in cell
+    for member in members.values():
+        command = plan['roles'][member['label']].get('command')
+        if member['tool'] == 'copilot':
+            assert command[command.index('-i') - 2:command.index('-i')] == [
+                '--name', f"{member['label']} ({member['identity']})"]
+        elif command:
+            assert '--name' not in command
 
 
 def test_wt_role_colour_mapping_uses_labels_and_does_not_tint_trial_mode():
@@ -3970,13 +3998,18 @@ def test_pane_role_background_and_reset_survive_exit_and_launch_errors(monkeypat
     else:
         launcher.pane('Coder', str(d), start=True, cwd=str(tmp_path), slot=2)
     backgrounds = [e[1] for e in events if e[0] == 'background']
-    assert backgrounds == ([launcher.ROLE_BACKGROUNDS['blue'], '#0C0C0C'] if tool == 'codex' else ['#0C0C0C'])
+    # Copilot gets the same OSC 11 tint and Campbell restore as Codex, including when launch or wait fails.
+    assert backgrounds == (
+        [launcher.ROLE_BACKGROUNDS['blue'], '#0C0C0C'] if tool in ('codex', 'copilot') else ['#0C0C0C'])
     assert events[0][0] == 'background' and events[1][0] == 'popen'
     if tool == 'codex' and failure != 'popen':
         assert ('rename', 'Coder', f'{CONT_SHIFT}-coder') in events
         assert events[-1] == ('background', '#0C0C0C')
     else:
         assert not any(e[0] == 'rename' for e in events)
+    if tool == 'copilot':
+        assert events[-1] == ('background', '#0C0C0C')
+        assert not any('/rename' in str(arg) for e in events if e[0] == 'popen' for arg in e[1])
     if tool == 'claude' and failure != 'popen':
         assert ('trust',) in events and ('colour', 'blue') in events
         command = events[1][1]
@@ -4428,17 +4461,12 @@ def test_copilot_crew_manifest_and_reasoning_and_context_constants():
     assert launcher.TOOL_REASONING_LEVELS['copilot'] == ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
     assert launcher.CONTEXT_TIERS == ('default', 'long_context')
     copilot = launcher.load_crew('copilot')
-    assert copilot['layout'] == '2x4' and copilot['slots'] == 8 and copilot['model'] == 'grok-4.7'
+    assert copilot['layout'] == '2x4' and copilot['slots'] == 8 and copilot['model'] == 'gemini-3.8-flash'
+    # Every role on Gemini 3.8 Flash (owner, 16 Oct: Grok burned half the monthly credits in 30 min).
     assert [(r['role'], r['tool'], r['model'], r.get('reasoning'), r.get('context')) for r in copilot['roles']] == [
-        ('Foreman', 'copilot', 'grok-4.7', 'max', None),
-        ('Advisor', 'copilot', 'grok-4.7', 'max', None),
-        ('Coder', 'copilot', 'gemini-3.8-flash', 'high', 'long_context'),
-        ('Tester', 'copilot', 'grok-4.7', 'max', None),
-        ('Apprentice', 'copilot', 'gemini-3.8-flash', 'high', 'long_context'),
+        (role, 'copilot', 'gemini-3.8-flash', 'high', 'long_context')
+        for role in ('Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice')
     ]
-    for r in copilot['roles']:
-        if r['role'] in ('Foreman', 'Advisor', 'Tester'):
-            assert 'context' not in r
 
 
 def test_copilot_command_supports_optional_reasoning_and_context():
@@ -4464,25 +4492,95 @@ def test_start_dry_run_copilot_crew_records_reasoning_and_context(monkeypatch, t
     plan = json.loads(capsys.readouterr().out)
     assert plan['crew'] == 'copilot'
     roles = plan['roles']
-    for label in ('Foreman', 'Advisor', 'Tester'):
-        r = roles[label]
-        assert r['tool'] == 'copilot' and r['model'] == 'grok-4.7'
-        assert r['reasoning'] == 'max'
-        assert 'context' not in r
-        cmd = r['command']
-        assert cmd[:4] == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model']
-        assert cmd[4:6] == ['grok-4.7', '--reasoning-effort']
-        assert cmd[6] == 'max'
-        assert '--context' not in cmd
-    for label in ('Coder', 'Apprentice'):
+    for label in ('Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice'):
         r = roles[label]
         assert r['tool'] == 'copilot' and r['model'] == 'gemini-3.8-flash'
         assert r['reasoning'] == 'high'
         assert r['context'] == 'long_context'
         cmd = r['command']
+        assert cmd[:4] == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model']
         assert '--model' in cmd and cmd[cmd.index('--model') + 1] == 'gemini-3.8-flash'
         assert '--reasoning-effort' in cmd and cmd[cmd.index('--reasoning-effort') + 1] == 'high'
         assert '--context' in cmd and cmd[cmd.index('--context') + 1] == 'long_context'
+
+
+# ── Copilot identity, colour and terminal setup (NGH-039) ────────────────────
+
+
+def test_copilot_command_session_name_is_optional_and_sits_immediately_before_interactive():
+    head = [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash']
+    omitted = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST')
+    explicit_none = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST', session_name=None)
+    assert omitted == explicit_none == head + ['-i', 'BRIEF\n\nFIRST']
+    named = launcher.copilot_command(
+        'gemini-3.8-flash', 'BRIEF', 'FIRST', reasoning='high', context='long_context',
+        session_name='Coder (shift-coder)')
+    assert named == head + ['--reasoning-effort', 'high', '--context', 'long_context',
+                            '--name', 'Coder (shift-coder)', '-i', 'BRIEF\n\nFIRST']
+    reasoning_only = launcher.copilot_command(
+        'gemini-3.8-flash', 'BRIEF', 'FIRST', reasoning='high', session_name='Coder (shift-coder)')
+    assert reasoning_only[reasoning_only.index('--reasoning-effort'):reasoning_only.index('-i')] == [
+        '--reasoning-effort', 'high', '--name', 'Coder (shift-coder)']
+    context_only = launcher.copilot_command(
+        'gemini-3.8-flash', 'BRIEF', 'FIRST', context='long_context', session_name='Coder (shift-coder)')
+    assert context_only[context_only.index('--context'):context_only.index('-i')] == [
+        '--context', 'long_context', '--name', 'Coder (shift-coder)']
+    # None means omit the flag; any other value, including empty, is inserted unchanged.
+    blank = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST', session_name='')
+    assert blank[blank.index('-i') - 2:blank.index('-i')] == ['--name', '']
+    defaulted = launcher.copilot_command(
+        'gemini-3.8-flash', 'BRIEF', 'FIRST', permissions='default', session_name='Tester (shift-tester)')
+    assert '--allow-all' not in defaulted
+    assert defaulted[1:3] == ['--no-auto-update', '--model']
+    assert defaulted[defaulted.index('-i') - 2:defaulted.index('-i')] == ['--name', 'Tester (shift-tester)']
+
+
+def test_tool_command_forwards_session_name_only_to_copilot():
+    name = 'Foreman (shift-foreman)'
+    forwarded = launcher.tool_command(
+        'copilot', 'grok-4.7', 'BRIEF', 'FIRST', permissions='skip', reasoning='max', session_name=name)
+    assert forwarded == launcher.copilot_command(
+        'grok-4.7', 'BRIEF', 'FIRST', permissions='skip', reasoning='max', session_name=name)
+    assert forwarded[forwarded.index('-i') - 2:forwarded.index('-i')] == ['--name', name]
+    assert launcher.tool_command('copilot', 'grok-4.7', 'BRIEF', 'FIRST') == \
+        launcher.copilot_command('grok-4.7', 'BRIEF', 'FIRST')
+    assert launcher.tool_command('copilot', 'grok-4.7', 'BRIEF', 'FIRST', session_name=None) == \
+        launcher.copilot_command('grok-4.7', 'BRIEF', 'FIRST')
+    for tool, model in (('codex', 'gpt-6.1-sol'), ('agy', 'gemini-3.8-flash-high')):
+        without = launcher.tool_command(tool, model, 'BRIEF', 'FIRST', reasoning='high')
+        with_name = launcher.tool_command(tool, model, 'BRIEF', 'FIRST', reasoning='high', session_name=name)
+        assert with_name == without and '--name' not in with_name
+
+
+def test_start_dry_run_copilot_crew_names_sessions_and_selects_role_schemes(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('unexpected launch'))
+    launcher.start(['--dry-run', '--cwd', str(tmp_path), '--crew', 'copilot', 'task'])
+    plan = json.loads(capsys.readouterr().out)
+    members = {m['label']: m for m in launcher.crew_members(launcher.load_crew('copilot'), plan['shift'])}
+    assert [m['label'] for m in members.values()] == ['Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice']
+    assert 'codex_colours' in launcher.wt_command.__code__.co_varnames
+    for label, member in members.items():
+        command = plan['roles'][label]['command']
+        assert plan['roles'][label]['session_name'] == member['identity']
+        assert command[command.index('-i') - 2:command.index('-i')] == [
+            '--name', f"{label} ({member['identity']})"]
+        assert command.index('--reasoning-effort') < command.index('--name')
+        if 'context' in member:
+            assert command.index('--context') < command.index('--name')
+        else:
+            assert '--context' not in command
+    coloured = {}
+    for cell in _cells(plan['wt_argv']):
+        if '--pane' not in cell:
+            assert '--colorScheme' not in cell
+            continue
+        label = cell[cell.index('--pane') + 1]
+        coloured[label] = cell[cell.index('--colorScheme') + 1]
+    assert coloured == {label: 'Nightshift ' + member['colour'] for label, member in members.items()}
+    trial = launcher.wt_command(
+        'S', Path('C:/state'), agents=True, mode_flag='--live', members=list(members),
+        codex_colours={label: member['colour'] for label, member in members.items()})
+    assert '--colorScheme' not in trial
 
 
 def test_load_crew_rejects_unsupported_reasoning_and_context(monkeypatch, tmp_path):
@@ -5240,6 +5338,7 @@ def test_spawned_copilot_apprentice_pane_runs_with_reasoning_effort_and_context(
     assert (member['tool'], member['model'], member['reasoning'], member['context']) == \
         ('copilot', 'gemini-3.8-flash', 'high', 'long_context')
     seen = {}
+    renames = []
 
     class Child:
         pid = 42
@@ -5247,12 +5346,69 @@ def test_spawned_copilot_apprentice_pane_runs_with_reasoning_effort_and_context(
         def wait(self):
             return 0
 
-    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda command, **k: seen.update(command=command) or Child())
+        def poll(self):
+            return None
+
+    def popen(command, **kw):
+        seen.update(command=command, env=kw.get('env'))
+        return Child()
+
+    monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
     monkeypatch.setattr(launcher, 'register_name', lambda pid, name: None)
+    monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a, **k: renames.append(a) or True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
     launcher.pane('Apprentice', str(d), start=True, cwd=str(tmp_path), slot=3)
     command = seen['command']
     assert command[0] == str(launcher.COPILOT_EXE)
+    assert member['label'] == 'Apprentice' and member['identity'] == f'{CONT_SHIFT}-apprentice'
     assert command[command.index('--model'):command.index('-i')] == [
-        '--model', 'gemini-3.8-flash', '--reasoning-effort', 'high', '--context', 'long_context']
+        '--model', 'gemini-3.8-flash', '--reasoning-effort', 'high', '--context', 'long_context',
+        '--name', f"Apprentice ({member['identity']})"]
+    assert not any('/rename' in str(arg) for arg in command) and renames == []
+    assert seen['env']['COPILOT_DISABLE_TERMINAL_TITLE'] == '1'
+    assert seen['env']['COPILOT_SETUP_TERMINAL'] == 'false'
+
+
+@pytest.mark.usefixtures('_container_isolated')
+def test_pane_names_copilot_by_pane_label_and_does_not_inject_rename(monkeypatch, tmp_path):
+    """Coder-2 must be named from the pane label, not the role stem, and must not get Codex /rename."""
+    d = _container(tmp_path)
+    saved = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    member = _member(CONT_SHIFT, 'Coder', label='Coder-2', colour='purple', tool='copilot',
+                     model='gemini-3.8-flash')
+    member.update(reasoning='high', context='long_context')
+    saved['members'].append(member)
+    (d / 'crew.json').write_text(json.dumps(saved), encoding='utf-8')
+    seen = {'backgrounds': []}
+    renames = []
+
+    class Child:
+        pid = 42
+
+        def wait(self):
+            return 0
+
+        def poll(self):
+            return None
+
+    def popen(command, **kw):
+        seen.update(command=command, env=kw.get('env'))
+        return Child()
+
+    monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
+    monkeypatch.setattr(launcher, 'register_name', lambda *a: None)
+    monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a, **k: renames.append(a) or True)
+    monkeypatch.setattr(launcher, 'set_pane_background', lambda colour: seen['backgrounds'].append(colour))
+    monkeypatch.setattr(launcher, 'process_running', lambda *a, **k: True)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane('Coder-2', str(d), start=True, cwd=str(tmp_path), slot=3)
+    command = seen['command']
+    assert command[command.index('--model'):command.index('-i')] == [
+        '--model', 'gemini-3.8-flash', '--reasoning-effort', 'high', '--context', 'long_context',
+        '--name', f'Coder-2 ({CONT_SHIFT}-coder-2)']
+    assert not any('/rename' in str(arg) for arg in command) and renames == []
+    assert seen['backgrounds'] == [launcher.ROLE_BACKGROUNDS['purple'], '#0C0C0C']
+    assert seen['env']['COPILOT_DISABLE_TERMINAL_TITLE'] == '1'
+    assert seen['env']['COPILOT_SETUP_TERMINAL'] == 'false'
+    assert 'CODEX_HOME' not in seen['env']
