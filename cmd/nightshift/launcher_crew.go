@@ -1268,6 +1268,13 @@ func codexCommand(model, brief, firstMessage, reasoning, permissions string) []s
 func copilotCommand(model, brief, firstMessage, permissions, reasoning, context string, sessionName *string, maxCredits int) []string {
 	cmd := append([]string{toolExe("copilot")}, permissionFlags("copilot", permissions)...)
 	cmd = append(cmd, "--no-auto-update", "--model", model)
+	// Crew members talk through nightshift and agents-cli, not MCP. Without the built-in GitHub MCP and remote
+	// export a pane no longer stalls minutes on start in a repo with no GitHub remote, and without the user's
+	// MCP servers each turn carries about a third fewer tokens (NGH-057).
+	cmd = append(cmd, "--disable-builtin-mcps", "--no-remote-export")
+	for _, server := range copilotUserMCPServers() {
+		cmd = append(cmd, "--disable-mcp-server", server)
+	}
 	if reasoning != "" {
 		cmd = append(cmd, "--reasoning-effort", reasoning)
 	}
@@ -1281,6 +1288,31 @@ func copilotCommand(model, brief, firstMessage, permissions, reasoning, context 
 		cmd = append(cmd, "--name", *sessionName)
 	}
 	return append(cmd, "-i", brief+"\n\n"+firstMessage)
+}
+
+// copilotUserMCPServers lists, sorted, the server names in the user's Copilot MCP config
+// (COPILOT_HOME/mcp-config.json, else ~/.copilot/mcp-config.json); nothing else is read.
+func copilotUserMCPServers() []string {
+	home := os.Getenv("COPILOT_HOME")
+	if home == "" {
+		home = filepath.Join(userHome(), ".copilot")
+	}
+	data, err := os.ReadFile(filepath.Join(home, "mcp-config.json"))
+	if err != nil {
+		return nil
+	}
+	var config struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if json.Unmarshal(data, &config) != nil {
+		return nil
+	}
+	names := make([]string, 0, len(config.MCPServers))
+	for name := range config.MCPServers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // toolCommand is the argv for a non-Claude crew member (agy, codex or copilot).

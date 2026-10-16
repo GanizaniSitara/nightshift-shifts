@@ -3936,7 +3936,7 @@ def test_codex_and_copilot_commands_and_account_env():
                    '-c', 'model_reasoning_effort=xhigh', 'BRIEF\n\nFIRST']
     cop = launcher.copilot_command('gemini-3.8-flash-high', 'BRIEF', 'FIRST')
     assert cop == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash-high',
-                   '-i', 'BRIEF\n\nFIRST']
+                   '--disable-builtin-mcps', '--no-remote-export', '-i', 'BRIEF\n\nFIRST']
     env = launcher.crew_env({'PATH': 'x', 'TERM': 'dumb'}, tool='codex', account=2)
     assert 'TERM' not in env and env['CODEX_HOME'].endswith('.codex-second')
 
@@ -4830,16 +4830,16 @@ def test_copilot_crew_manifest_and_reasoning_and_context_constants():
 def test_copilot_command_supports_optional_reasoning_and_context():
     base = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST')
     assert base == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash',
-                    '-i', 'BRIEF\n\nFIRST']
+                    '--disable-builtin-mcps', '--no-remote-export', '-i', 'BRIEF\n\nFIRST']
     with_reasoning = launcher.copilot_command('grok-4.7', 'BRIEF', 'FIRST', reasoning='max')
     assert with_reasoning == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'grok-4.7',
-                              '--reasoning-effort', 'max', '-i', 'BRIEF\n\nFIRST']
+                              '--disable-builtin-mcps', '--no-remote-export', '--reasoning-effort', 'max', '-i', 'BRIEF\n\nFIRST']
     with_context = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST', context='long_context')
     assert with_context == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash',
-                            '--context', 'long_context', '-i', 'BRIEF\n\nFIRST']
+                            '--disable-builtin-mcps', '--no-remote-export', '--context', 'long_context', '-i', 'BRIEF\n\nFIRST']
     with_both = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST', reasoning='high', context='long_context')
     assert with_both == [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash',
-                         '--reasoning-effort', 'high', '--context', 'long_context', '-i', 'BRIEF\n\nFIRST']
+                         '--disable-builtin-mcps', '--no-remote-export', '--reasoning-effort', 'high', '--context', 'long_context', '-i', 'BRIEF\n\nFIRST']
 
 
 def test_start_dry_run_copilot_crew_records_reasoning_and_context(monkeypatch, tmp_path, capsys):
@@ -4866,7 +4866,7 @@ def test_start_dry_run_copilot_crew_records_reasoning_and_context(monkeypatch, t
 
 
 def test_copilot_command_session_name_is_optional_and_sits_immediately_before_interactive():
-    head = [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash']
+    head = [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash', '--disable-builtin-mcps', '--no-remote-export']
     omitted = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST')
     explicit_none = launcher.copilot_command('gemini-3.8-flash', 'BRIEF', 'FIRST', session_name=None)
     assert omitted == explicit_none == head + ['-i', 'BRIEF\n\nFIRST']
@@ -5724,8 +5724,8 @@ def test_spawned_copilot_apprentice_pane_runs_with_reasoning_effort_and_context(
     assert command[0] == str(launcher.COPILOT_EXE)
     assert member['label'] == 'Apprentice' and member['identity'] == f'{CONT_SHIFT}-apprentice'
     assert command[command.index('--model'):command.index('-i')] == [
-        '--model', 'gemini-3.8-flash', '--reasoning-effort', 'high', '--context', 'long_context',
-        '--name', f"Apprentice ({member['identity']})"]
+        '--model', 'gemini-3.8-flash', '--disable-builtin-mcps', '--no-remote-export',
+        '--reasoning-effort', 'high', '--context', 'long_context', '--name', f"Apprentice ({member['identity']})"]
     assert not any('/rename' in str(arg) for arg in command) and renames == []
     assert seen['env']['COPILOT_DISABLE_TERMINAL_TITLE'] == '1'
     assert seen['env']['COPILOT_SETUP_TERMINAL'] == 'false'
@@ -5767,8 +5767,8 @@ def test_pane_names_copilot_by_pane_label_and_does_not_inject_rename(monkeypatch
     launcher.pane('Coder-2', str(d), start=True, cwd=str(tmp_path), slot=3)
     command = seen['command']
     assert command[command.index('--model'):command.index('-i')] == [
-        '--model', 'gemini-3.8-flash', '--reasoning-effort', 'high', '--context', 'long_context',
-        '--name', f'Coder-2 ({CONT_SHIFT}-coder-2)']
+        '--model', 'gemini-3.8-flash', '--disable-builtin-mcps', '--no-remote-export',
+        '--reasoning-effort', 'high', '--context', 'long_context', '--name', f'Coder-2 ({CONT_SHIFT}-coder-2)']
     assert not any('/rename' in str(arg) for arg in command) and renames == []
     assert seen['backgrounds'] == [launcher.ROLE_BACKGROUNDS['purple'], '#0C0C0C']
     assert seen['env']['COPILOT_DISABLE_TERMINAL_TITLE'] == '1'
@@ -7233,7 +7233,7 @@ def test_start_dry_run_claude_copilot_caps_each_copilot_pane(monkeypatch, tmp_pa
 
 
 def test_copilot_command_credit_cap_without_usage_file():
-    head = [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash']
+    head = [str(launcher.COPILOT_EXE), '--allow-all', '--no-auto-update', '--model', 'gemini-3.8-flash', '--disable-builtin-mcps', '--no-remote-export']
     assert launcher.copilot_command('gemini-3.8-flash', 'B', 'F', max_credits=30) \
         == head + ['--max-ai-credits', '30', '-i', 'B\n\nF']
     assert launcher.copilot_command('gemini-3.8-flash', 'B', 'F') == head + ['-i', 'B\n\nF']

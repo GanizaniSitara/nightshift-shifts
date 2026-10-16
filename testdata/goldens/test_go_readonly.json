@@ -395,7 +395,7 @@
       "bytes": ""
      },
      {
-      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4116, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3201, in inbox\r\n    print(json.dumps(inbox_view(state_dir, resolve_role(state_dir, args.role)), indent=2))\r\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3163, in inbox_view\r\n    dict(r) for r in conn.execute(\r\n                     ^^^^^^^^^^^^^\r\nsqlite3.DatabaseError: file is not a database\r\n"
+      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4131, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3216, in inbox\r\n    print(json.dumps(inbox_view(state_dir, resolve_role(state_dir, args.role)), indent=2))\r\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3178, in inbox_view\r\n    dict(r) for r in conn.execute(\r\n                     ^^^^^^^^^^^^^\r\nsqlite3.DatabaseError: file is not a database\r\n"
      },
      1
     ]
@@ -411,7 +411,7 @@
       "bytes": ""
      },
      {
-      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4116, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3201, in inbox\r\n    print(json.dumps(inbox_view(state_dir, resolve_role(state_dir, args.role)), indent=2))\r\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3163, in inbox_view\r\n    dict(r) for r in conn.execute(\r\n                     ^^^^^^^^^^^^^\r\nsqlite3.OperationalError: no such table: messages\r\n"
+      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4131, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3216, in inbox\r\n    print(json.dumps(inbox_view(state_dir, resolve_role(state_dir, args.role)), indent=2))\r\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3178, in inbox_view\r\n    dict(r) for r in conn.execute(\r\n                     ^^^^^^^^^^^^^\r\nsqlite3.OperationalError: no such table: messages\r\n"
      },
      1
     ]
@@ -427,7 +427,7 @@
       "bytes": ""
      },
      {
-      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4116, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1915, in status\r\n    records = [shift_record(d) for d in shift_dirs()]\r\n               ^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1874, in shift_record\r\n    pending = unacked_messages(state_dir)\r\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3249, in unacked_messages\r\n    return [dict(r) for r in conn.execute(\"SELECT * FROM messages WHERE state IN ('stored', 'sent') ORDER BY id\")]\r\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\nsqlite3.DatabaseError: file is not a database\r\n"
+      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4131, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1930, in status\r\n    records = [shift_record(d) for d in shift_dirs()]\r\n               ^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1889, in shift_record\r\n    pending = unacked_messages(state_dir)\r\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3264, in unacked_messages\r\n    return [dict(r) for r in conn.execute(\"SELECT * FROM messages WHERE state IN ('stored', 'sent') ORDER BY id\")]\r\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\nsqlite3.DatabaseError: file is not a database\r\n"
      },
      1
     ]
@@ -443,7 +443,7 @@
       "bytes": ""
      },
      {
-      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4116, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1915, in status\r\n    records = [shift_record(d) for d in shift_dirs()]\r\n               ^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1874, in shift_record\r\n    pending = unacked_messages(state_dir)\r\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3249, in unacked_messages\r\n    return [dict(r) for r in conn.execute(\"SELECT * FROM messages WHERE state IN ('stored', 'sent') ORDER BY id\")]\r\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\nsqlite3.OperationalError: no such table: messages\r\n"
+      "bytes": "Traceback (most recent call last):\r\n  File \"<string>\", line 29, in <module>\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 4131, in main\r\n    COMMANDS[sys.argv[1]](sys.argv[2:])\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1930, in status\r\n    records = [shift_record(d) for d in shift_dirs()]\r\n               ^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 1889, in shift_record\r\n    pending = unacked_messages(state_dir)\r\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"<REPO:raw::0>\\nightshift_shifts.py\", line 3264, in unacked_messages\r\n    return [dict(r) for r in conn.execute(\"SELECT * FROM messages WHERE state IN ('stored', 'sent') ORDER BY id\")]\r\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\nsqlite3.OperationalError: no such table: messages\r\n"
      },
      1
     ]

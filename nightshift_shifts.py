@@ -563,11 +563,23 @@ def codex_command(model, brief, first_message, reasoning=None, permissions=None)
     return cmd + [brief + '\n\n' + first_message]
 
 
+def copilot_user_mcp_servers():
+    """Sorted server names in the user's Copilot MCP config (NGH-057); nothing else is read."""
+    home = Path(os.environ.get('COPILOT_HOME') or Path.home() / '.copilot')
+    try:
+        return sorted(json.loads((home / 'mcp-config.json').read_text(encoding='utf-8')).get('mcpServers') or {})
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
 def copilot_command(model, brief, first_message, permissions=None, reasoning=None, context=None, session_name=None,
                     max_credits=None):
     """argv for a Copilot CLI crew member: tools per `permissions`, no auto-update, optional reasoning effort,
     context tier and AI credit cap, interactive initial prompt."""
-    cmd = [str(COPILOT_EXE), *permission_flags('copilot', permissions), '--no-auto-update', '--model', model]
+    cmd = [str(COPILOT_EXE), *permission_flags('copilot', permissions), '--no-auto-update', '--model', model,
+           '--disable-builtin-mcps', '--no-remote-export']
+    for server in copilot_user_mcp_servers():
+        cmd += ['--disable-mcp-server', server]
     if reasoning:
         cmd += ['--reasoning-effort', reasoning]
     if context:
