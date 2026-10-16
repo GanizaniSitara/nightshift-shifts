@@ -16,7 +16,7 @@ New shifts use `C:\nightshift\` as the visible machine state root. The launcher 
 locations from `SOLID_DIR`:
 
 - `C:\nightshift\shifts\<shift>\` — shift records, the mailbox and the bus.
-- `C:\nightshift\locks\` — working-folder locks and the build lock tree.
+- `C:\nightshift\locks\` — direct-checkout/non-git working-folder locks, the build lock tree, and short-lived repository landing locks.
 - `C:\nightshift\builds\` — the defined machine-level `BUILDS_DIR` path; the current `build`
   command still writes revision-bound evidence to `<state_dir>/builds/<N>.json`, not centrally.
 - `C:\nightshift\floor.json` — machine-level floor state for reaping, patrol and dispatch.
@@ -130,7 +130,7 @@ As built (NGH-025):
   model then falls back as without `--crew`. The member written to `crew.json` carries all of it, so the
   pane wrapper starts that tool/model/reasoning/account. This is how Foreman proves each CLI as
   Apprentice inside a live default shift: `spawn SHIFT --role Apprentice --crew apprentice-codex`.
-- **down --close / --hold.** Both write the handover, kill the crew and release the folder lock.
+- **down --close / --hold.** Both write the handover, kill the crew and release any applicable direct-checkout/non-git folder lock. A landed worktree is also removed with its merged branch during teardown.
   `--close` (default) also closes the window; `--hold` explicitly leaves the tab open. When the
   crew is already dead and `handover.md` exists (Foreman already ran `down`, and a caller later runs
   `down --close`), the captured `handover.md` is preserved rather than overwritten with `(pane not readable)`.
@@ -432,7 +432,7 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 
 | Piece | Role | Where |
 |---|---|---|
-| `nightshift_shifts.py` | the launcher: `start`, `status`, `down` (`--close` default, explicit `--hold`), `spawn` (NGH-025), `cleaner`, `warden`, `gaffer` and `floor.json` (NGH-035), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), `log` (the shift bus, NGH-026) | this repo |
+| `nightshift_shifts.py` | the launcher: `start` (`--no-worktree` supported by NGH-040), `status`, `down` (`--close` default, explicit `--hold`), `spawn` (NGH-025), `land` (NGH-040), `cleaner`, `warden`, `gaffer` and `floor.json` (NGH-035), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), `log` (the shift bus, NGH-026) | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`; copilot also `none`\|`minimal`\|`max`), `context` (`default`\|`long_context`, copilot only), `account` (`1`\|`2`) and `permissions` (`skip`\|`auto`\|`default`), pane layout | this repo |
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
 | `personas/*.yaml` | each role's persona (identity, what good looks like, how you work, never), rendered above the brief (NGH-032) | this repo |
@@ -445,14 +445,20 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 
 ## A shift, step by step
 
-1. `nightshift start <TICKET|"task"> [--crew NAME] [--cwd DIR] [--continue-from SHIFT]`
-   reads the ticket through tasks-cli, resolves the working folder (`--cwd` > ticket `codebase:` >
-   current directory), takes the **folder lock** (`C:\nightshift\locks\`, exit 3 if another
-   live shift holds it), writes `prompt.txt`, and runs `wt.exe` with one `new-tab`/`split-pane`
-   per role. Each pane runs this same script as a **wrapper** (`--pane ROLE`), which launches the
-   role's CLI, records `<Role>.json` (pid, name, start time, cwd), answers Claude's trust dialog
-   if it appears, sets the role colour, and waits for the CLI to exit. `<Role>.json` also records
-   the role's `tool` (claude or agy), which `status` reports per role.
+1. `nightshift start <TICKET|"task"> [--crew NAME] [--cwd DIR] [--continue-from SHIFT] [--no-worktree]`
+   reads the ticket through tasks-cli and resolves the base working folder (`--cwd` > ticket
+   `codebase:` > current directory). For a git repository, the default is an isolated
+   `C:\nightshift\worktrees\<shift>\` cwd: it creates branch `shift/<ticket>-<shortid>` from the
+   target branch (default `main`) and records `repo_root`, `worktree_dir`, `branch`, `target_branch`,
+   `base_sha` and `created_at` in `<state_dir>/worktree.json`; every pane runs from that worktree.
+   `--no-worktree` opts into direct-checkout mode. Non-git folders also use direct mode; both modes
+   take the **folder lock** (`C:\nightshift\locks\`, exit 3 if another live shift holds it). The
+   worktree mode does not hold a whole-repository folder lock while the crew codes and tests. The
+   command writes `prompt.txt` and runs `wt.exe` with one `new-tab`/`split-pane` per role. Each pane
+   runs this same script as a **wrapper** (`--pane ROLE`), which launches the role's CLI, records
+   `<Role>.json` (pid, name, start time, cwd), answers Claude's trust dialog if it appears, sets the
+   role colour, and waits for the CLI to exit. `<Role>.json` also records the role's `tool` (claude or
+   agy), which `status` reports per role.
 2. Each Claude member starts with `--name <shift>-<role>`, `--permission-mode auto` (owner
    decision: classifier-guarded, never `manual`, never bypass, unless its manifest role sets `permissions:`), and
    `--append-system-prompt` = its brief. The wrapper scrubs inherited `CLAUDE*` env so a crew
@@ -463,13 +469,19 @@ This ticket changes architecture only; saved fixtures and runtime verification b
    yourself; the only way a session starts is Foreman's `nightshift spawn` into a free slot (anything else:
    write the command for the human); claim files before editing (`claims.json`, exit 4 on
    conflict); record messages in the mailbox before sending them (NGH-019).
-4. Foreman ends the shift by writing `result.json`: `status` done|blocked, `stage`
-   implemented|tested|deployed|validated, `evidence` per rung, `summary`, `changed`. A ticket may
-   say `requires: <rung>` (default tested); done below the bar is recorded as `short`.
+4. Tester first passes the reviewed revision; Foreman commits it, then Tester reports `TESTED-PASS` for the
+   exact unchanged HEAD of that clean commit. Foreman runs `nightshift land <shift>` before writing
+   `result.json`; landing refuses dirty or untested changes and does not create the commit. Exit `0`
+   records `landed.json`; exit `2` means a clean rebase and requires one Tester pass on the rebased
+   HEAD before Foreman reruns `land`; exit `4` means a rebase conflict and requires the shift's Coder
+   to resolve it, followed by a Tester pass, Foreman's commit, clean-commit verification and another `land`. A non-git or
+   `--no-worktree` shift cannot land and follows the direct-checkout result path.
 5. Foreman then runs `nightshift down --close` itself: it captures the last lines of each pane, writes
    `handover.md` (result, commits since start, test outcome, denials, claims, pane tails), kills the
-   crew processes (Foreman's own tree last), releases the lock, and closes only that shift's Terminal
-   window. `--hold` is an explicit override when the tab must remain open.
+   crew processes (Foreman's own tree last), releases the applicable lock, and closes only that
+   shift's Terminal window. For a successful land, teardown removes the worktree and merged branch;
+   for blocked, halted or crashed recovery without a land, it preserves the unmerged branch and
+   metadata so the work can be recovered. `--hold` is an explicit override when the tab must remain open.
 
 ## The default crew: Foreman, Advisor, Coder, Tester, Apprentice (NGH-024, NGH-027, NGH-029)
 
@@ -737,31 +749,37 @@ There is no bus process: each command appends its own line and `nightshift log` 
 
 ## Concurrency
 
-As currently built: folder lock between shifts (NGH-010); file claims between coders inside a shift
-(NGH-011); build slot (NGH-020) serialises expensive builds per folder and records revision-bound
-evidence. Claims are checked against every live shift: a claim held by any role in another live shift
-conflicts, and `claim` reports the owning shift and claim time, exits 4, and changes none of the
-requested paths when any requested path conflicts. Claims belonging to dead shifts are ignored.
+Legacy/direct-checkout and non-git paths use a folder lock between shifts (NGH-010); file claims
+between coders inside a shift (NGH-011); and the build slot (NGH-020) serialises expensive builds
+per folder and records revision-bound evidence. Git worktree mode does not hold a whole-repository
+folder lock while the crew codes and tests; it uses the per-shift worktree and takes a short-lived
+repository landing lock only during `nightshift land`. Worktree claims are shift-local. In direct/in-place
+mode, claims are checked against every live shift: a claim held by another shift conflicts, and `claim`
+reports its owner and time, exits 4, and changes none of the requested paths. Dead shifts are ignored.
 
-### Target evolution: per-shift git worktrees and Foreman landing (owner decision, 16 Oct 2026; NGH-040)
+### Per-shift git worktrees and Foreman landing (owner decision, 16 Oct 2026; NGH-040)
 
 Running concurrent shifts directly in a single checkout causes cross-shift file-claim stalls on shared
 files (`nightshift_shifts.py`, `test_nightshift_shifts.py`, `docs/ARCHITECTURE.md`). Rather than adding a
-dedicated merge-queue pane ("Refinery"), Nightshift evolves toward **per-shift git worktree isolation**
-paired with **Foreman-driven landing (`nightshift land`)**:
+dedicated merge-queue pane ("Refinery"), Nightshift uses **per-shift git worktree isolation** paired
+with **Foreman-driven landing (`nightshift land`)**:
 
 1. **Worktree per shift (`C:\nightshift\worktrees\<shift>\`).** When `nightshift start` targets a git
    repository (unless `--no-worktree` is passed), it resolves `repo_root` and the target branch (default
-   `main`), creates branch `shift/<ticket>-<shortid>` from `HEAD`, checks out a linked worktree at
-   `C:\nightshift\worktrees\<shift>\`, and writes `<state_dir>/worktree.json`
+   `main`), creates branch `shift/<ticket>-<shortid>` from that target branch's `HEAD`, checks out a
+   linked worktree at `C:\nightshift\worktrees\<shift>\`, and writes `<state_dir>/worktree.json`
    (`{repo_root, worktree_dir, branch, target_branch, base_sha, created_at}`). Every crew pane and
    container slot runs with `cwd = C:\nightshift\worktrees\<shift>\` (including Claude Foreman's
    path-scoped `Edit(//c/nightshift/worktrees/<shift>/**)` deny rule). No whole-shift folder lock is held
    on `repo_root` while the crew codes and tests; `claims.json` coordinates roles *within* the shift
    (`Coder`, `Apprentice`, `Tester`) without blocking concurrent shifts in their own worktrees.
-2. **Foreman-driven landing (`nightshift land <shift>`).** After `Tester` reports `TESTED-PASS` on a
-   clean worktree commit, `Foreman` runs `nightshift land <shift>` before writing `result.json` and
-   calling `nightshift down`. `nightshift land` acquires the short-lived repository landing lock
+   `--no-worktree` explicitly keeps the direct-checkout path and its folder lock. A non-git working
+   folder cannot create a branch or land; it stays on the direct path and keeps the folder lock.
+2. **Foreman-driven landing (`nightshift land <shift>`).** `Tester` first passes the reviewed revision;
+   `Foreman` commits exactly that revision, then `Tester` reports `TESTED-PASS` on its clean `HEAD`, and
+   `Foreman` runs `nightshift land <shift>` before writing `result.json` and calling `nightshift down`.
+   `land` refuses a dirty worktree, an untested `HEAD` or a `HEAD` changed since the Tester evidence;
+   it never creates the commit. `nightshift land` acquires the short-lived repository landing lock
    (`C:\nightshift\locks\<repo>.json`) only for the landing operation and handles three cases:
    - **Case 1 — Fast-forward (`main` unchanged since worktree base):** Advances `main` cleanly to the
      worktree `HEAD` without clobbering unrelated uncommitted notes in `repo_root` (refusing if dirty
@@ -772,19 +790,30 @@ paired with **Foreman-driven landing (`nightshift land`)**:
    - **Case 2 — Clean rebase (`main` moved ahead, `git rebase main` succeeds cleanly):** Rebases the
      worktree branch onto the new `main` `HEAD`, releases the repo lock, and returns
      `{"status": "rebased_needs_test", "new_base": "<sha>", "head": "<rebased_sha>"}` (exit `2`).
-     `Foreman` dispatches one verification pass to `Tester` (`nightshift build`) on the rebased tree and
-     then re-runs `nightshift land <shift>` (which now fast-forwards under Case 1).
-   - **Case 3 — Rebase conflict (`git rebase main` reports conflicts):** Aborts the rebase and releases
+     `Foreman` must not write `result.json` or tear down yet: it dispatches one verification pass to
+     `Tester` (`nightshift build`) on the rebased tree, then re-runs `nightshift land <shift>` only
+     after a clean TESTED-PASS (which now fast-forwards under Case 1).
+   - **Case 3 — Rebase conflict (`git rebase main` reports conflicts):** Aborts the rebase by default
+     (`--keep-conflicts` leaves it in progress) and releases
      the repo landing lock immediately so other shifts are never held up, returning
      `{"status": "conflict", "target_head": "<sha>", "files": [...]}` (exit `4`). `Foreman` assigns its
-     own `Coder` (who already holds full context of the ticket's changes) to rebase onto `main` and
-     resolve the conflicting files in `C:\nightshift\worktrees\<shift>\`, dispatches `Tester` to verify,
-     and re-runs `nightshift land <shift>`.
+     own `Coder` to rebase onto `main` and resolve in the shift worktree. `Tester` passes the resolved
+     revision, `Foreman` commits it, and `Tester` verifies the clean updated `HEAD` before another land.
 3. **Teardown and reaping (`down` and `cleaner`).** When `<state_dir>/landed.json` exists, `nightshift down`
    and `nightshift cleaner` remove `C:\nightshift\worktrees\<shift>\`, prune worktrees, and delete the
    merged `shift/<ticket>-<shortid>` branch. When a shift ends or is reaped without landing (`blocked`,
-   halted, or crashed), `shift/<ticket>-<shortid>` is preserved and recorded in `handover.md` and
-   `floor.json` so unmerged work is never lost.
+   halted, or crashed), recovery teardown saves dirty edits in a recovery commit and preserves
+   `shift/<ticket>-<shortid>` and its `worktree.json`/handover metadata in `handover.md` and `floor.json`
+   so unmerged work is never lost. `--hold` leaves an unlanded worktree intact instead. A failed save
+   leaves the worktree intact with recovery pointers recorded before the attempt.
+   Shutdown completes independently of reclamation: a failed save or removal still permits the `down`
+   event, runtime lock release and crew termination. Before removal, `recovery.json`, `handover.md` and
+   `floor.json` record `cleanup_pending`, `disposition` (`landed`, `preserved` or `held`) and `error`.
+   `cleaner` retries pending cleanup even for previously reaped shifts, after directory handles close.
+   It checks Git's recorded worktree registrations and removes only empty unregistered remnants;
+   unexpected files are preserved. Pending clears after removal, pruning and applicable merged-branch
+   deletion all complete. An unlanded `--hold` leaves the worktree with no cleanup pending until a
+   subsequent explicit cleanup.
 
 ## Design vs built — reconciliation (keep current)
 
@@ -793,7 +822,7 @@ paired with **Foreman-driven landing (`nightshift land`)**:
 | No resident runtime; launch from the human's shell; Windows Terminal, two panes | same; the default crew is now five panes in a 2x4 container (NGH-024, NGH-027, NGH-029) | matches |
 | Named Claude sessions on the native mesh; permission-mode parity | same (`--name`, `--permission-mode auto` for Claude roles; manifest `permissions:` override) | matches |
 | Mailbox with stored→sent→acked, incarnation fencing, `inbox`/`ack`, protocol-violation notes | NGH-019 | matches |
-| Folder lock, worktree lease at `assign` time | folder lock (NGH-010) and intra-shift file claims (NGH-011) built; evolving to per-shift git worktrees (`C:\nightshift\worktrees\<shift>\`) + Foreman `nightshift land` (NGH-040) | NGH-040 queued |
+| Folder lock, worktree lease at `assign` time | direct-checkout/non-git folder lock (NGH-010), intra-shift file claims (NGH-011), per-shift git worktrees (`C:\nightshift\worktrees\<shift>\`) and Foreman `nightshift land` (NGH-040) | NGH-040 built |
 | Build slot, revision-bound evidence, cancellation (G4) | NGH-020 | in progress |
 | Acceptance gates G0–G5 as the delivery sequence | replaced by ticketed increments run by the loop; G0–G3 and most of G5 are covered, G4 pending | departure in method, not in content |
 | `down` with handover; `resume` re-dispatches acked-but-unfinished work | `down`/handover, loop retries with handover carry-over, `resume` after reboot | matches |
@@ -804,17 +833,16 @@ paired with **Foreman-driven landing (`nightshift land`)**:
 | — (owner, 16 Oct) | container with slot grid (2x4/1x4), `slots/`, `spawn`, Foreman-owned `down --close/--hold` (close default), launcher exits; loop optional | NGH-025, built |
 | — (owner, 16 Oct) | `C:\nightshift\` state root, `floor.json`, and `nightshift cleaner / warden / gaffer` CLI subcommands | NGH-035, built |
 | — (owner, 16 Oct) | Accountant in slot 6: accounting log, source contracts, budgets, warning then shift teardown | NGH-034, proposed / unbuilt; owner review before build |
-| — (owner, 16 Oct) | Per-shift git worktrees (`C:\nightshift\worktrees\<shift>\`) and Foreman-driven `nightshift land` (fast-forward / clean rebase + retest / conflict resolution by shift's own Coder + Tester) | NGH-040, target |
+| — (owner, 16 Oct) | Per-shift git worktrees (`C:\nightshift\worktrees\<shift>\`) and Foreman-driven `nightshift land` (fast-forward / clean rebase + retest / conflict resolution by shift's own Coder + Tester) | NGH-040, built |
 
 ## Not decided / not built
 
 - Accountant implementation and optional hold/rejig policy: **NGH-034**, proposed above; the mandatory
   Copilot warning and shift-budget teardown requirement is decided.
-- Per-shift git worktrees and `nightshift land` implementation: specified and queued in **NGH-040**.
 - Personas beyond Foreman + Advisor + Coder + Tester + Apprentice (DevOps, Reviewer, validator council):
   design in NGH-014, to be agreed with the owner before any is added. Roadmap on NGH-001.
 - Which frontier model the Advisor should run long term across all manifests (Claude Fable in `default.yaml`,
   GPT-6 Astra in `codex.yaml`; Copilot's owner-set policy is Gemini 3.8 Flash for every role).
 - Whether to converge all messaging on mailbox + agents-cli, or keep native mesh for Claude.
 - Single binary (NGH-021): PyInstaller bundle vs Go port — owner's call.
-- Parallel shifts across separate worktrees / codebases (NGH-013, NGH-040).
+- Parallel shifts across separate codebases (NGH-013).

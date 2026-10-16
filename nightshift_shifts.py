@@ -6,7 +6,7 @@ Opus 5.5, the Advisor Fable 5.1) in the "Nightshift Crew" Terminal profile (Casc
 receives the task; Coder and Tester get their role and peer identity, send READY and await work; the Advisor
 (NGH-027) stays dormant until Foreman consults it, and the mailbox lets only Foreman address it. The task
 reaches the panes by file path only, never as argv text. Panes run in the
-caller's current directory (no worktree is created) in Claude's auto permission
+shift's isolated git worktree (or the caller's directory with --no-worktree) in Claude's auto permission
 mode (--permission-mode auto). Each `start` is a new shift: mesh names are
 <shift>-foreman / <shift>-advisor / <shift>-coder / <shift>-tester, pane titles are '<ticket or shift> <Role>' (e.g. 'NGH-019 Foreman'), a loop
 window is titled 'Nightshift <first ticket>..<last ticket>', and
@@ -17,9 +17,9 @@ Container (NGH-025): a crew with layout 2x4 (8 slots, 2 rows x 4 columns) or 1x4
 in the first slots and plain cmd shells in the rest (each records <state_dir>/slots/<N>.json); the launcher exits once every pane and slot has
 reported. `spawn SHIFT --role ROLE [--cli claude|gemini|codex|copilot] [--crew NAME] [--slot N]` starts a session in a free
 slot of that window (Foreman's only way to add a crew member; --crew takes the role from crews/NAME.yaml), and Foreman ends its own shift with `down` (--close, the
-default, closes the window; --hold keeps the tab). A working folder holds one live shift at a time:
-start takes a lock (C:/nightshift/locks), refuses with exit code 3 while a live shift holds it,
-and `down` releases it.
+default, closes the window; --hold keeps the tab). Git shifts use per-shift worktrees and a short
+repository lock during `land`; direct and non-git working folders hold one live shift at a time.
+`down` removes landed worktrees or preserves unlanded work on a recovery branch.
 Coders claim files before editing them (`claim`/`release`/`claims`, kept in <state_dir>/claims.json); a file
 held by another role makes `claim` exit 4 and change nothing.
 Crew messages go through a durable mailbox (<state_dir>/mailbox.sqlite3): `msg send`/`msg sent`, `inbox`, `ack` (exit 5 = protocol violation).
@@ -72,6 +72,7 @@ SOLID_DIR = Path('C:/nightshift')
 SHIFTS_DIR = SOLID_DIR / 'shifts'
 LOCKS_DIR = SOLID_DIR / 'locks'
 BUILDS_DIR = SOLID_DIR / 'builds'
+WORKTREES_DIR = SOLID_DIR / 'worktrees'
 FLOOR_FILE = SOLID_DIR / 'floor.json'
 TRIALS_DIR = SOLID_DIR / 'layout-trials'
 LEGACY_DIR = Path('C:/Data/nightshift')
@@ -905,7 +906,7 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
         if agents:
             command.extend(['--profile', PROFILE])
         command.extend(['--title', pane_title(ticket or name), '--suppressApplicationTitle',
-                        '-d', '%USERPROFILE%', 'cmd.exe', '/k', sys.executable, script,
+                        '-d', cwd if mode_flag == '--start' and cwd else '%USERPROFILE%', 'cmd.exe', '/k', sys.executable, script,
                         '--slot', str(slot), '--state-dir', str(state_dir)])
 
     def place(parts, i):
@@ -930,7 +931,8 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
             # start mode shows '<ticket or shift> shift'; the trial modes keep the shift name in the title.
             title = pane_title(ticket or name) if mode_flag == '--start' else 'Nightshift | ' + role + ' | ' + name
             command.extend(['--title', title, '--suppressApplicationTitle',
-                            '-d', '%USERPROFILE%', sys.executable, script, '--pane', role, '--state-dir', str(state_dir)])
+                            '-d', cwd if mode_flag == '--start' and cwd else '%USERPROFILE%',
+                            sys.executable, script, '--pane', role, '--state-dir', str(state_dir)])
             if mode_flag:
                 command.append(mode_flag)
             if brief_file:
@@ -1092,9 +1094,18 @@ class FolderLocked(SystemExit):
 
 
 def take_lock(cwd, name, state_dir):
+    with mailbox_guard(lock_path(cwd)):
+        return take_folder_lock(cwd, name, state_dir)
+
+
+def take_folder_lock(cwd, name, state_dir):
     """Claim cwd for shift `name`; FolderLocked if a live shift holds it. A stale or unreadable lock is replaced."""
     path = lock_path(cwd)
     for _, lock in read_locks():
+        if lock.get('kind') == 'landing' and lock.get('cwd') \
+                and normalise_path(lock['cwd']) == normalise_path(cwd) \
+                and process_running(lock['pid'], lock.get('started_epoch')):
+            raise FolderLocked(3, f'repository is currently landing: {cwd}')
         other = Path(lock['state_dir']) if lock.get('state_dir') else next(
             (d for d in shift_dirs() if d.name == lock.get('shift')), None)
         if lock.get('cwd') and normalise_path(lock['cwd']) == normalise_path(cwd) \
@@ -1124,12 +1135,238 @@ def release_lock(shift_name):
     released = []
     for path, lock in read_locks():
         if lock.get('shift') == shift_name:
-            try:
-                path.unlink()
-            except OSError:
-                continue
-            released.append(lock.get('cwd'))
+            with mailbox_guard(path):
+                try:
+                    lock = json.loads(path.read_text(encoding='utf-8'))
+                    if lock.get('shift') != shift_name:
+                        continue
+                    if lock.get('kind') == 'landing' and process_running(lock['pid'], lock.get('started_epoch')):
+                        continue
+                    path.unlink()
+                except (OSError, ValueError):
+                    continue
+                released.append(lock.get('cwd'))
     return released
+
+
+def git_run(cwd, *args, check=True):
+    run = subprocess.run(['git', '-C', str(cwd), *args], capture_output=True, timeout=120)
+    if check and run.returncode:
+        raise SystemExit(run.stderr.decode('utf-8', 'replace').strip() or 'git command failed')
+    return run
+
+
+def git_text(cwd, *args):
+    return git_run(cwd, *args).stdout.decode('utf-8', 'replace').strip()
+
+
+def worktree_info(state_dir):
+    path = Path(state_dir) / 'worktree.json'
+    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
+
+
+def plan_worktree(cwd, name, ticket, target):
+    root = git_run(cwd, 'rev-parse', '--show-toplevel', check=False)
+    if root.returncode:
+        return None
+    # The first worktree is Git's primary checkout, even when cwd is linked.
+    repo = git_text(cwd, 'worktree', 'list', '--porcelain').splitlines()[0].removeprefix('worktree ')
+    base = git_text(repo, 'rev-parse', '--verify', f'refs/heads/{target}^{{commit}}')
+    slug = re.sub(r'[^A-Za-z0-9_-]+', '-', ticket or name).strip('-')
+    return {'repo_root': repo, 'worktree_dir': str(WORKTREES_DIR / name),
+            'branch': f'shift/{slug}-{name.rsplit("-", 1)[-1]}', 'target_branch': target,
+            'base_sha': base, 'created_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+
+
+@contextlib.contextmanager
+def landing_locked(info, state_dir):
+    """Short repository lock; a live holder is never evicted by age."""
+    repo = info['repo_root']
+    LOCKS_DIR.mkdir(parents=True, exist_ok=True)
+    path = lock_path(repo)
+    deadline = time.time() + 5
+    while True:
+        try:
+            with path.open('x', encoding='utf-8') as out:
+                json.dump({'shift': state_dir.name, 'cwd': repo, 'state_dir': str(state_dir),
+                           'kind': 'landing', 'pid': os.getpid(),
+                           'started_epoch': process_start_epoch(os.getpid())}, out)
+            break
+        except FileExistsError:
+            try:
+                held = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                held = None
+            if held and held.get('kind') == 'landing':
+                stale = not process_running(held['pid'], held.get('started_epoch'))
+            elif held:
+                holder = lock_shift_dir(held)
+                stale = not holder or not holder.exists() or not shift_record(holder)['alive']
+            else:
+                stale = False  # another process may still be writing the exclusive file
+            if stale:
+                path.unlink(missing_ok=True)
+                continue
+            if time.time() >= deadline:
+                raise FolderLocked(3, f'repository landing lock is held: {path}')
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        release_file_lock(path)
+
+
+def land(argv):
+    parser = argparse.ArgumentParser(prog='nightshift land')
+    parser.add_argument('shift')
+    parser.add_argument('--keep-conflicts', action='store_true')
+    args = parser.parse_args(argv)
+    state_dir = resolve_shift(args.shift)
+    info = worktree_info(state_dir)
+    if not info:
+        parser.error('shift has no isolated worktree')
+    cwd, repo, target = info['worktree_dir'], info['repo_root'], info['target_branch']
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(mailbox_guard(lock_path(repo), timeout_ms=5000))
+        except TimeoutError:
+            raise FolderLocked(3, f'repository landing lock is held: {lock_path(repo)}')
+        stack.enter_context(landing_locked(info, state_dir))
+        head, dirty, _ = git_state(cwd)
+        if not head or dirty is not False:
+            parser.error('landing requires a clean worktree commit')
+        if git_text(cwd, 'symbolic-ref', '--short', 'HEAD') != info['branch']:
+            parser.error('worktree is not on its recorded shift branch')
+        builds = [b for b in load_builds(state_dir) if b.get('head') == head
+                  and b.get('cwd') and normalise_path(b['cwd']) == normalise_path(cwd)]
+        if not builds or builds[-1].get('status') != 'passed' or builds[-1].get('exit') != 0 \
+                or builds[-1].get('dirty') is not False:
+            parser.error('landing requires a passed nightshift build on this clean commit')
+        target_head = git_text(repo, 'rev-parse', f'refs/heads/{target}')
+        ancestor = git_run(cwd, 'merge-base', '--is-ancestor', target_head, head, check=False)
+        if ancestor.returncode == 1:
+            rebased = git_run(cwd, 'rebase', target_head, check=False)
+            if rebased.returncode:
+                files = git_text(cwd, 'diff', '--name-only', '--diff-filter=U').splitlines()
+                if not args.keep_conflicts:
+                    git_run(cwd, 'rebase', '--abort')
+                result = {'status': 'conflict', 'target_head': target_head, 'files': files}
+                code = 4
+            else:
+                info['base_sha'] = target_head
+                write_json(state_dir / 'worktree.json', info)
+                result = {'status': 'rebased_needs_test', 'new_base': target_head,
+                          'head': git_text(cwd, 'rev-parse', 'HEAD')}
+                code = 2
+        elif ancestor.returncode:
+            raise SystemExit('cannot determine landing ancestry')
+        else:
+            # Two-tree read-tree preserves unrelated staged/unstaged edits and refuses
+            # overlapping dirty paths and untracked collisions before updating any ref.
+            if git_text(repo, 'symbolic-ref', '--short', 'HEAD') != target:
+                parser.error('canonical repository must have the target branch checked out')
+            changed = git_run(repo, 'diff', '--name-only', '--no-renames', '-z', target_head, head).stdout.split(b'\0')
+            dirty_paths = set()
+            for diff_args in [('diff', '--name-only', '-z'), ('diff', '--cached', '--name-only', '-z'),
+                              ('ls-files', '--others', '-z')]:
+                dirty_paths.update(p for p in git_run(repo, *diff_args).stdout.split(b'\0') if p)
+            overlap = [p.decode('utf-8', 'replace') for p in changed if p and any(
+                p == d or p.startswith(d + b'/') or d.startswith(p + b'/') for d in dirty_paths)]
+            if overlap:
+                parser.error('landing overlaps local changes: ' + ', '.join(overlap))
+            git_run(repo, 'read-tree', '-m', '-u', target_head, head)
+            git_run(repo, 'update-ref', f'refs/heads/{target}', head, target_head)
+            landed = {'repo_root': repo, 'target_branch': target, 'base_sha': info['base_sha'],
+                      'landed_sha': head, 'landed_at': time.strftime('%Y-%m-%d %H:%M:%S')}
+            write_json(state_dir / 'landed.json', landed)
+            bus_append(state_dir, 'land', **landed)
+            result, code = {'status': 'landed', 'sha': head}, 0
+    print(json.dumps(result))
+    if code:
+        raise SystemExit(code)
+
+
+def teardown_worktree(state_dir, hold=False, floor=None):
+    """Save work before reclamation; persist failures for cleaner without blocking shutdown."""
+    info = worktree_info(state_dir)
+    if not info:
+        return None
+    cwd, repo, branch = info['worktree_dir'], info['repo_root'], info['branch']
+    previous_file = state_dir / 'recovery.json'
+    previous = json.loads(previous_file.read_text(encoding='utf-8')) if previous_file.exists() else {}
+    recovery = {**previous, 'branch': branch, 'worktree_dir': cwd,
+                'cleanup_pending': True, 'error': None}
+    landed_file = state_dir / 'landed.json'
+    landed = landed_file.exists() and not previous.get('preserved_branch')
+    recovery['disposition'] = 'landed' if landed else 'preserved'
+    if not landed:
+        recovery['preserved_branch'] = branch
+
+    def record_recovery():
+        write_json(state_dir / 'recovery.json', recovery)
+        handover = state_dir / 'handover.md'
+        text = handover.read_text(encoding='utf-8') if handover.exists() else f'# Handover: {state_dir.name}\n'
+        line = '\n## Worktree recovery\n\n' + json.dumps(recovery) + '\n'
+        if line not in text:
+            handover.write_text(text + line, encoding='utf-8')
+        if floor is None:
+            with floor_locked():
+                current = read_floor()
+                current.setdefault('worktrees', {})[state_dir.name] = recovery.copy()
+                write_json(FLOOR_FILE, current)
+        else:
+            floor.setdefault('worktrees', {})[state_dir.name] = recovery.copy()
+            write_json(FLOOR_FILE, floor)
+
+    record_recovery()  # both landed and unlanded cleanup have a durable pointer before mutation
+    try:
+        work = Path(cwd)
+        registrations = git_run(repo, 'worktree', 'list', '--porcelain', '-z').stdout.decode('utf-8', 'replace')
+        registered = any(normalise_path(field.removeprefix('worktree ')) == normalise_path(cwd)
+                         for field in registrations.split('\0') if field.startswith('worktree '))
+        recovery['registered'] = registered
+        if work.exists() and registered and (work / '.git').exists():
+            # A partially removed checkout must never fall through to ancestor repository discovery.
+            if normalise_path(git_text(cwd, 'rev-parse', '--show-toplevel')) != normalise_path(cwd):
+                raise SystemExit(f'worktree root does not match recovery path: {cwd}')
+            head, dirty, _ = git_state(cwd)
+            if head is None or dirty is None:
+                raise SystemExit(f'cannot inspect recovery worktree: {cwd}; left intact')
+            if landed:
+                landed = dirty is False and head == json.loads(landed_file.read_text(encoding='utf-8'))['landed_sha']
+            if not landed:
+                recovery.update(preserved_branch=branch, disposition='held' if hold else 'preserved')
+                record_recovery()
+                if hold:
+                    recovery['cleanup_pending'] = False
+                    record_recovery()
+                    return recovery
+            current_branch = git_run(cwd, 'symbolic-ref', '--short', 'HEAD', check=False)
+            if current_branch.returncode or current_branch.stdout.decode().strip() != branch:
+                raise SystemExit(f'recovery worktree is detached or on another branch: {cwd}; left intact')
+            if not landed:
+                if dirty:
+                    git_run(cwd, 'add', '--all')
+                    git_run(cwd, 'commit', '-m', f'Nightshift recovery: {state_dir.name}')
+                recovery['recovery_sha'] = git_text(cwd, 'rev-parse', 'HEAD')
+            recovery['removal_started'] = True
+            record_recovery()
+            git_run(repo, 'worktree', 'remove', '--force', cwd)
+        elif work.exists():
+            if not previous.get('removal_started'):
+                raise SystemExit(f'unrecognised recovery directory: {cwd}; left intact')
+            # Git may remove .git/registration but fail to delete a directory held as cwd.
+            # rmdir refuses any unexpected remaining files; never recursively delete them.
+            work.rmdir()
+        git_run(repo, 'worktree', 'prune')
+        if not recovery.get('preserved_branch'):
+            if git_run(repo, 'show-ref', '--verify', '--quiet', f'refs/heads/{branch}', check=False).returncode == 0:
+                git_run(repo, 'branch', '-d', branch)
+        recovery.update(cleanup_pending=False, registered=False)
+    except (SystemExit, OSError, subprocess.TimeoutExpired) as err:
+        recovery['error'] = str(err)
+    record_recovery()
+    return recovery
 
 
 def start(argv):
@@ -1138,8 +1375,8 @@ def start(argv):
         description='Start a Nightshift crew: Claude Foreman, Advisor, Coder and Tester side by side in one Windows Terminal tab '
                     '(the default crew; --crew NAME uses crews/NAME.yaml for other roles and pane counts). '
                     'The task is saved to <state_dir>/prompt.txt and given to Foreman only; Coder and Tester send '
-                    'READY and wait for Foreman to delegate work; the Advisor stays dormant until Foreman consults it. Panes run in the current directory (no worktree is '
-                    'created) in Claude auto permission mode. Each start is a new shift with its own '
+                    'READY and wait for Foreman to delegate work; the Advisor stays dormant until Foreman consults it. Git shifts use an isolated worktree; '
+                    '--no-worktree keeps in-place execution. Each start is a new shift with its own '
                     '<shift>-foreman / <shift>-advisor / <shift>-coder / <shift>-tester session names; there is no restart or resume, and a closed '
                     'pane is not relaunched. A folder holds one live shift at a time: start exits with code 3 '
                     'while another live shift holds the working folder (nightshift down releases it).',
@@ -1150,6 +1387,8 @@ def start(argv):
                                                   'and its codebase: field the working folder')
     parser.add_argument('--prompt-file', help='read the task from this UTF-8 file instead (safest for text with quotes or & | < > ^ %%)')
     parser.add_argument('--cwd', help='folder the crew works in (default: the ticket codebase, else the current directory)')
+    parser.add_argument('--no-worktree', action='store_true', help='work in place with the existing folder lock')
+    parser.add_argument('--target-branch', default='main', help='branch to start from and land onto (default main)')
     parser.add_argument('--continue-from', metavar='SHIFT_DIR',
                         help='an earlier shift folder for the same task: its handover.md is appended so the crew carries on')
     parser.add_argument('--crew', default='default',
@@ -1186,6 +1425,9 @@ def start(argv):
     cwd = str(Path(cwd).resolve())
     if ';' in cwd:
         parser.error(f'the working folder contains ";", which Windows Terminal treats as a command separator: {cwd}')
+    worktree = None if args.no_worktree else plan_worktree(cwd, name, ticket, args.target_branch)
+    if worktree:
+        cwd = worktree['worktree_dir']
     members = crew_members(crew, name)
     labels = [m['label'] for m in members]
     command = wt_command(name, state_dir, agents=True, mode_flag='--start', cwd=cwd, members=labels, crew=crew['name'],
@@ -1195,7 +1437,7 @@ def start(argv):
         plan = {
             'dry_run': True, 'shift': name, 'state_dir': str(state_dir), 'cwd': cwd, 'ticket': ticket,
             'prompt_file': str(state_dir / 'prompt.txt'), 'model': crew['model'], 'profile': PROFILE,
-            'permission_mode': crew['permission_mode'], 'lock': str(lock_path(cwd)),
+            'permission_mode': crew['permission_mode'], 'lock': None if worktree else str(lock_path(cwd)),
             'roles': {m['label']: {'session_name': m['identity'], 'pane_title': pane_title(ticket or name),
                                    'peer': m['peer'],
                                    'receives_prompt': m['human_contact'], 'first_message': opening_message(m),
@@ -1223,14 +1465,21 @@ def start(argv):
             plan['slots'] = [{'slot': n, 'role': role, 'pane_title': pane_title(ticket or name)}
                              for n, role in enumerate(cells, 1)]
         plan.update(wt_argv=command, prompt=prompt)
+        if worktree:
+            plan['worktree'] = worktree
         if crew['name'] != 'default':
             plan['crew'] = crew['name']   # the default crew's plan stays exactly as it was before manifests
         if ticket:
             plan['requires'] = required   # free-text plans stay as they were
         print(json.dumps(plan, indent=2, ensure_ascii=False))
         return
-    take_lock(cwd, name, state_dir)
+    if not worktree:
+        take_lock(cwd, name, state_dir)
     state_dir.mkdir(parents=True)
+    if worktree:
+        WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
+        git_run(worktree['repo_root'], 'worktree', 'add', '-b', worktree['branch'], cwd, worktree['base_sha'])
+        write_json(state_dir / 'worktree.json', worktree)
     (state_dir / 'prompt.txt').write_text(prompt, encoding='utf-8')
     (state_dir / 'requires.txt').write_text(required, encoding='utf-8')
     (state_dir / 'crew.json').write_text(json.dumps({'crew': crew['name'], 'members': members, 'slots': crew['slots'],
@@ -1533,7 +1782,7 @@ def close_target(state_dir):
     return hwnd if hwnd and hwnd in windows else None
 
 
-def down(argv):
+def down(argv, floor=None):
     parser = argparse.ArgumentParser(
         prog='nightshift down',
         description='Stop a crew: capture each pane, write handover.md, end the sessions and release the folder lock. '
@@ -1570,6 +1819,7 @@ def down(argv):
         (last if any(pid in mine for pid in pids) else kills).extend(pids)
     for pid in kills:
         subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, timeout=30)
+    recovery = teardown_worktree(state_dir, hold=not args.close, floor=floor)
     released = release_lock(record['shift'])
     stopped = [r for r, i in record['roles'].items() if i['alive']]
     # The bus's last words, before the self-kill below: the crew's result.json as it stands, then 'down'.
@@ -1579,11 +1829,12 @@ def down(argv):
             bus_append(state_dir, 'result', result=json.loads(result_file.read_text(encoding='utf-8')))
         except (OSError, ValueError) as err:
             bus_append(state_dir, 'result', result=None, error=f'result.json unreadable: {err}')
-    bus_append(state_dir, 'down', stopped=stopped, lock_released=released)
+    bus_append(state_dir, 'down', stopped=stopped, lock_released=released, worktree=recovery)
     hwnd = close_target(state_dir) if args.close else None
     print(json.dumps({'shift': record['shift'], 'handover': str(state_dir / 'handover.md'),
                       'stopped': stopped,
-                      'window_closed': bool(hwnd), 'held': not args.close, 'lock_released': released}), flush=True)
+                      'window_closed': bool(hwnd), 'held': not args.close, 'lock_released': released,
+                      **({'worktree': recovery} if recovery else {})}), flush=True)
     if hwnd:
         ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)   # WM_CLOSE on that window only
     for pid in last:
@@ -1861,7 +2112,7 @@ def claim(argv):
         conflicts = [p for p in paths if p in claims and not same_role(claims[p], args.role)]
         for p in conflicts:
             print(f"{p} is already claimed by {claims[p].get('role')} since {claims[p].get('time')}", file=sys.stderr)
-        for other_dir in shift_dirs():
+        for other_dir in ([] if worktree_info(state_dir) else shift_dirs()):
             if not other_dir.is_dir() or other_dir == state_dir or not shift_record(other_dir)['alive']:
                 continue
             other_claims = load_claims(other_dir)
@@ -2711,6 +2962,8 @@ def stale_locks():
     """[(path, lock)] for locks whose shift folder is missing or whose crew is no longer alive."""
     stale = []
     for path, lock in read_locks():
+        if lock.get('kind') == 'landing' and process_running(lock.get('pid'), lock.get('started_epoch')):
+            continue
         holder = lock_shift_dir(lock)
         if holder is None or not holder.is_dir() or not shift_record(holder)['alive']:
             stale.append((path, lock))
@@ -2781,8 +3034,14 @@ def resume(argv):
     if args.dry_run:
         return
     for entry in plan['stale_locks']:
-        with contextlib.suppress(OSError):
-            Path(entry['lock']).unlink()
+        path = Path(entry['lock'])
+        with mailbox_guard(path), contextlib.suppress(OSError, ValueError):
+            held = json.loads(path.read_text(encoding='utf-8'))
+            if held.get('kind') == 'landing' and process_running(held.get('pid'), held.get('started_epoch')):
+                continue
+            holder = lock_shift_dir(held)
+            if holder is None or not holder.exists() or not shift_record(holder)['alive']:
+                path.unlink()
     if plan['resume']:
         tickets = [r['ticket'] for r in plan['resume']]
         flags = ['--stall-minutes', str(args.stall_minutes)] + (['--notify'] if args.notify else [])
@@ -2973,7 +3232,12 @@ def cleaner(argv):
             repo_locks = [p for p, data in read_locks() if data.get('shift') == state_dir.name]
             claims = load_claims(state_dir)
             hwnd = close_target(state_dir)
-            if state_dir.name in old and not (locks or repo_locks or claims or hwnd):
+            worktree = worktree_info(state_dir)
+            recovery_file = state_dir / 'recovery.json'
+            recovery = json.loads(recovery_file.read_text(encoding='utf-8')) if recovery_file.exists() else {}
+            worktree_pending = worktree and (Path(worktree['worktree_dir']).exists()
+                                            or recovery.get('cleanup_pending'))
+            if state_dir.name in old and not (locks or repo_locks or claims or hwnd or worktree_pending):
                 continue
             summary = {'shift': state_dir.name, 'task': record['task'], 'result': record['result'],
                        'reaped_at': time.strftime('%Y-%m-%d %H:%M:%S')}
@@ -2986,7 +3250,10 @@ def cleaner(argv):
                 for path in locks:
                     path.unlink(missing_ok=True)
                 with contextlib.redirect_stdout(io.StringIO()):
-                    down([state_dir.name, '--close'])
+                    down([state_dir.name, '--close'], floor=floor)
+                recovery = (floor.get('worktrees') or {}).get(state_dir.name)
+                if recovery:
+                    summary.update(recovery)
                 if claims:
                     with claims_locked(state_dir):
                         save_claims(state_dir, {})
@@ -3095,6 +3362,7 @@ def gaffer(argv):
 
 
 COMMANDS = {'start': start, 'status': status, 'down': down, 'spawn': spawn, 'loop': loop, 'resume': resume,
+            'land': land,
             'claim': claim, 'release': release, 'claims': claims_command, 'msg': msg, 'inbox': inbox, 'ack': ack,
             'build': build, 'log': log_command, 'cleaner': cleaner, 'warden': warden, 'gaffer': gaffer}
 
@@ -3106,7 +3374,8 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='Commands:\n  start "task"|TICKET [--dry-run] [--cwd D] [--crew NAME]\n'
-               '                                              start a crew (manifest crews/NAME.yaml)\n'
+               '                                              start a crew (git worktree by default; --no-worktree opts out)\n'
+               '  land SHIFT [--keep-conflicts]                land a tested commit; exit 2 = retest rebase, 4 = conflict\n'
                '  status [--all]                              shifts and whether their crews are alive\n'
                '  down [SHIFT|latest] [--hold|--close]        capture panes, write handover.md, stop the crew; --close (default)\n'
                '                                              closes its window; --hold keeps the tab open\n'

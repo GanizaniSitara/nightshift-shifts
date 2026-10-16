@@ -1,7 +1,8 @@
-"""Unit tests for the Nightshift shifts launcher (nightshift_shifts.py).
+"""Tests for the Nightshift shifts launcher (nightshift_shifts.py).
 
 Run: C:/miniconda3/envs/python312/python.exe -m pytest C:/git/nightshift-shifts/test_nightshift_shifts.py -q
-Nothing here launches Windows Terminal or Claude: subprocess calls are faked.
+Nothing here launches Windows Terminal or agent sessions. Worktree integration
+tests use real temporary Git repositories and small Python build commands.
 """
 import json
 import os
@@ -24,6 +25,11 @@ def _locks_in_tmp(monkeypatch, tmp_path):
     """No test reads or writes the real floor locks or legacy shifts."""
     monkeypatch.setattr(launcher, 'LOCKS_DIR', tmp_path / 'locks')
     monkeypatch.setattr(launcher, 'LEGACY_DIR', tmp_path / 'legacy', raising=False)
+    monkeypatch.setattr(launcher, 'WORKTREES_DIR', tmp_path / 'worktrees')
+    monkeypatch.setattr(launcher, 'FLOOR_FILE', tmp_path / 'floor.json')
+    # The real user's home is itself a Git checkout; temp fixtures must not
+    # discover that repository when they intentionally exercise non-git mode.
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path.parent))
 
 
 @pytest.fixture(autouse=True)
@@ -600,9 +606,27 @@ def test_foreman_brief_forbids_repo_edits_and_suite_substitution(brief_file):
         assert correction in brief
     assert re.search(r'missing[- ]tests?', brief)
     assert 'coder' in brief and 'assignment' in brief and 'verification' in brief and 'tester' in brief
-    assert 'foreman commits the passed change' in brief
+    assert re.search(r'foreman commits (?:the passed|exactly that passed) change', brief)
     assert 'commit only what tester passes' in brief
     assert 'coder owns the launcher and implementation commits' not in brief
+
+
+@pytest.mark.parametrize('brief_file', ['foreman.md', 'foreman-cli.md'])
+def test_foreman_worktree_contract_orders_review_commit_clean_test_then_land(brief_file):
+    brief = (launcher.BRIEFS_DIR / brief_file).read_text(encoding='utf-8').lower()
+    contract = brief.split('shift contract:', 1)[1].split('worktree and landing', 1)[0]
+    stages = ['tester first passes the reviewed revision',
+              'foreman commits exactly that passed change',
+              'then tester must run', 'exact clean head',
+              'when worktree.json exists', 'foreman then lands only that unchanged']
+    positions = [contract.index(stage) for stage in stages]
+    assert positions == sorted(positions)
+    assert 'legacy/direct/non-git shifts skip land' in contract
+    assert 'foreman never substitutes its own suite run' in contract
+    landing = brief.split('worktree and landing', 1)[1].split('result ladder:', 1)[0]
+    assert re.search(r'exit 2.*dispatch tester.*rerun `land`', landing)
+    assert re.search(r'exit 4.*coder to resolve.*tester pass.*foreman commits.*tester verifies', landing)
+    assert '--keep-conflicts' in landing and '--hold' in landing
 
 
 # ── per-role tool: agy (Gemini) Coder (NGH-012) ───────────────────────────────
@@ -899,6 +923,8 @@ def _fake_run(outputs):
         for prefix, result in outputs:
             if argv[:len(prefix)] == prefix:
                 return result if callable(result) is False else result(argv)
+        if argv[:1] == ['git'] and argv[3:] == ['rev-parse', '--show-toplevel']:
+            return subprocess.CompletedProcess(argv, 128, b'', b'not a git repository')
         raise AssertionError(f'unexpected subprocess call: {argv}')
     run.calls = calls
     return run
@@ -969,11 +995,11 @@ def test_start_dry_run_default_crew_is_the_five_pane_golden(monkeypatch, tmp_pat
     py, script = sys.executable, str(Path(launcher.__file__).resolve())
 
     def pane_args(role, slot):
-        return ['--profile', 'Nightshift Crew', '--title', f'{shift} shift', '--suppressApplicationTitle', '-d', '%USERPROFILE%',
+        return ['--profile', 'Nightshift Crew', '--title', f'{shift} shift', '--suppressApplicationTitle', '-d', cwd,
                 py, script, '--pane', role, '--state-dir', state, '--start', '--cwd', cwd, '--slot', str(slot)]
 
     def empty_args(slot):
-        return ['--profile', 'Nightshift Crew', '--title', f'{shift} shift', '--suppressApplicationTitle', '-d', '%USERPROFILE%',
+        return ['--profile', 'Nightshift Crew', '--title', f'{shift} shift', '--suppressApplicationTitle', '-d', cwd,
                 'cmd.exe', '/k', py, script, '--slot', str(slot), '--state-dir', state]
     assert plan == {
         'dry_run': True, 'shift': shift, 'state_dir': state, 'cwd': cwd, 'ticket': None,
@@ -2712,6 +2738,7 @@ def _container_isolated(monkeypatch, tmp_path):
     """No test touches the real locks or shifts folders, and nothing reaches a real process."""
     monkeypatch.setattr(launcher, 'LOCKS_DIR', tmp_path / 'locks')
     monkeypatch.setattr(launcher, 'SHIFTS_DIR', tmp_path / 'shifts')
+    monkeypatch.setattr(launcher, 'plan_worktree', lambda *a: None)
     monkeypatch.setattr(launcher, 'notify_owner', lambda subject, body: {'sent': True, 'draft_id': 'fake'})
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('Popen called'))
     monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: pytest.fail(f'unexpected subprocess: {argv}'))
@@ -3609,10 +3636,10 @@ def test_codex_and_codex_copilot_manifests_parse_five_roles_in_2x4():
     codex = launcher.load_crew('codex')
     assert codex['layout'] == '2x4' and codex['slots'] == 8 and codex['model'] == 'gpt-6.1-sol'
     assert [(r['role'], r['tool'], r['model'], r.get('reasoning')) for r in codex['roles']] == [
-        ('Foreman', 'codex', 'gpt-6.1-sol', None),
+        ('Foreman', 'codex', 'gpt-6.1-sol', 'medium'),
         ('Advisor', 'codex', 'gpt-6-astra', 'xhigh'),
-        ('Coder', 'codex', 'gpt-6.1-sol', None),
-        ('Tester', 'codex', 'gpt-6.1-sol', None),
+        ('Coder', 'codex', 'gpt-6.1-sol', 'medium'),
+        ('Tester', 'codex', 'gpt-6.1-sol', 'medium'),
         ('Apprentice', 'codex', 'gpt-5.6-luna', 'xhigh')]
     copilot = launcher.load_crew('codex-copilot')
     for crew in (codex, copilot):
@@ -3697,7 +3724,7 @@ def test_role_schemes_preserve_user_settings_and_campbell_palette(monkeypatch, t
 @pytest.mark.parametrize('crew', ['codex', 'default', 'apprentice-codex', 'codex-copilot', 'apprentice-gemini'])
 def test_start_selects_role_schemes_only_for_codex_members_and_no_empty_slots(monkeypatch, tmp_path, capsys, crew):
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('unexpected launch'))
-    launcher.start(['--dry-run', '--cwd', str(tmp_path), '--crew', crew, 'task'])
+    launcher.start(['--dry-run', '--no-worktree', '--cwd', str(tmp_path), '--crew', crew, 'task'])
     plan = json.loads(capsys.readouterr().out)
     members = {m['label']: m for m in launcher.crew_members(launcher.load_crew(crew), plan['shift'])}
     assert 'codex_colours' in launcher.wt_command.__code__.co_varnames
@@ -4462,11 +4489,13 @@ def test_log_follow_waits_for_a_missing_bus_and_stops_on_ctrl_c(monkeypatch, tmp
     assert calls == [launcher.LOG_POLL_SECONDS] * 3 and captured.err.count('no bus yet') == 1
 
 
-def test_log_is_a_main_command():
-    import inspect
-    source = inspect.getsource(launcher.main)
+def test_log_is_a_main_command(monkeypatch, capsys):
     assert launcher.COMMANDS['log'] is launcher.log_command
-    assert 'log SHIFT [--follow] [--since N] [--json]' in source
+    monkeypatch.setattr(sys, 'argv', ['nightshift', '--help'])
+    with pytest.raises(SystemExit) as err:
+        launcher.main()
+    assert err.value.code == 0
+    assert 'log SHIFT [--follow] [--since N] [--json]' in capsys.readouterr().out
     assert 'bus.jsonl' in launcher.__doc__ and '`log SHIFT' in launcher.__doc__
 
 
@@ -4569,7 +4598,7 @@ def test_tool_command_forwards_session_name_only_to_copilot():
 
 def test_start_dry_run_copilot_crew_names_sessions_and_selects_role_schemes(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('unexpected launch'))
-    launcher.start(['--dry-run', '--cwd', str(tmp_path), '--crew', 'copilot', 'task'])
+    launcher.start(['--dry-run', '--no-worktree', '--cwd', str(tmp_path), '--crew', 'copilot', 'task'])
     plan = json.loads(capsys.readouterr().out)
     members = {m['label']: m for m in launcher.crew_members(launcher.load_crew('copilot'), plan['shift'])}
     assert [m['label'] for m in members.values()] == ['Foreman', 'Advisor', 'Coder', 'Tester', 'Apprentice']
@@ -4733,7 +4762,7 @@ def test_cleaner_protects_live_active_and_reaps_dead_or_finished_only(floor_worl
             eligible.append(d)
     monkeypatch.setattr(launcher, 'shift_record', lambda d: records[Path(d)])
     calls = []
-    def fake_down(argv):
+    def fake_down(argv, floor=None):
         calls.append(argv)
         records[launcher.SHIFTS_DIR / argv[0]]['alive'] = False
     monkeypatch.setattr(launcher, 'down', fake_down)
@@ -5553,7 +5582,7 @@ def test_dry_run_reports_actual_role_controls_for_every_installed_crew(monkeypat
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **k: pytest.fail('dry-run launched a process'))
     monkeypatch.setattr(launcher.subprocess, 'run', lambda *a, **k: pytest.fail('dry-run ran a command'))
     before = dict(os.environ)
-    launcher.start(['--dry-run', '--cwd', str(tmp_path), '--crew', crew_name, 'context policy probe'])
+    launcher.start(['--dry-run', '--no-worktree', '--cwd', str(tmp_path), '--crew', crew_name, 'context policy probe'])
     plan = json.loads(capsys.readouterr().out)
     members = launcher.crew_members(launcher.load_crew(crew_name), plan['shift'])
     for member in members:
@@ -5672,3 +5701,483 @@ def test_spawn_helper_error_preserves_diagnostics_and_rolls_back_all_state(
         launcher.spawn([d.name, '--role', 'Tester'])
     assert reason in str(err.value)
     assert _floor_snapshot(tmp_path) == before
+
+
+# NGH-040: real Git integration; only the crew/window launch boundary is mocked.
+
+def _wt_git(repo, *args, check=True):
+    result = subprocess.run(['git', '-C', str(repo), *args], capture_output=True,
+                            encoding='utf-8', errors='replace', timeout=30)
+    if check:
+        assert result.returncode == 0, (args, result.stdout, result.stderr)
+    return result.stdout.strip() if check else result
+
+
+def _wt_commit(repo, path, text, message='test change'):
+    target = Path(repo) / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding='utf-8')
+    _wt_git(repo, 'add', '--', path)
+    _wt_git(repo, 'commit', '-m', message)
+    return _wt_git(repo, 'rev-parse', 'HEAD')
+
+
+@pytest.fixture
+def worktree_world(monkeypatch, tmp_path):
+    root = tmp_path / 'floor with spaces'
+    for name, suffix in [('SOLID_DIR', ''), ('SHIFTS_DIR', 'shifts'),
+                         ('WORKTREES_DIR', 'worktrees'), ('LOCKS_DIR', 'locks'),
+                         ('BUILDS_DIR', 'builds'), ('FLOOR_FILE', 'floor.json'),
+                         ('LEGACY_DIR', 'legacy')]:
+        monkeypatch.setattr(launcher, name, root / suffix, raising=False)
+    launches = []
+    monkeypatch.setattr(launcher, 'install_profile', lambda *a: None)
+    monkeypatch.setattr(launcher, 'launch', lambda *a: launches.append(a))
+    monkeypatch.setattr(launcher, 'terminal_windows', lambda: {})
+    monkeypatch.setattr(launcher, 'close_target', lambda *a: None)
+    monkeypatch.setattr(launcher, 'own_ancestors', lambda: set())
+    monkeypatch.setattr(launcher, 'pid_alive', lambda *a: False)
+    monkeypatch.setattr(launcher, 'process_start_epoch', lambda pid: 123.0)
+    repo = tmp_path / 'repo with spaces and café'
+    repo.mkdir()
+    _wt_git(repo, 'init', '-b', 'main')
+    for key, value in [('user.name', 'Worktree Tester'), ('user.email', 'tester@example.invalid'),
+                       ('commit.gpgsign', 'false'), ('core.autocrlf', 'false'),
+                       ('core.hooksPath', str(tmp_path / 'no-hooks'))]:
+        _wt_git(repo, 'config', key, value)
+    _wt_commit(repo, 'shared.txt', 'original\n', 'initial')
+    _wt_commit(repo, 'notes.txt', 'notes\n', 'notes')
+    return types.SimpleNamespace(root=root, repo=repo, launches=launches)
+
+
+def _wt_start(world, *args):
+    state = launcher.start(['--cwd', str(world.repo), 'Ticket NGH-040: verify isolation', *args])
+    meta = json.loads((state / 'worktree.json').read_text(encoding='utf-8'))
+    return state, Path(meta['worktree_dir']), meta
+
+
+def _wt_test_commit(state, work, capsys):
+    # Exercise the real build wrapper/evidence schema, without invoking another suite.
+    launcher.build([state.name, '--cwd', str(work), '--cmd',
+                    subprocess.list2cmdline([sys.executable, '-c', 'print(42)'])])
+    record = json.loads(capsys.readouterr().out)
+    assert record['exit'] == 0 and record['dirty'] is False
+    assert record['head'] == _wt_git(work, 'rev-parse', 'HEAD')
+    return record
+
+
+def _wt_land(state, capsys, expected=0, *flags):
+    capsys.readouterr()
+    if expected:
+        with pytest.raises(SystemExit) as err:
+            launcher.land([state.name, *flags])
+        assert err.value.code == expected
+    else:
+        launcher.land([state.name, *flags])
+    return json.loads(capsys.readouterr().out)
+
+
+def test_worktree_start_records_metadata_and_all_slot_cwds(worktree_world, capsys):
+    w = worktree_world
+    base = _wt_git(w.repo, 'rev-parse', 'main')
+    nested = w.repo / 'nested'
+    nested.mkdir()
+    state = launcher.start(['--cwd', str(nested), 'Ticket NGH-040: nested cwd'])
+    meta = json.loads((state / 'worktree.json').read_text(encoding='utf-8'))
+    work = Path(meta['worktree_dir'])
+    assert Path(meta['repo_root']) == w.repo.resolve()
+    assert work == launcher.WORKTREES_DIR / state.name
+    assert meta['target_branch'] == 'main' and meta['base_sha'] == base and meta['created_at']
+    assert re.fullmatch(r'shift/NGH-040-[a-f0-9]+', meta['branch'])
+    assert _wt_git(work, 'branch', '--show-current') == meta['branch']
+    assert _wt_git(work, 'rev-parse', 'HEAD') == base
+    assert json.loads((state / 'crew.json').read_text())['cwd'] == str(work)
+    argv = w.launches[-1][0]
+    assert argv.count('--cwd') == 5   # crew wrappers take --cwd; all eight WT slots take -d
+    assert argv.count('-d') == 8
+    assert all(argv[i + 1] == str(work) for i, token in enumerate(argv) if token == '-d')
+    assert all(argv[i + 1] == str(work) for i, token in enumerate(argv) if token == '--cwd')
+    assert not launcher.lock_path(str(w.repo)).exists()
+    # Parent remains untouched even though the nested source folder is untracked.
+    assert _wt_git(w.repo, 'rev-parse', 'HEAD') == base
+
+
+def test_worktree_dry_run_has_no_git_or_state_mutations(worktree_world, capsys):
+    w = worktree_world
+    before = _wt_git(w.repo, 'worktree', 'list', '--porcelain')
+    branches = _wt_git(w.repo, 'branch', '--list')
+    launcher.start(['--cwd', str(w.repo), '--dry-run', 'Ticket NGH-040: dry run'])
+    plan = json.loads(capsys.readouterr().out)
+    assert Path(plan['cwd']).parent == launcher.WORKTREES_DIR
+    assert str(w.repo) != plan['cwd']
+    assert _wt_git(w.repo, 'worktree', 'list', '--porcelain') == before
+    assert _wt_git(w.repo, 'branch', '--list') == branches
+    assert not launcher.SHIFTS_DIR.exists() and not launcher.WORKTREES_DIR.exists()
+    assert not w.launches
+
+
+def test_worktree_opt_out_and_non_git_keep_in_place_locks(worktree_world, tmp_path):
+    w = worktree_world
+    state = launcher.start(['--cwd', str(w.repo), '--no-worktree', 'in place'])
+    assert not (state / 'worktree.json').exists()
+    assert json.loads((state / 'crew.json').read_text())['cwd'] == str(w.repo)
+    assert launcher.lock_path(str(w.repo)).exists()
+    plain = tmp_path / 'plain folder'
+    plain.mkdir()
+    state = launcher.start(['--cwd', str(plain), 'non git'])
+    assert not (state / 'worktree.json').exists()
+    assert launcher.lock_path(str(plain)).exists()
+
+
+def test_worktree_two_shifts_are_isolated_with_local_claim_conflicts(worktree_world, capsys):
+    w = worktree_world
+    one, work1, _ = _wt_start(w)
+    two, work2, _ = _wt_start(w)
+    assert work1 != work2
+    (work1 / 'shared.txt').write_text('only one\n')
+    assert (work2 / 'shared.txt').read_text() == 'original\n'
+    assert (w.repo / 'shared.txt').read_text() == 'original\n'
+    # Even an identical absolute claim is shift-local for isolated worktrees.
+    path = str(work1 / 'shared.txt')
+    launcher.claim([one.name, 'Coder', path])
+    launcher.claim([two.name, 'Coder', path])
+    before = (one / 'claims.json').read_bytes()
+    with pytest.raises(launcher.FileClaimed) as err:
+        launcher.claim([one.name, 'Tester', path])
+    assert err.value.code == 4 and (one / 'claims.json').read_bytes() == before
+
+
+def test_worktree_land_fast_forward_preserves_unrelated_staged_and_untracked_notes(worktree_world, capsys):
+    w = worktree_world
+    state, work, meta = _wt_start(w)
+    sha = _wt_commit(work, 'shared.txt', 'landed\n')
+    _wt_test_commit(state, work, capsys)
+    (w.repo / 'notes.txt').write_text('staged notes\n')
+    _wt_git(w.repo, 'add', 'notes.txt')
+    (w.repo / 'private notes.txt').write_text('private\n')
+    before = _wt_git(w.repo, 'status', '--porcelain')
+    out = _wt_land(state, capsys)
+    assert out == {'status': 'landed', 'sha': sha}
+    assert _wt_git(w.repo, 'rev-parse', 'main') == sha
+    assert _wt_git(w.repo, 'status', '--porcelain') == before
+    assert (w.repo / 'notes.txt').read_text() == 'staged notes\n'
+    assert (w.repo / 'private notes.txt').read_text() == 'private\n'
+    assert (w.repo / 'shared.txt').read_text() == 'landed\n'
+    landed = json.loads((state / 'landed.json').read_text())
+    assert landed['landed_sha'] == sha and landed['base_sha'] == meta['base_sha']
+    events = [json.loads(line) for line in (state / 'bus.jsonl').read_text().splitlines()]
+    assert any(event['event'] == 'land' for event in events)
+    assert not launcher.lock_path(str(w.repo)).exists()
+
+
+@pytest.mark.parametrize('staged', [False, True])
+def test_worktree_land_refuses_overlapping_parent_dirty_file(worktree_world, capsys, staged):
+    w = worktree_world
+    state, work, _ = _wt_start(w)
+    _wt_commit(work, 'shared.txt', 'crew edit\n')
+    _wt_test_commit(state, work, capsys)
+    base = _wt_git(w.repo, 'rev-parse', 'HEAD')
+    (w.repo / 'shared.txt').write_text('owner edit\n')
+    if staged:
+        _wt_git(w.repo, 'add', 'shared.txt')
+    before = _wt_git(w.repo, 'status', '--porcelain')
+    with pytest.raises(SystemExit):
+        launcher.land([state.name])
+    assert _wt_git(w.repo, 'rev-parse', 'HEAD') == base
+    assert _wt_git(w.repo, 'status', '--porcelain') == before
+    assert (w.repo / 'shared.txt').read_text() == 'owner edit\n'
+    assert not (state / 'landed.json').exists()
+    assert not launcher.lock_path(str(w.repo)).exists()
+
+
+def test_worktree_land_rebase_requires_fresh_clean_build_before_second_land(worktree_world, capsys):
+    w = worktree_world
+    state, work, _ = _wt_start(w)
+    old = _wt_commit(work, 'crew.txt', 'crew\n')
+    _wt_test_commit(state, work, capsys)
+    target = _wt_commit(w.repo, 'owner.txt', 'owner\n')
+    out = _wt_land(state, capsys, 2)
+    assert out['status'] == 'rebased_needs_test' and out['new_base'] == target
+    rebased = _wt_git(work, 'rev-parse', 'HEAD')
+    assert out['head'] == rebased and rebased != old
+    assert _wt_git(w.repo, 'rev-parse', 'HEAD') == target
+    assert not (state / 'landed.json').exists()
+    assert not launcher.lock_path(str(w.repo)).exists()
+    with pytest.raises(SystemExit):
+        launcher.land([state.name])
+    assert _wt_git(w.repo, 'rev-parse', 'HEAD') == target
+    _wt_test_commit(state, work, capsys)
+    assert _wt_land(state, capsys)['sha'] == rebased
+    assert (w.repo / 'owner.txt').read_text() == 'owner\n'
+    assert (w.repo / 'crew.txt').read_text() == 'crew\n'
+
+
+@pytest.mark.parametrize('keep', [False, True])
+def test_worktree_land_conflict_reports_files_releases_lock_and_aborts_unless_kept(worktree_world, capsys, keep):
+    w = worktree_world
+    state, work, _ = _wt_start(w)
+    old = _wt_commit(work, 'shared.txt', 'crew conflict\n')
+    _wt_test_commit(state, work, capsys)
+    target = _wt_commit(w.repo, 'shared.txt', 'owner conflict\n')
+    flags = ['--keep-conflicts'] if keep else []
+    out = _wt_land(state, capsys, 4, *flags)
+    assert out['status'] == 'conflict' and out['target_head'] == target
+    assert 'shared.txt' in out['files']
+    assert _wt_git(w.repo, 'rev-parse', 'HEAD') == target
+    assert not (state / 'landed.json').exists()
+    assert not launcher.lock_path(str(w.repo)).exists()
+    if keep:
+        assert '<<<<<<<' in (work / 'shared.txt').read_text()
+        assert 'shared.txt' in _wt_git(work, 'diff', '--name-only', '--diff-filter=U')
+        _wt_git(work, 'rebase', '--abort')
+    else:
+        assert _wt_git(work, 'rev-parse', 'HEAD') == old
+        assert (work / 'shared.txt').read_text() == 'crew conflict\n'
+        assert not _wt_git(work, 'status', '--porcelain')
+
+
+@pytest.mark.parametrize('state_kind', ['unbuilt', 'dirty', 'new_commit'])
+def test_worktree_land_rejects_missing_or_stale_clean_evidence(worktree_world, capsys, state_kind):
+    w = worktree_world
+    state, work, _ = _wt_start(w)
+    _wt_commit(work, 'crew.txt', 'crew\n')
+    if state_kind != 'unbuilt':
+        _wt_test_commit(state, work, capsys)
+    if state_kind == 'dirty':
+        (work / 'crew.txt').write_text('uncommitted\n')
+    if state_kind == 'new_commit':
+        _wt_commit(work, 'crew.txt', 'not tested\n')
+    base = _wt_git(w.repo, 'rev-parse', 'HEAD')
+    with pytest.raises(SystemExit):
+        launcher.land([state.name])
+    assert _wt_git(w.repo, 'rev-parse', 'HEAD') == base
+    assert not (state / 'landed.json').exists()
+
+
+@pytest.mark.parametrize('hold', [False, True])
+def test_worktree_down_preserves_dirty_unlanded_work_in_recovery_branch_or_hold(worktree_world, capsys, hold):
+    w = worktree_world
+    state, work, meta = _wt_start(w)
+    _wt_commit(work, 'crew.txt', 'committed work\n')
+    (work / 'shared.txt').write_text('dirty recovery\n')
+    (work / 'new recovery.txt').write_text('untracked recovery\n')
+    launcher.down([state.name, *(['--hold'] if hold else [])])
+    assert _wt_git(w.repo, 'rev-parse', '--verify', meta['branch'])
+    if hold:
+        assert work.is_dir() and (work / 'shared.txt').read_text() == 'dirty recovery\n'
+        assert (work / 'new recovery.txt').read_text() == 'untracked recovery\n'
+        recovery = json.loads((state / 'recovery.json').read_text())
+        assert recovery['disposition'] == 'held' and recovery['cleanup_pending'] is False
+        assert _wt_git(work, 'status', '--porcelain')   # hold did not commit dirty edits
+    else:
+        assert not work.exists()
+        assert _wt_git(w.repo, 'show', f"{meta['branch']}:shared.txt") == 'dirty recovery'
+        assert _wt_git(w.repo, 'show', f"{meta['branch']}:new recovery.txt") == 'untracked recovery'
+    assert 'preserved_branch' in (state / 'handover.md').read_text()
+    assert meta['branch'] in (state / 'handover.md').read_text()
+    floor = json.loads(launcher.FLOOR_FILE.read_text())
+    assert meta['branch'] in json.dumps(floor) and 'preserved_branch' in json.dumps(floor)
+
+
+def test_worktree_down_removes_landed_worktree_and_branch(worktree_world, capsys):
+    w = worktree_world
+    state, work, meta = _wt_start(w)
+    sha = _wt_commit(work, 'crew.txt', 'land me\n')
+    _wt_test_commit(state, work, capsys)
+    _wt_land(state, capsys)
+    launcher.down([state.name])
+    assert not work.exists()
+    assert not _wt_git(w.repo, 'branch', '--list', meta['branch'])
+    assert str(work) not in _wt_git(w.repo, 'worktree', 'list', '--porcelain')
+    assert _wt_git(w.repo, 'rev-parse', 'main') == sha
+
+
+def test_worktree_start_from_linked_checkout_resolves_canonical_repository(worktree_world):
+    w = worktree_world
+    _, linked, _ = _wt_start(w)
+    state = launcher.start(['--cwd', str(linked), 'Ticket NGH-040: another shift'])
+    meta = json.loads((state / 'worktree.json').read_text())
+    assert Path(meta['repo_root']) == w.repo.resolve()
+    assert Path(meta['worktree_dir']) != linked
+
+
+def test_worktree_explicit_target_branch_uses_its_head(worktree_world):
+    w = worktree_world
+    _wt_git(w.repo, 'checkout', '-b', 'release')
+    target = _wt_commit(w.repo, 'release.txt', 'release\n')
+    _, work, meta = _wt_start(w, '--target-branch', 'release')
+    assert meta['target_branch'] == 'release' and meta['base_sha'] == target
+    assert _wt_git(work, 'rev-parse', 'HEAD') == target
+
+
+def test_worktree_land_refuses_untracked_parent_collision(worktree_world, capsys):
+    w = worktree_world
+    state, work, _ = _wt_start(w)
+    _wt_commit(work, 'new file.txt', 'crew file\n')
+    _wt_test_commit(state, work, capsys)
+    base = _wt_git(w.repo, 'rev-parse', 'HEAD')
+    (w.repo / 'new file.txt').write_text('owner file\n')
+    with pytest.raises(SystemExit):
+        launcher.land([state.name])
+    assert (w.repo / 'new file.txt').read_text() == 'owner file\n'
+    assert _wt_git(w.repo, 'rev-parse', 'HEAD') == base
+    assert not (state / 'landed.json').exists()
+
+
+def test_worktree_latest_failed_build_invalidates_earlier_pass(worktree_world, capsys):
+    w = worktree_world
+    state, work, _ = _wt_start(w)
+    _wt_commit(work, 'crew.txt', 'crew\n')
+    _wt_test_commit(state, work, capsys)
+    with pytest.raises(SystemExit) as err:
+        launcher.build([state.name, '--cwd', str(work), '--cmd',
+                        subprocess.list2cmdline([sys.executable, '-c', 'raise SystemExit(7)'])])
+    assert err.value.code == 7
+    with pytest.raises(SystemExit):
+        launcher.land([state.name])
+    assert not (state / 'landed.json').exists()
+
+
+def test_worktree_concurrent_landings_use_exclusive_repository_lock(worktree_world, capsys, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    w = worktree_world
+    one, work1, _ = _wt_start(w)
+    two, work2, _ = _wt_start(w)
+    _wt_commit(work1, 'one.txt', 'one\n')
+    _wt_commit(work2, 'two.txt', 'two\n')
+    _wt_test_commit(one, work1, capsys)
+    _wt_test_commit(two, work2, capsys)
+    monkeypatch.setattr(launcher, 'process_running', lambda *a: True)
+    gate = threading.Barrier(2)
+    original_state = launcher.git_state
+    mutex = threading.Lock()
+    active, maximum = 0, 0
+
+    def checked_state(cwd):
+        nonlocal active, maximum
+        with mutex:
+            active += 1
+            maximum = max(maximum, active)
+        try:
+            # A short delay creates a real overlap opportunity after lock acquisition.
+            launcher.time.sleep(0.15)
+            return original_state(cwd)
+        finally:
+            with mutex:
+                active -= 1
+
+    monkeypatch.setattr(launcher, 'git_state', checked_state)
+
+    def run(state):
+        gate.wait(timeout=10)
+        try:
+            launcher.land([state.name])
+            return 0
+        except SystemExit as err:
+            return err.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a, b = pool.submit(run, one), pool.submit(run, two)
+        assert sorted([a.result(timeout=30), b.result(timeout=30)]) == [0, 2]
+    assert maximum == 1
+    assert not launcher.lock_path(str(w.repo)).exists()
+    assert sum((state / 'landed.json').exists() for state in (one, two)) == 1
+
+
+def test_worktree_cleaner_preserves_dead_shift_recovery_in_floor(worktree_world, capsys):
+    w = worktree_world
+    state, work, meta = _wt_start(w)
+    (work / 'shared.txt').write_text('cleaner recovery\n')
+    launcher.cleaner([])
+    assert not work.exists()
+    assert _wt_git(w.repo, 'show', f"{meta['branch']}:shared.txt") == 'cleaner recovery'
+    assert meta['branch'] in (state / 'handover.md').read_text()
+    floor = json.loads(launcher.FLOOR_FILE.read_text())
+    assert floor['worktrees'][state.name]['preserved_branch'] == meta['branch']
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows current-directory handle semantics')
+def test_worktree_down_with_live_current_directory_preserves_teardown_progress(worktree_world, capsys):
+    w = worktree_world
+    state, work, meta = _wt_start(w)
+    _wt_commit(work, 'crew.txt', 'land me\n')
+    _wt_test_commit(state, work, capsys)
+    _wt_land(state, capsys)
+    child = subprocess.Popen([sys.executable, '-u', '-c',
+                              'import sys; print("ready", flush=True); sys.stdin.read()'],
+                             cwd=work, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == 'ready'
+        # A held cwd must not abort down before it records recovery/down state.
+        launcher.down([state.name])
+        events = [json.loads(line) for line in (state / 'bus.jsonl').read_text().splitlines()]
+        assert events[-1]['event'] == 'down'
+        recovery = json.loads((state / 'recovery.json').read_text())
+        assert recovery['cleanup_pending'] is True and recovery['error']
+        assert recovery['disposition'] == 'landed'
+        floor = json.loads(launcher.FLOOR_FILE.read_text())
+        assert floor['worktrees'][state.name] == recovery
+        assert 'cleanup_pending' in (state / 'handover.md').read_text()
+        assert _wt_git(w.repo, 'branch', '--list', meta['branch'])
+        for _ in range(2):
+            report = launcher.cleaner([])
+            assert any(row['shift'] == state.name for row in report['reaped'])
+            recovery = json.loads((state / 'recovery.json').read_text())
+            assert recovery['cleanup_pending'] is True and recovery['error']
+            floor = json.loads(launcher.FLOOR_FILE.read_text())
+            assert floor['worktrees'][state.name] == recovery
+            assert any(row['shift'] == state.name for row in floor['reaped'])
+    finally:
+        child.communicate(timeout=10)
+    launcher.cleaner([])
+    assert not work.exists()
+    assert not _wt_git(w.repo, 'branch', '--list', meta['branch'])
+    assert str(work).replace('\\', '/') not in _wt_git(w.repo, 'worktree', 'list', '--porcelain')
+    recovery = json.loads((state / 'recovery.json').read_text())
+    assert recovery['cleanup_pending'] is False and not recovery['error']
+    assert json.loads(launcher.FLOOR_FILE.read_text())['worktrees'][state.name] == recovery
+    before = _floor_snapshot(w.root)
+    assert launcher.cleaner([])['reaped'] == []
+    assert _floor_snapshot(w.root) == before
+
+
+@pytest.mark.parametrize('failure_phase', ['add', 'commit'])
+def test_worktree_failed_recovery_save_keeps_edits_branch_and_completes_down(
+        worktree_world, capsys, monkeypatch, failure_phase):
+    w = worktree_world
+    state, work, meta = _wt_start(w)
+    base = _wt_git(work, 'rev-parse', 'HEAD')
+    (work / 'shared.txt').write_text('unsaved tracked edit\n')
+    (work / 'new file.txt').write_text('unsaved untracked edit\n')
+    lock = _lock(str(w.repo), state.name)
+    original = launcher.git_run
+
+    def fail_save(cwd, *args, **kwargs):
+        if Path(cwd) == work and args[0] == failure_phase:
+            raise SystemExit(f'injected recovery {failure_phase} failure')
+        return original(cwd, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(launcher, 'git_run', fail_save)
+        launcher.down([state.name])
+    out = json.loads(capsys.readouterr().out)
+    assert out['lock_released'] == [str(w.repo)] and not lock.exists()
+    assert work.is_dir()
+    assert (work / 'shared.txt').read_text() == 'unsaved tracked edit\n'
+    assert (work / 'new file.txt').read_text() == 'unsaved untracked edit\n'
+    assert _wt_git(w.repo, 'rev-parse', meta['branch']) == base
+    events = [json.loads(line) for line in (state / 'bus.jsonl').read_text().splitlines()]
+    assert events[-1]['event'] == 'down'
+    recovery = json.loads((state / 'recovery.json').read_text())
+    assert recovery['preserved_branch'] == meta['branch']
+    assert recovery['cleanup_pending'] is True
+    assert f'injected recovery {failure_phase} failure' in recovery['error']
+    assert json.loads(launcher.FLOOR_FILE.read_text())['worktrees'][state.name] == recovery
+    # Removing the fault lets the existing cleaner save the original files and reclaim.
+    launcher.cleaner([])
+    assert not work.exists()
+    assert _wt_git(w.repo, 'show', f"{meta['branch']}:shared.txt") == 'unsaved tracked edit'
+    assert _wt_git(w.repo, 'show', f"{meta['branch']}:new file.txt") == 'unsaved untracked edit'
+    assert json.loads((state / 'recovery.json').read_text())['cleanup_pending'] is False
