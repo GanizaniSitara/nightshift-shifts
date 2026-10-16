@@ -389,6 +389,8 @@ def test_pane_start_carries_the_persona_to_every_cli_from_an_old_crew_json(monke
     for name in ('accept_trust_prompt', 'set_role_colour', 'register_name', 'set_codex_role_name',
                  'set_pane_background'):
         monkeypatch.setattr(launcher, name, lambda *a, **k: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda *a, **kw: True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     launcher.pane('Tester', str(state), start=True, cwd=str(tmp_path))
     identity = ' '.join(yaml.safe_load((launcher.PERSONAS_DIR / 'tester.yaml').read_text(encoding='utf-8'))
@@ -492,7 +494,8 @@ def test_pane_start_uses_the_manifest_member(monkeypatch, tmp_path):
             return 0
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
     monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
-    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.setdefault('colour', colour))
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.update(colour=colour) or True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda *a, **kw: True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     launcher.pane('Coder-2', str(state), start=True, cwd=str(tmp_path), crew='trio')
     cmd = seen['cmd']
@@ -535,7 +538,8 @@ def _capture_role_launch(monkeypatch, tmp_path, role, cwd, *, member_role=None, 
     monkeypatch.setattr(launcher.subprocess, 'run',
                         lambda *a, **kw: pytest.fail('unexpected subprocess.run'))
     monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: None)
-    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda pid, message, **kw: seen.update(opening=message) or True)
     monkeypatch.setattr(launcher, 'register_name', lambda *a: None)
     monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a: None)
     monkeypatch.setattr('builtins.input', lambda *a: '')
@@ -571,7 +575,8 @@ def test_foreman_edit_denies_use_actual_cwd_and_leave_external_state_writable(mo
     assert json.loads(command[command.index('--settings') + 1]) == {'permissions': {'deny': rules}}
     assert seen['cwd'] == cwd
     assert command[command.index('--permission-mode') + 1] == 'auto'
-    assert command[-1] == launcher.START_MESSAGES['Foreman']
+    assert launcher.START_MESSAGES['Foreman'] not in command
+    assert seen['opening'] == launcher.START_MESSAGES['Foreman']
     assert command[command.index('--append-system-prompt') + 1].endswith('THE TASK')
     # The only denied tree is repo; result.json/handover.md remain outside it.
     assert not state.resolve().is_relative_to(repo.resolve())
@@ -767,7 +772,8 @@ def test_pane_claude_role_with_permissions_default_gets_no_permission_flag(tmp_p
             return 0
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
     monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
-    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda *a, **kw: True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
     launcher.pane('Coder', str(state), start=True, cwd=str(tmp_path))
@@ -1989,7 +1995,8 @@ def test_pane_start_launches_the_default_tester_in_blue(monkeypatch, tmp_path):
             return 0
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
     monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
-    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.setdefault('colour', colour))
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.update(colour=colour) or True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda *a, **kw: True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     launcher.pane('Tester', str(state), start=True, cwd=str(tmp_path))
     cmd = seen['cmd']
@@ -3000,7 +3007,8 @@ def test_pane_start_takes_a_spawned_member_from_crew_json(monkeypatch, tmp_path)
             return 0
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
     monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
-    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.setdefault('colour', colour))
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.update(colour=colour) or True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda *a, **kw: True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     monkeypatch.setattr(launcher, 'load_crew', lambda *a, **k: pytest.fail('manifest read despite crew.json'))
     monkeypatch.setattr(launcher, 'process_running', lambda pid, started=None: True)
@@ -3275,7 +3283,8 @@ def _run_pane(monkeypatch, state, role, slot, calls):
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: Child())
     monkeypatch.setattr(launcher.subprocess, 'run', lambda argv, **k: calls.append(argv))
     monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
-    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda *a, **kw: True)
     monkeypatch.setattr('builtins.input', lambda *a: pytest.fail('a container pane must not wait for Enter'))
     launcher.pane(role, str(state), start=True, cwd=str(state), slot=slot)
 
@@ -3507,7 +3516,8 @@ def test_pane_start_launches_the_default_advisor_on_its_own_model_in_purple(monk
             return 0
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda cmd, **k: seen.setdefault('cmd', cmd) and Child())
     monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda child: None)
-    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.setdefault('colour', colour))
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda child, colour, cwd: seen.update(colour=colour) or True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda *a, **kw: True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     launcher.pane('Advisor', str(state), start=True, cwd=str(tmp_path))
     cmd = seen['cmd']
@@ -4073,7 +4083,8 @@ def test_pane_role_background_and_reset_survive_exit_and_launch_errors(monkeypat
     monkeypatch.setattr(launcher, 'register_name', lambda *a: events.append(('register',)))
     monkeypatch.setattr(launcher, 'set_codex_role_name', lambda *a: events.append(('rename', a[1], a[2])))
     monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: events.append(('trust',)))
-    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: events.append(('colour', a[1])))
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: events.append(('colour', a[1])) or True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda *a, **kw: events.append(('opening', a[1])) or True)
     monkeypatch.setattr(launcher, 'process_running', lambda *a: True)
     monkeypatch.setattr('builtins.input', lambda *a: pytest.fail('reused slot should return'))
     if failure:
@@ -5587,9 +5598,11 @@ def _capture_context_launch(monkeypatch, state, label, *, start=True, live=False
                         lambda command, **kw: seen.update(command=command, **kw) or Child())
     monkeypatch.setattr(launcher.subprocess, 'run',
                         lambda *a, **kw: pytest.fail('unexpected subprocess.run'))
-    for name in ('accept_trust_prompt', 'set_role_colour', 'register_name', 'set_codex_role_name',
+    for name in ('accept_trust_prompt', 'register_name', 'set_codex_role_name',
                  'set_pane_background'):
         monkeypatch.setattr(launcher, name, lambda *a, **kw: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda pid, message, **kw: seen.update(opening=message) or True)
     monkeypatch.setattr('builtins.input', lambda *a: '')
     launcher.pane(label, str(state), start=start, live=live, cwd=str(cwd or state.parent), slot=slot)
     return seen
@@ -5713,7 +5726,9 @@ def test_context_replacement_reuses_slot_and_recovers_acknowledged_unfinished_as
     for n in (1, 2, 3, 4, 6, 7, 8):
         assert launcher.read_slot(d, n) == original_slots[n]
     seen = _capture_context_launch(monkeypatch, d, 'Apprentice', slot=5)
-    prompt = seen['command'][-1]
+    prompt = seen['opening'] if tool == 'claude' else seen['command'][-1]
+    if tool == 'claude':
+        assert prompt not in seen['command']  # recovery is sent only after colour confirmation.
     assert f'"{d.as_posix()}/handover.md"' in prompt
     assert f'inbox {d.name} Apprentice' in prompt
     for recovery in ('replacement incarnation', 'active_assignments', 'stale', 're-dispatched',
@@ -6750,21 +6765,215 @@ def test_uplift_handback_then_new_escalation_counts_each_source_once(monkeypatch
 
 # ── Claude + Copilot crew, Copilot AI credit cap, Copilot send retries (NGH-041) ──
 
-def test_claude_copilot_manifest_loads_with_credit_capped_copilot_panes():
+def test_claude_copilot_manifest_caps_only_apprentice_and_uses_claude_tester():
     crew = launcher.load_crew('claude-copilot')
     assert crew['layout'] == '2x4' and crew['slots'] == 8 and crew['contract'] == 'result.json'
-    assert crew['max_credits'] == 60   # the shift budget, split over the two Copilot panes
+    assert crew['max_credits'] == 30   # one Copilot pane consumes the shift budget
     assert [(r['role'], r['tool'], r['model'], r.get('max_credits')) for r in crew['roles']] == [
         ('Foreman', 'claude', 'claude-opus-5-5', None),
         ('Advisor', 'claude', 'claude-opus-5-5', None),
         ('Apprentice', 'copilot', 'gemini-3.8-flash', 30),
         ('Coder', 'claude', 'claude-opus-5-5', None),
-        ('Tester', 'copilot', 'gemini-3.8-flash', 30)]
+        ('Tester', 'claude', 'claude-opus-5-5', None)]
+    assert [r['role'] for r in crew['roles'] if r['tool'] == 'copilot'] == ['Apprentice']
+    tester = crew['roles'][-1]
+    assert tester['colour'] == 'blue' and tester['brief'] == 'tester.md'
     for r in crew['roles']:
         if r['tool'] == 'copilot':
             assert (r['reasoning'], r['context'], r['permissions']) == ('high', 'long_context', 'skip')
     assert [r['brief'] for r in crew['roles']] == ['foreman.md', 'advisor.md', 'apprentice.md', 'coder.md',
-                                                   'tester-cli.md']
+                                                   'tester.md']
+
+
+def _colour047_world(monkeypatch, tmp_path):
+    """A fresh Claude registry and transcript, with no CLI or console process."""
+    home = tmp_path / 'user home'
+    cwd = tmp_path / 'repo with spaces [colour]'
+    cwd.mkdir()
+    sessions = home / '.claude' / 'sessions'
+    sessions.mkdir(parents=True)
+    project = home / '.claude' / 'projects' / re.sub(r'[:\\/]', '-', str(cwd))
+    project.mkdir(parents=True)
+    transcript = project / 'session-047.jsonl'
+    transcript.write_text('{"type":"system","content":"startup"}\n', encoding='utf-8')
+    (sessions / '42.json').write_text(json.dumps({'sessionId': 'session-047'}), encoding='utf-8')
+    theme = home / '.claude.json'
+    theme.write_text('{"theme":"light","sentinel":"preserve"}\n', encoding='utf-8')
+    settings = home / '.claude' / 'settings.json'
+    settings.write_text('{"permissions":{"defaultMode":"auto"}}\n', encoding='utf-8')
+    originals = {p: p.read_bytes() for p in (theme, settings)}
+    monkeypatch.setattr(launcher.Path, 'home', lambda: home)
+    monkeypatch.setattr(launcher.time, 'sleep', lambda *a: None)
+    monkeypatch.setattr(launcher, 'peek_lines', lambda *a, **kw: ['❯'])
+    monkeypatch.setattr(launcher.subprocess, 'run', lambda *a, **kw: pytest.fail('real console access'))
+    child = types.SimpleNamespace(pid=42, poll=lambda: None)
+    return child, cwd, transcript, originals
+
+
+@pytest.mark.parametrize('colour', ['red', 'purple', 'green', 'blue'])
+def test_colour047_waits_for_applied_colour_even_when_composer_stays_empty(monkeypatch, tmp_path, colour):
+    child, cwd, transcript, originals = _colour047_world(monkeypatch, tmp_path)
+    sent, sleeps = [], []
+
+    def inject(pid, command, **kw):
+        sent.append((pid, command))
+        return True
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            with transcript.open('a', encoding='utf-8') as out:
+                out.write(json.dumps({'type': 'agent-color', 'agentColor': colour,
+                                      'sessionId': 'session-047'}) + '\n')
+
+    monkeypatch.setattr(launcher, 'inject_command', inject)
+    monkeypatch.setattr(launcher.time, 'sleep', sleep)
+    assert launcher.set_role_colour(child, colour, str(cwd)) is True
+    assert sent == [(42, '/color ' + colour)]
+    assert len(sleeps) >= 2, 'An old empty composer is not colour application confirmation'
+    assert {p: p.read_bytes() for p in originals} == originals
+
+
+@pytest.mark.parametrize('failure', ['inject-refused', 'child-exited', 'no-confirmation', 'wrong-colour',
+                                   'missing-registry', 'malformed-registry', 'malformed-transcript'])
+def test_colour047_unconfirmed_colour_cannot_unlock_first_turn(monkeypatch, tmp_path, failure):
+    child, cwd, transcript, originals = _colour047_world(monkeypatch, tmp_path)
+    sent = []
+    registry = launcher.Path.home() / '.claude' / 'sessions' / '42.json'
+    if failure == 'child-exited':
+        child.poll = lambda: 1
+    elif failure == 'missing-registry':
+        registry.unlink()
+    elif failure == 'malformed-registry':
+        registry.write_text('{broken', encoding='utf-8')
+    elif failure == 'malformed-transcript':
+        transcript.write_text('{partial json', encoding='utf-8')
+    elif failure == 'wrong-colour':
+        transcript.write_text(json.dumps({'type': 'agent-color', 'agentColor': 'red',
+                                          'sessionId': 'session-047'}) + '\n', encoding='utf-8')
+
+    def inject(pid, command, **kw):
+        sent.append(command)
+        return failure != 'inject-refused'
+
+    monkeypatch.setattr(launcher, 'inject_command', inject)
+    assert launcher.set_role_colour(child, 'blue', str(cwd)) is False
+    assert all(command == '/color blue' for command in sent)
+    if failure == 'child-exited':
+        assert sent == []
+    assert {p: p.read_bytes() for p in originals} == originals
+
+
+@pytest.mark.usefixtures('_container_isolated')
+@pytest.mark.parametrize('role,colour', [('Foreman', 'red'), ('Advisor', 'purple'), ('Coder', 'green'),
+                                      ('Tester', 'blue')])
+@pytest.mark.parametrize('spawned', [False, True], ids=['initial-manifest', 'spawned-member'])
+def test_colour047_each_claude_role_applies_colour_before_immediate_first_turn(
+        monkeypatch, tmp_path, injected, role, colour, spawned):
+    if spawned:
+        state = _container(tmp_path, members=('Foreman',), free=(2, 3, 4))
+        if role == 'Foreman':
+            monkeypatch.setattr(launcher, 'pid_alive', lambda *a: False)
+        launcher.spawn([CONT_SHIFT, '--role', role, '--crew', 'claude-copilot'])
+        saved = json.loads((state / 'crew.json').read_text(encoding='utf-8'))
+        member = next(m for m in saved['members'] if m['label'] == role)
+        assert member['colour'] == colour and member['tool'] == 'claude'
+    else:
+        state = tmp_path / CONT_SHIFT
+        state.mkdir()
+    (state / 'prompt.txt').write_text('FIRST TURN TASK', encoding='utf-8')
+    child, cwd, transcript, originals = _colour047_world(monkeypatch, tmp_path)
+    events, commands = [], []
+    expected_message = launcher.opening_message(member, state) if spawned else launcher.START_MESSAGES[role]
+
+    def popen(command, **kw):
+        commands.append(command)
+        assert expected_message not in command, 'Task argv can start the model before colour is applied'
+        assert command[command.index('--name') + 1] == f'{CONT_SHIFT}-{role.lower()}'
+        assert command[command.index('--model') + 1] == 'claude-opus-5-5'
+        assert kw['cwd'] == str(cwd)
+        assert not any('/theme' in a or '--agent-color' in a for a in command)
+        events.append('launch')
+        return child
+
+    def run(argv, **kw):
+        assert argv == ['agents-cli', '_attach', 'inject', '42', '1']
+        message = kw['input'].decode('utf-8')
+        if message == '/color ' + colour:
+            events.append('colour-command')
+            with transcript.open('a', encoding='utf-8') as out:
+                out.write(json.dumps({'type': 'agent-color', 'agentColor': colour,
+                                      'sessionId': 'session-047'}) + '\n')
+        else:
+            assert message == expected_message
+            assert events[-1] == 'colour-command'
+            assert json.loads(transcript.read_text(encoding='utf-8').splitlines()[-1])['agentColor'] == colour
+            events.append('first-turn')
+        return subprocess.CompletedProcess(argv, 0, b'{}', b'')
+
+    child.wait = lambda: events.append('wait') or 0
+    monkeypatch.setattr(launcher.subprocess, 'Popen', popen)
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: events.append('trust'))
+    monkeypatch.setattr(launcher, 'set_pane_background', lambda bg: events.append(('background', bg)))
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane(role, str(state), start=True, cwd=str(cwd), crew='claude-copilot')
+    assert events == [('background', launcher.CAMPBELL_BACKGROUND), 'launch', 'trust', 'colour-command',
+                      'first-turn', 'wait']
+    assert len(commands) == 1
+    record = json.loads((state / f'{role}.json').read_text(encoding='utf-8'))
+    assert record['tool'] == 'claude' and record['name'] == f'{CONT_SHIFT}-{role.lower()}'
+    assert {p: p.read_bytes() for p in originals} == originals
+
+
+@pytest.mark.parametrize('confirmed', [False, None])
+def test_colour047_pane_never_sends_task_without_positive_confirmation(monkeypatch, tmp_path, capsys, confirmed):
+    state = tmp_path / 'S'
+    state.mkdir()
+    member = _member('S', 'Tester', colour='blue')
+    (state / 'crew.json').write_text(json.dumps({'members': [member]}), encoding='utf-8')
+    child = types.SimpleNamespace(pid=42, wait=lambda: 0)
+    sent = []
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **kw: child)
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: confirmed)
+    monkeypatch.setattr(launcher, 'inject_command', lambda pid, message, **kw: sent.append(message) or True)
+    monkeypatch.setattr(launcher, 'set_pane_background', lambda *a: None)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane('Tester', str(state), start=True, cwd=str(tmp_path))
+    assert sent == []
+    assert 'not confirmed' in capsys.readouterr().out.lower()
+
+
+def test_colour047_pane_reports_first_message_injection_failure(monkeypatch, tmp_path, capsys):
+    state = tmp_path / 'S'
+    state.mkdir()
+    (state / 'crew.json').write_text(json.dumps({'members': [_member('S', 'Tester', colour='blue')]}),
+                                  encoding='utf-8')
+    child = types.SimpleNamespace(pid=42, wait=lambda: 0)
+    sent = []
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda *a, **kw: child)
+    monkeypatch.setattr(launcher, 'accept_trust_prompt', lambda *a: None)
+    monkeypatch.setattr(launcher, 'set_role_colour', lambda *a: True)
+    monkeypatch.setattr(launcher, 'inject_command', lambda pid, message, **kw: sent.append(message) or False)
+    monkeypatch.setattr(launcher, 'set_pane_background', lambda *a: None)
+    monkeypatch.setattr('builtins.input', lambda *a: '')
+    launcher.pane('Tester', str(state), start=True, cwd=str(tmp_path))
+    assert sent == [launcher.START_MESSAGES['Tester']]
+    assert re.search(r'opening message.*(?:not sent|failed)', capsys.readouterr().out, re.I)
+
+
+@pytest.mark.parametrize('failure', ['nonzero', 'timeout'])
+def test_colour047_console_injection_failure_is_not_reported_as_success(monkeypatch, failure):
+    monkeypatch.setattr(launcher, 'peek_lines', lambda *a, **kw: ['❯'])
+
+    def run(argv, **kw):
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(argv, 10)
+        return subprocess.CompletedProcess(argv, 1, b'', b'console unavailable')
+
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    assert launcher.inject_command(42, '/color blue') is False
 
 
 def test_start_dry_run_claude_copilot_caps_each_copilot_pane(monkeypatch, tmp_path, capsys):
@@ -6772,12 +6981,21 @@ def test_start_dry_run_claude_copilot_caps_each_copilot_pane(monkeypatch, tmp_pa
     monkeypatch.setattr(launcher.subprocess, 'run', _fake_run([]))
     launcher.start(['--dry-run', '--no-worktree', '--cwd', str(tmp_path), '--crew', 'claude-copilot', 'task'])
     plan = json.loads(capsys.readouterr().out)
-    assert next(iter(plan)) == 'max_credits' and plan['max_credits'] == 60   # the shift budget comes first
+    assert next(iter(plan)) == 'max_credits' and plan['max_credits'] == 30   # the shift budget comes first
     roles = plan['roles']
-    for label in ('Foreman', 'Advisor', 'Coder'):
+    assert _titles(plan['wt_argv']) == [roles['Tester']['pane_title']] * 8
+    assert plan['wt_argv'].count('--suppressApplicationTitle') == 8
+    panes = [cell for cell in _cells(plan['wt_argv']) if '--title' in cell]
+    assert len(panes) == 8
+    for cell in panes:
+        if '--pane' in cell and cell[cell.index('--pane') + 1] == 'Apprentice':
+            assert cell[cell.index('--colorScheme') + 1] == 'Nightshift yellow'
+        else:
+            assert '--colorScheme' not in cell  # Claude and free slots retain the profile's Campbell scheme.
+    for label in ('Foreman', 'Advisor', 'Coder', 'Tester'):
         assert 'command' not in roles[label] and 'max_credits' not in roles[label]
         assert roles[label].get('model', plan['model']) == 'claude-opus-5-5'
-    for label in ('Apprentice', 'Tester'):
+    for label in ('Apprentice',):
         cmd = roles[label]['command']
         assert roles[label]['max_credits'] == 30
         assert cmd[cmd.index('--max-ai-credits') + 1] == '30'

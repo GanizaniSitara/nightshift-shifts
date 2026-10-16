@@ -662,11 +662,11 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   tail, and records
   `"usage": {"budget": B, "total_used": T, "panes": {"<label>": {"credits_used": n, "cap": share}}}`.
   `COPILOT_MODEL` (the default for a spawned copilot role) is `gemini-3.8-flash`.
-- `crews/claude-copilot.yaml` (NGH-041, 2x4): Foreman, Advisor and Coder on Claude `claude-opus-5-5`
-  (`foreman.md`, `advisor.md`, `coder.md`); Apprentice and Tester on copilot `gemini-3.8-flash` with
-  `reasoning: high`, `context: long_context`, `permissions: skip` (`apprentice.md`, `tester-cli.md`), and a
-  shift budget `max_credits: 60`, 30 for each of the two Copilot panes. Owner decision 16 Oct 12:52: the Apprentice is the primary coder on Flash and the Coder
-  the senior buddy, paid only on uplift (NGH-038); Apprentice is listed before Coder for NGH-038
+- `crews/claude-copilot.yaml` (NGH-041, 2x4): Foreman, Advisor, Coder and Tester on Claude `claude-opus-5-5`
+  (`foreman.md`, `advisor.md`, `coder.md`, `tester.md`); Apprentice is the only Copilot pane on
+  `gemini-3.8-flash` with `reasoning: high`, `context: long_context`, `permissions: skip` (`apprentice.md`), and
+  a shift budget `max_credits: 30`. Owner decision 16 Oct 12:52: the Apprentice is the primary coder on Flash
+  and the Coder the senior buddy, paid only on uplift (NGH-038); Apprentice is listed before Coder for NGH-038
   Apprentice-first routing. The owner changes the budget in that one line.
 - Mixed crews under a Claude Foreman: `foreman.md` drives every member whose `crew.json` tool is not
   claude only through the mailbox plus agents-cli (msg send, `agents-cli send` header and text, msg sent,
@@ -719,6 +719,18 @@ No per-role Codex syntax-theme override is required.
 The launcher extracts a literal `Ticket <ID>:` header from the first line of the prompt or UTF-8
 prompt file, with `<ID>` matching `TICKET_RE`. Extraction precedes the continuation handover append.
 It writes the ID to `ticket.txt` and uses it for the common `<ticket> shift` title.
+
+## Claude role colour startup (NGH-047)
+
+Claude's installed CLI exposes no supported independent colour launch flag. Its hidden
+`--agent-color` option belongs to Teammate UI sessions and is consumed with `--agent-id`,
+`--agent-name` and `--team-name`; Nightshift does not enable that teammate metadata for ordinary
+crew members. The launcher therefore starts Claude without the opening prompt, accepts the trust
+dialog, injects `/color <manifest colour>` into the empty composer, and waits for the
+`type: "agent-color", agentColor: <colour>` transcript record before injecting the first role
+message. A failed or timed-out colour confirmation leaves the opening message unsent and reports
+the failure visibly. This ordering is shared by normal and spawned panes, while preserving the
+owner's global Claude theme, the common ticket/shift title and the existing Campbell pane scheme.
 
 ## Copilot identity, colour and terminal setup (NGH-039)
 

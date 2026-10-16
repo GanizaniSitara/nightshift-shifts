@@ -3,10 +3,12 @@
 ## 1. What it is
 
 The `claude-copilot` crew (`crews/claude-copilot.yaml`) divides work between Claude Code and GitHub Copilot:
-- **Foreman**, **Advisor**, and **Coder** run on Claude Code with `claude-opus-5-5`. The Advisor remains dormant until Foreman asks. The Apprentice is the primary coder on Flash; the Coder is the senior buddy, used only when work is uplifted.
-- **Apprentice** and **Tester** run on GitHub Copilot CLI with `gemini-3.8-flash`, reasoning high, `long_context`.
+- **Foreman**, **Advisor**, **Coder**, and **Tester** run on Claude Code with `claude-opus-5-5`. The Advisor remains dormant until Foreman asks. The Apprentice is the primary coder on Flash; the Coder is the senior buddy, used only when work is uplifted.
+- **Apprentice** runs on GitHub Copilot CLI with `gemini-3.8-flash`, reasoning high, `long_context`, and a 30-credit cap.
 
-The crew manifest's top-level `max_credits` is the shift's Copilot credit budget, split evenly across the Copilot panes: 60 over Apprentice and Tester, 30 each. Each pane's share must be at least 30 (Copilot's minimum) and is passed to that pane as `--max-ai-credits`, a soft cap per pane (a response can overshoot, then the next call is blocked). Change the budget in that one line of the manifest.
+The crew manifest's top-level `max_credits` is the shift's Copilot AI credit budget. Its share is passed to Copilot as `--max-ai-credits`, a soft cap per pane (a response can overshoot, then the next call is blocked). Change the budget in that one line of the manifest.
+
+Claude panes keep the owner's global Claude theme and the common `<ticket> shift` title. Claude has no supported independent colour launch flag, so Nightshift starts each Claude pane without an opening prompt, accepts folder trust, sends `/color <role-colour>`, waits for Claude's `agent-color` transcript record, and only then sends the first role message. This barrier also applies to members spawned into empty slots. The hidden `--agent-color` flag is for Claude teammate sessions and is not used for ordinary crew panes.
 
 ## 2. Prerequisites
 
@@ -35,8 +37,8 @@ Preview with `--dry-run` first:
 nightshift start PROJ-123 --crew claude-copilot --cwd <repo> --dry-run
 ```
 Dry-run JSON prints command lines only for non-Claude panes:
-- Verify the plan's top-level `max_credits` is 60 and that `roles.Apprentice.command` and `roles.Tester.command` contain `--max-ai-credits 30`.
-- Verify top-level `model` is `claude-opus-5-5` for Claude panes (Foreman, Advisor, Coder).
+- Verify the plan's top-level `max_credits` is 30 and that only `roles.Apprentice.command` contains `--max-ai-credits 30`.
+- Verify top-level `model` is `claude-opus-5-5` for Claude panes (Foreman, Advisor, Coder, Tester).
 
 ## 4. What to expect
 

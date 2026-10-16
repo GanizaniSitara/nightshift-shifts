@@ -655,9 +655,21 @@ def inject_command(pid, command, tries=10):
     for _ in range(tries):
         if prompt_is_empty(peek_lines(pid)):
             # agents-cli _attach inject takes PID and ENTER as argv and the text on stdin (as spawn types its line)
-            subprocess.run(['agents-cli', '_attach', 'inject', str(pid), '1'], input=command.encode('utf-8'),
-                           capture_output=True, timeout=10)
-            return True
+            try:
+                sent = subprocess.run(['agents-cli', '_attach', 'inject', str(pid), '1'],
+                                      input=command.encode('utf-8'), capture_output=True, timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                return False
+            if getattr(sent, 'returncode', 1) != 0:
+                return False
+            try:
+                raw = getattr(sent, 'stdout', b'{}') or b'{}'
+                if isinstance(raw, bytes):
+                    raw = raw.decode('utf-8', 'replace')
+                result = json.loads(raw)
+            except (AttributeError, UnicodeError, ValueError):
+                result = None
+            return not isinstance(result, dict) or not result.get('error')
         time.sleep(1)
     return False
 
@@ -754,24 +766,32 @@ def set_pane_background(background):
 
 
 def set_role_colour(child, colour, cwd):
-    """Reuse launch.ps1's transcript-ready gate before sending Claude /color <colour> (from the crew manifest)."""
+    """Set Claude's role colour and confirm its transcript record before the first turn."""
+    if child.poll() is not None:
+        return False
+    if not inject_command(child.pid, '/color ' + colour, tries=60):
+        return False
     registry = Path.home() / '.claude' / 'sessions' / f'{child.pid}.json'
-    # Claude Code names the project folder after the cwd with ':' and path separators turned into '-'.
     project_dir = Path.home() / '.claude' / 'projects' / re.sub(r'[:\\/]', '-', str(Path(cwd)))
-    for _ in range(60):
+    for _ in range(120):
         if child.poll() is not None:
-            return
+            return False
         try:
             session = json.loads(registry.read_text(encoding='utf-8'))
             transcript = project_dir / (session['sessionId'] + '.jsonl')
-            if transcript.exists() and transcript.stat().st_size > 200:
-                time.sleep(3)
-                # Only the role colour is set; the theme is whatever the owner's global Claude theme is.
-                inject_command(child.pid, '/color ' + colour)
-                return
-        except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+            if transcript.exists():
+                for line in reversed(transcript.read_text(encoding='utf-8').splitlines()):
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue
+                    if (record.get('type') == 'agent-color' and
+                            record.get('agentColor') == colour):
+                        return True
+        except (OSError, ValueError, KeyError):
             pass
         time.sleep(0.5)
+    return False
 
 
 def read_crew_json(state_dir):
@@ -909,7 +929,6 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                 command += ['--settings', json.dumps(foreman_claude_settings(cwd))]
             if reasoning:
                 command += ['--effort', reasoning]
-            command.append(first_message)
         env = crew_env(os.environ, tool=tool, account=account, role=member['role'] if start else role)
         set_pane_background(ROLE_BACKGROUNDS.get(colour, CAMPBELL_BACKGROUND)
                             if tool in ('codex', 'copilot') else CAMPBELL_BACKGROUND)
@@ -942,7 +961,14 @@ def pane(role, state_dir, live=False, brief_file=None, start=False, cwd='C:/git/
                         set_codex_role_name(child, role, identity)
             else:
                 accept_trust_prompt(child)
-                set_role_colour(child, colour, cwd)
+                colour_set = set_role_colour(child, colour, cwd)
+                # Claude has no independent launch-time colour flag.  Send the opening message only
+                # after the transcript confirms /color, so the first model turn cannot win the startup race.
+                if colour_set is True:
+                    if not inject_command(child.pid, first_message, tries=60):
+                        print(f'{role}: Claude opening message injection failed; startup stopped.')
+                else:
+                    print(f'{role}: Claude role colour was not confirmed; opening message not sent.')
             code = child.wait()
         finally:
             if tool in ('codex', 'copilot'):
