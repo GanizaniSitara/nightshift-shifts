@@ -131,6 +131,29 @@ Also noted by Mistral: the renderer today appends the task *last* (`roleBrief` i
 
 Effort scaling belongs here too: the Foreman brief states how many members this ticket deserves (the ticket's size field or the owner's `--effort` flag), so a one-file fix does not get a five-pane crew.
 
+## 7b. Repository and site layers (owner, 17 Oct)
+
+Generating the brief in Go covers what is the same for every project. It must not stop a project saying how it is built, tested and reviewed, and it must not stop a site (the work machine) adding rules that hold for every project there. Today `roleBrief` already appends a `# Repository` section from `<repo>/.nightshift/config.yaml` (the build command), `instructions.md` (all roles) and `<role>.md` (one role). The redesign keeps that and gives it a shape and a budget.
+
+Four layers, rendered in this order, each with a word budget the renderer enforces:
+
+| Layer | Where | Who writes it | What belongs there | Budget |
+|---|---|---|---|---|
+| Shift facts | generated | the launcher | task, crew table, worktree, branch, identities | fixed |
+| Role page | built in (`briefs/`) | Nightshift | the loop, hard rules | 250 / 150 |
+| Repository | `<repo>/.nightshift/` | the project | `config.yaml`: build, test, lint and typecheck commands, target branch, test file pattern, protected paths. `instructions.md`: conventions that differ from the obvious (how to run one test, fixture rules, review checklist, what never to touch). `<role>.md`: a rule for one role (the Tester's acceptance checklist, the Coder's style rules). | 150 words of prose per role; facts are free |
+| Site | `<state root>/instructions.md` (and `<state root>/<role>.md`) | the machine's owner | rules true for every project on this machine: only GitHub is reachable, the proxy, which tools exist, which model names work here, "never push to main" | 100 words |
+
+Rules for the layers:
+
+- **Facts go in the table, prose goes under its own heading.** The repository's commands land in the "Your shift" table next to the worktree (`Build:`, `Test one:`, `Lint:`), where every mode sees them, including compact. Prose from `instructions.md` renders under `# This repository` after the loop and before the hard rules.
+- **Compact mode gets the facts and nothing else.** A cheap pane does not read a project's review checklist; the Foreman puts the relevant line into the assignment, where it is paid for once.
+- **Long material is a file the assignment points at, not brief text.** A twenty-line testing guide lives at `.nightshift/testing.md`; the Foreman's assignment says "read .nightshift/testing.md first" when it matters. The budget makes this the path of least resistance.
+- **Lower layers cannot override the hard rules.** A repository may add rules; it cannot remove "never commit", "claim before you edit" or "act on the stored body". The renderer puts the hard rules last, after the repository section, so they also win on recency.
+- **Over budget is a warning you see before the shift starts.** `nightshift doctor --cwd <repo>` renders every role's brief for that repository and reports the word count per layer; `start` prints the same warning and continues, so a bloated `.nightshift/` is caught the first time, not after a bad shift.
+
+This is also where the work-versus-home difference lives: the same binary, the same role pages, and a site file on each machine that says what is different there.
+
 ## 8. How to check it
 
 1. Render every crew's briefs with `start --dry-run` and read them as a human would; the goldens record them.
