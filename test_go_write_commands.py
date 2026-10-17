@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from test_go_readonly import (REPO, ORACLE_BOOT, existing_pid, frozen, make_world,
+from test_go_readonly import (REBASE, REPO, ORACLE_BOOT, existing_pid, frozen, make_world,
                               junction_alias, oracle, run_cli, write_json)
 
 
@@ -111,7 +111,7 @@ def parity(tmp_path, prepare, commands, expected_codes=None, extra=None):
             assert [o[2] for o in outputs] == expected_codes, outputs
         return outputs, world_state(base)
 
-    expected = frozen(lambda: observe(False), tmp_path, {'PYTEST_PID': os.getpid(), **(extra or {})})
+    expected = frozen(lambda: observe(REBASE), tmp_path, {'PYTEST_PID': os.getpid(), **(extra or {})}, record=REBASE)
     assert observe(True) == expected
     return expected
 

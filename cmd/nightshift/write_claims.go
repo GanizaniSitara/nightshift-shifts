@@ -265,7 +265,7 @@ func claimCommand(args []string) int {
 	if err != nil {
 		return commandExit(err)
 	}
-	outLine(renderJSON(object{{"shift", filepath.Base(dir)}, {"role", role}, {"claimed", stringsToAny(paths)}}, false, true))
+	printResult(object{{"shift", filepath.Base(dir)}, {"role", role}, {"claimed", stringsToAny(paths)}}, false, true)
 	return 0
 }
 
@@ -311,7 +311,7 @@ func releaseCommand(args []string) int {
 	if err != nil {
 		return commandExit(err)
 	}
-	outLine(renderJSON(object{{"released", stringsToAny(released)}}, false, true))
+	printResult(object{{"released", stringsToAny(released)}}, false, true)
 	return 0
 }
 

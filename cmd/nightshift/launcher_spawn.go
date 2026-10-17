@@ -604,7 +604,7 @@ func runSpawn(argv []string, quiet bool) error {
 			{"command", cmdVal},
 		}
 		if !quiet {
-			outLine(renderJSON(report, true, true))
+			printResult(report, true, true)
 		}
 		return nil
 	}
@@ -709,13 +709,13 @@ func runSpawn(argv []string, quiet bool) error {
 	})
 
 	if !quiet {
-		outLine(renderJSON(object{
+		printResult(object{
 			{"shift", shift},
 			{"slot", slot},
 			{"role", objectString(member, "label")},
 			{"identity", objectString(member, "identity")},
 			{"tool", tool},
-		}, false, true))
+		}, false, true)
 	}
 	return nil
 }

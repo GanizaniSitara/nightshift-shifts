@@ -120,7 +120,7 @@ func intOption(args writeArgs, name string, fallback int) int {
 }
 
 // emit prints one loop event on stdout as a compact JSON line.
-func emit(event object) { outLine(renderJSON(event, false, true)) }
+func emit(event object) { printResult(event, false, true) }
 
 // pyText is str() of a JSON value as the oracle's f-strings print it.
 func pyText(v any) string {
@@ -653,7 +653,7 @@ func resume(argv []string) error {
 	if err != nil {
 		return startExit(err.Error())
 	}
-	outLine(renderJSON(append(object{{"dry_run", dryRun}}, plan...), true, true))
+	printResult(append(object{{"dry_run", dryRun}}, plan...), true, true)
 	if dryRun {
 		return nil
 	}

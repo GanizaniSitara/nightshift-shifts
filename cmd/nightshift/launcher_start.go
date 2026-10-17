@@ -203,7 +203,10 @@ func runStart(argv []string, print bool) (string, error) {
 		}
 		focusShiftWindow(live)
 		line := renderJSON(object{{"attached", filepath.Base(live)}, {"queued", added.ID}, {"foreman_woken", woken}}, false, false)
-		if print {
+		if print && humanOutput() {
+			out(fmt.Sprintf("This repo already has a live shift, %s: queued item %d there (Foreman woken: %s).\n",
+				filepath.Base(live), added.ID, humanValue(woken)))
+		} else if print {
 			out(line + "\n")
 		}
 		return line, nil
@@ -1072,7 +1075,7 @@ func launchCrew(command []string, name, stateDir string, extra object, labels []
 	report = append(report, extra...)
 	report = append(report, pair{"panes_missing", stringsToAny(pending)})
 	if print {
-		outLine(renderJSON(report, false, true))
+		printResult(report, false, true)
 	}
 	if len(pending) > 0 {
 		return startExit("WT activation returned success, but these panes never reported: " + strings.Join(pending, ", ") + ".")

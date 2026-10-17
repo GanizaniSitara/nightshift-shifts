@@ -380,6 +380,15 @@ func runFloorHear(reader string, since *int, follow bool) int {
 				}
 			}
 			for _, event := range output {
+				if humanOutput() {
+					from, _ := objectGet(event, "from")
+					to, _ := objectGet(event, "to")
+					ts, _ := objectGet(event, "ts")
+					text, _ := objectGet(event, "text")
+					id, _ := objectGet(event, "id")
+					outLine(fmt.Sprintf("#%v %v  %v -> %v: %v", id, ts, from, to, text))
+					continue
+				}
 				outLine(compactJSON(event))
 			}
 			if since == nil && highest > saved {

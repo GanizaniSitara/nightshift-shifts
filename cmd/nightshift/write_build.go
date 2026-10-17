@@ -187,7 +187,7 @@ func cancelBuild(dir string, n int) error {
 	}
 	status := objectString(record, "status")
 	if status != "waiting" && status != "running" {
-		outLine(renderJSON(object{{"build", n}, {"cancelled", false}, {"message", fmt.Sprintf("build #%d already finished with status %s", n, valueText(rowValue(record, "status")))}}, false, true))
+		printResult(object{{"build", n}, {"cancelled", false}, {"message", fmt.Sprintf("build #%d already finished with status %s", n, valueText(rowValue(record, "status")))}}, false, true)
 		return nil
 	}
 	if err := os.WriteFile(filepath.Join(dir, "builds", strconv.Itoa(n)+".cancel"), []byte(time.Now().Format("2006-01-02 15:04:05")), 0666); err != nil {
@@ -200,7 +200,7 @@ func cancelBuild(dir string, n int) error {
 		_ = exec.CommandContext(ctx, "taskkill", "/F", "/T", "/PID", valueText(rowValue(record, "pid"))).Run()
 		killed = rowValue(record, "pid")
 	}
-	outLine(renderJSON(object{{"build", n}, {"cancelled", true}, {"killed_pid", killed}}, false, true))
+	printResult(object{{"build", n}, {"cancelled", true}, {"killed_pid", killed}}, false, true)
 	return nil
 }
 
@@ -498,7 +498,7 @@ func runBuild(dir, cwd, command string, timeout float64) int {
 	if err != nil {
 		return commandExit(err)
 	}
-	outLine(renderJSON(record, true, true))
+	printResult(record, true, true)
 	if code, ok := rowValue(record, "exit").(int); ok {
 		return code
 	}

@@ -19805,7 +19805,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -19863,7 +19863,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\1.json",
            {
-            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
            }
           ],
           [
@@ -20111,7 +20111,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"exit /b 7\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 7,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"failed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"exit /b 7\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 7,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"failed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -20169,7 +20169,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\1.json",
            {
-            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"exit /b 7\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 7,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"failed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"exit /b 7\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 7,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"failed\"\r\n}"
            }
           ],
           [
@@ -20417,7 +20417,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo from config\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo from config\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -20481,7 +20481,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\1.json",
            {
-            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo from config\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo from config\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
            }
           ],
           [
@@ -20729,7 +20729,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo from config\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo from config\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -20793,7 +20793,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\1.json",
            {
-            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo from config\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo from config\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
            }
           ],
           [
@@ -22523,7 +22523,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -22581,7 +22581,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\1.json",
            {
-            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
            }
           ],
           [
@@ -23441,7 +23441,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -23499,7 +23499,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\1.json",
            {
-            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
            }
           ],
           [
@@ -24053,7 +24053,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 4,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\4.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 4,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\4.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -24117,7 +24117,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\4.json",
            {
-            "bytes": "{\r\n  \"n\": 4,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\4.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 4,\r\n  \"cmd\": \"cd\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\build working \\u03a9 folder\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\4.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
            }
           ],
           [
@@ -24983,7 +24983,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo canonical\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\worktree\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo canonical\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\worktree\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -25047,7 +25047,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\1.json",
            {
-            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo canonical\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\worktree\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo canonical\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\worktree\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
            }
           ],
           [
@@ -25307,7 +25307,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo explicit\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\worktree\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo explicit\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\worktree\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -25371,7 +25371,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\1.json",
            {
-            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo explicit\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\worktree\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo explicit\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\worktree\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
            }
           ],
           [
@@ -28631,7 +28631,7 @@
        {
         "tuple": [
          {
-          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo last\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\config build cwd\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
+          "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo last\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\config build cwd\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}\r\n"
          },
          {
           "bytes": ""
@@ -28695,7 +28695,7 @@
           [
            "state space\\shifts\\Nightshift-shift-alpha\\builds\\1.json",
            {
-            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo last\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\config build cwd\",\r\n  \"head\": \"0000000000000000000000000000000000000000\",\r\n  \"dirty\": true,\r\n  \"porcelain\": [\r\n    \" M home/i.md\",\r\n    \" M home/h.json\",\r\n    \" M home/c.md\",\r\n    \" M home/b.md\",\r\n    \" M home/a.md\",\r\n    \" M home/j.md\",\r\n    \" M home/f.md\",\r\n    \" M home/e.md\",\r\n    \" M home/d.md\",\r\n    \" M AGENTS.md\",\r\n    \"?? home/g.md\"\r\n  ],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
+            "bytes": "{\r\n  \"n\": 1,\r\n  \"cmd\": \"echo last\",\r\n  \"cwd\": \"<TMP:raw::1>\\\\private write fixture\\\\config build cwd\",\r\n  \"head\": null,\r\n  \"dirty\": null,\r\n  \"porcelain\": [],\r\n  \"started\": \"<wall-clock>\",\r\n  \"ended\": \"<wall-clock>\",\r\n  \"exit\": 0,\r\n  \"log\": \"<TMP:raw::1>\\\\private write fixture\\\\state space\\\\shifts\\\\Nightshift-shift-alpha\\\\builds\\\\1.log\",\r\n  \"pid\": <child_pid>,\r\n  \"status\": \"passed\"\r\n}"
            }
           ],
           [

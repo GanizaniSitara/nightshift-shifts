@@ -598,7 +598,7 @@ func wardenCommand(argv []string) int {
 	if code != 0 || report == nil {
 		return code
 	}
-	outLine(renderJSON(report, true, true))
+	printResult(report, true, true)
 	return 0
 }
 
@@ -800,6 +800,6 @@ func gafferCommand(argv []string) int {
 	if err != nil {
 		return commandExit(err)
 	}
-	outLine(renderJSON(report, true, true))
+	printResult(report, true, true)
 	return 0
 }

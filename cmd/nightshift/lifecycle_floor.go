@@ -441,6 +441,6 @@ func cleanerCommand(argv []string) int {
 	if err != nil {
 		return commandExit(err)
 	}
-	outLine(renderJSON(object{{"reaped", reaped}, {"locks_released", locksReleased}, {"windows_closed", windowsClosed}, {"dry_run", dryRun}}, true, true))
+	printResult(object{{"reaped", reaped}, {"locks_released", locksReleased}, {"windows_closed", windowsClosed}, {"dry_run", dryRun}}, true, true)
 	return 0
 }

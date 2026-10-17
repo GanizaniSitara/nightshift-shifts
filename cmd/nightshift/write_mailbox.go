@@ -422,7 +422,7 @@ func sentCommand(args []string) int {
 		return commandExit(fmt.Errorf("no message msg:%d in shift %s", id, filepath.Base(dir)))
 	}
 	busAppend(dir, "sent", object{{"id", id}})
-	outLine(renderJSON(row, false, true))
+	printResult(row, false, true)
 	return 0
 }
 
@@ -487,6 +487,6 @@ func ackCommand(args []string) int {
 		return commandExit(err)
 	}
 	busAppend(dir, "ack", object{{"id", id}, {"by", label}, {"outcome", outcome}})
-	outLine(renderJSON(object{{"ack", outcome}, {"row", row}}, false, true))
+	printResult(object{{"ack", outcome}, {"row", row}}, false, true)
 	return 0
 }

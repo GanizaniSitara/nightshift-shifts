@@ -169,6 +169,10 @@ func addCommand(argv []string) int {
 			errLine(err.Error())
 			return 1
 		}
+		if humanOutput() {
+			out(fmt.Sprintf("Queued item %d in %s: %s\n", added.ID, filepath.Base(dir), humanLine(added.Task)))
+			continue
+		}
 		line, _ := json.Marshal(added)
 		out(string(line) + "\n")
 	}
@@ -257,7 +261,15 @@ func queueCommand(argv []string) int {
 			return 1
 		}
 		if item == nil {
+			if humanOutput() {
+				out("The queue is empty.\n")
+				return 0
+			}
 			out(`{"next": null}` + "\n")
+			return 0
+		}
+		if humanOutput() {
+			out(fmt.Sprintf("Started item %d: %s\n", item.ID, humanLine(item.Task)))
 			return 0
 		}
 		line, _ := json.Marshal(item)
@@ -313,6 +325,10 @@ func queuePrint(dir string) int {
 	_ = withQueue(dir, func(items []queueItem) ([]queueItem, error) { list = items; return nil, nil })
 	if list == nil {
 		list = []queueItem{}
+	}
+	if humanOutput() {
+		humanQueue(filepath.Base(dir), list)
+		return 0
 	}
 	text, _ := json.MarshalIndent(struct {
 		Shift string      `json:"shift"`

@@ -35,6 +35,10 @@ func crewsCommand(argv []string) int {
 		entries = append(entries, object{{"name", src.name}, {"source", src.source}, {"path", src.path}, {"active", !seen[src.name]}})
 		seen[src.name] = true
 	}
-	outLine(renderJSON(entries, true, false))
+	if humanOutput() {
+		humanCrews(entries)
+		return 0
+	}
+	printResult(entries, true, false)
 	return 0
 }

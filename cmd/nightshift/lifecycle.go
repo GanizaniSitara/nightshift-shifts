@@ -368,7 +368,7 @@ func landCommand(argv []string) int {
 		}
 		return commandExit(err)
 	}
-	outLine(renderJSON(result, false, true))
+	printResult(result, false, true)
 	return code
 }
 
@@ -711,7 +711,7 @@ func stopShift(dir string, closeWindow bool, floor *object, printOutput bool) er
 		result = append(result, pair{"worktree", recovery})
 	}
 	if printOutput {
-		outLine(renderJSON(result, false, true))
+		printResult(result, false, true)
 		_ = os.Stdout.Sync()
 	}
 	if hwnd != 0 {

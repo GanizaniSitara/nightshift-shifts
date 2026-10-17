@@ -1764,7 +1764,11 @@ func statusCommand(args []string) int {
 			records = append(records, r)
 		}
 	}
-	outLine(renderJSON(records, true, true))
+	if humanOutput() {
+		humanStatus(records)
+		return 0
+	}
+	printResult(records, true, true)
 	return 0
 }
 func usageStatus(msg string) int {
@@ -1787,7 +1791,7 @@ func claimsCommand(args []string) int {
 		errLine(err.Error())
 		return 1
 	}
-	outLine(renderJSON(readClaims(dir), true, true))
+	printResult(readClaims(dir), true, true)
 	return 0
 }
 func usageClaims(msg string) int {
@@ -1820,7 +1824,7 @@ func inboxCommand(args []string) int {
 		errLine(err.Error())
 		return 1
 	}
-	outLine(renderJSON(view, true, true))
+	printResult(view, true, true)
 	return 0
 }
 func usageInbox(msg string) int {
@@ -1830,6 +1834,10 @@ func usageInbox(msg string) int {
 }
 
 func main() {
+	if len(os.Args) > 2 && os.Args[1] != "log" { // log has its own --json
+		// --json anywhere after the command keeps JSON output at a console too.
+		os.Args = append(os.Args[:2:2], stripJSONFlag(os.Args[2:])...)
+	}
 	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-") {
 		os.Exit(topLevel(os.Args[1:]))
 	}
