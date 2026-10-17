@@ -288,9 +288,11 @@ func runSpawn(argv []string, quiet bool) error {
 		}
 	}
 
+	// The last slot is the human's Ops pane (a command line in the repository): spawn only uses it when --slot
+	// names it.
 	var free []int
 	for n := 1; n <= slots; n++ {
-		if states[n] == "empty" || states[n] == "dead" {
+		if (states[n] == "empty" || states[n] == "dead") && (n < slots || args.present["--slot"]) {
 			free = append(free, n)
 		}
 	}
