@@ -28,7 +28,8 @@ The human's task comes **last**, after nine pages, and the opening message says 
 6. **The Foreman polls.** It is told to "glance at every member every couple of minutes with `agents-cli tail`" and to `agents-cli wait` with timeouts. Nothing blocks until something happens on the bus, so the Foreman burns context watching panes, and members wait on the Foreman noticing them.
 7. **No map of the window.** The Foreman is told about reserved slots, free slots, the Ops pane and `spawn --slot`, but nothing prints the slot map. Today's Foreman could not count the slots and put the Decompiler in the Ops pane.
 8. **Protocol and persona are entangled.** Personas were meant to be "who you are" and briefs "the protocol", but personas now carry uplift rules, 900-second timeouts and `--coding-asg` flags.
-9. **Non-Claude members get the Claude text first.** `common.md` opens with "Use native ListAgents and SendMessage" and each `-cli` brief then says "the line above does not apply to you". The Copilot Foreman brief still contains Claude-only compaction advice.
+9. **It contradicts itself.** The Foreman persona says "then end the shift yourself"; the Foreman brief says "do not close the shift yourself unless the human asks; the warden closes an idle shift". Three hundred words of the brief explain `down`, `recovery.json`, `floor.json` and `cleaner` failure handling that the Foreman never runs during a shift. `tasks-cli note` is mandated four separate times. (Argon review, 17 Oct.)
+10. **Non-Claude members get the Claude text first.** `common.md` opens with "Use native ListAgents and SendMessage" and each `-cli` brief then says "the line above does not apply to you". The Copilot Foreman brief still contains Claude-only compaction advice.
 
 ## 3. What others have found
 
@@ -43,7 +44,8 @@ Searched 17 Oct 2026. Reddit cannot be fetched from here (it blocks the crawler)
 - **Same-model reviewers agree with the author.** 18 of 30 identical agents picked the same branch name; a reviewer on the same model tends to approve the same misunderstanding. A Tester on a different model is a feature. ([dev.to lessons](https://dev.to/jenueldev/your-ai-agents-are-not-a-team-yet-7-orchestration-lessons-from-multi-agent-failures-2lf3))
 - **Loops need a detector.** Agents repeated the same failed fix for hours; the fix was a human stepping in, and the proposed guard is "track attempted fixes, flag a repeat, escalate". ([niksacdev](https://github.com/niksacdev/multi-agent-system/blob/main/docs/agent-based-development.md))
 - **Native teams push events, not polls.** Claude Code agent teams deliver messages and completion notices to the lead without polling; the lead is told when a task finishes. That is the model to copy for the bus. Keep members in separate files or directories; same-file edits and heavy dependencies cost more than the parallelism gains. More than three or four teammates feels like overkill. ([30 tips](https://getpushtoprod.substack.com/p/30-tips-for-claude-code-agent-teams), [Claude Code docs](https://code.claude.com/docs/en/agent-teams))
-- **Nobody publishes a foreman/coder/tester prompt set.** The role split (orchestrator, programmer, reviewer, tester) is standard in the papers, but prompt lengths are not benchmarked; the length figures above are one team's anecdote. Prompt wording is known to be high-variance, so changes should be tested, not assumed.
+- **Role-split prompt sets are published; length is not benchmarked.** MetaGPT, ChatDev, CrewAI and Microsoft's Magentic-One all publish orchestrator/coder/reviewer/tester prompts. What is missing is a controlled comparison of prompt length against outcome; the length figures above are one team's anecdote. Prompt wording is known to be high-variance, so changes should be tested, not assumed.
+- **The `CLAUDE.md` figures are about repo context files, not system prompts.** They sit on top of Claude Code's own ~3,000-word system prompt. Every tool Nightshift drives (Claude Code, Copilot, Codex, agy) already injects a large native prompt, so the role brief competes for attention from its first line; that argues for the 250-word target, not against it.
 
 Everything Nightshift got wrong is on that list: too long, orchestrator rules in prose, polling, no loop detector, and verification described rather than enforced. The things Nightshift already has right are also there: a separate Tester, file claims, evidence-bound builds, structured verdicts.
 
@@ -77,9 +79,9 @@ How a shift runs:
 1. Read the ticket and the code. Split the work into assignments, each with named files and what done looks like.
 2. nightshift assign <shift> Coder "<assignment>", one per assignment; they run in parallel.
 3. nightshift wait <shift> returns when a member reports, asks, or dies. Read it, decide, repeat.
-4. Every finished change goes to Tester: nightshift assign <shift> Tester "verify <asg>: <what changed>". Commit only a TESTED-PASS.
-5. Stuck? nightshift consult <shift> "<question>". More hands? nightshift spawn <shift> --role Coder2 into a free slot; dismiss it when done.
-6. nightshift land <shift>, then nightshift result <shift> done --stage tested, then nightshift queue next.
+4. Read the diff against the assignment. Then nightshift assign <shift> Tester "verify <asg>: <what changed>". On TESTED-PASS, commit exactly that change; Tester then runs the full build on the clean commit (nightshift land refuses anything else).
+5. Stuck? nightshift consult <shift> "<question>". More hands? nightshift spawn <shift> --role Coder2 (it picks a free slot); dismiss it when done.
+6. nightshift land <shift>, then nightshift result <shift> done --stage tested, then nightshift queue next. An empty queue means stop and wait; do not run down.
 
 Rules: never edit repository files or run the suite yourself; never close the ticket; ask the human only when the ticket is wrong or a decision can't be undone; one line to the human per milestone.
 Every command says what to do next when it fails. nightshift help <command> has the detail.
@@ -96,8 +98,9 @@ The prose cannot shrink until these exist, so they come first.
 | `nightshift assign SHIFT ROLE "text" [--asg ID]` | `msg send` + SendMessage / `agents-cli send` + `msg sent` | Records, delivers by whatever the member's tool needs, marks sent, prints the asg. |
 | `nightshift report SHIFT ROLE "text" [--asg ID]` | the same three steps from the member's side | One call; the first line is the verdict/summary. |
 | `nightshift ready SHIFT ROLE` | the READY paragraph | Records READY; nothing else to get right. |
-| `nightshift wait SHIFT [--for ROLE] [--timeout]` | `agents-cli tail` polling and `agents-cli wait --match` | Blocks until the next bus event that matters to the caller (ready, report, question, member died, build finished) and prints it with the stored body. |
-| `nightshift slots SHIFT` | the slot paragraphs | Prints slot, cells, role, tool, state (running, asleep, free, Ops). |
+| `nightshift wait SHIFT [--for ROLE] [--timeout]` | `agents-cli tail` polling and `agents-cli wait --match` | Blocks until the next bus event that matters to the caller (ready, report, question, member died, build finished) and prints it with the stored body. `assign` waits for the member's READY itself, so the Foreman never dispatches into a pane that is still starting. |
+| `nightshift result SHIFT done\|blocked --stage RUNG --summary "..."` | the result.json schema paragraph | Writes result.json itself, attaching the bus, build records, uplift counts and Copilot usage, so the Foreman never hand-writes JSON. |
+| `nightshift status` slot map (humans) | the slot paragraphs | `spawn` already picks a free, non-reserved, non-Ops slot, so the Foreman needs no slot command; the map is for people. |
 | Failure output on `land`, `build`, `claim`, `spawn` | the exit-code paragraphs | Each says what to do next in one line. |
 
 `ack` stays but becomes implicit: `wait` prints the stored body, which is what `ack` existed to guarantee.
@@ -106,10 +109,12 @@ The prose cannot shrink until these exist, so they come first.
 
 ## 7. Tuning the brief to the model
 
-The same brief is wrong for Opus with a 1M context and for a Flash pane on a 30-credit budget. Two knobs, both set in the crew YAML per role and defaulted from the model name:
+The same brief is wrong for Opus with a 1M context and for a Flash pane on a 30-credit budget. The brief is generated from one set of shift facts (role, crew table, worktree and build command, which features are on) in one of two modes, chosen per role in the crew YAML and defaulted from the model name; both stay under 250 words. (Three prose tiers were proposed first; Argon's review pointed out that would recreate the `-cli.md` maintenance trap and that a *longer* brief for a cheap pane costs it on every turn.)
 
-- **Detail** (`brief: terse | standard | guided`). *Terse* for frontier models (Opus, Sol, Argon): the page above. *Standard* adds one example of a good assignment and a good report. *Guided* for small or cheap models (Flash, Luna, Terra on low): the loop as a checklist with the exact command for each step filled in, no judgement calls left open, and a "when unsure, report and stop" rule instead of discretion. Guided briefs are longer, but only where the model needs it.
-- **Context budget** (`context_words`, defaulted from the tool's window and the pane's credit cap). It decides whether the reference material is inlined (large windows) or left behind `nightshift help` (small ones), and it caps the ticket text the Foreman passes into an assignment. A Copilot pane on a 30-credit share gets the shortest form; it cannot afford to read pages.
+- **standard**, for frontier models (Opus, Sol, Argon): the page above. Ticket, crew table, the loop, the verification contract; decomposition and recovery are left to the model, syntax to `nightshift help`.
+- **compact**, for small or cheap models (Flash, Luna, Terra on low; any Copilot pane on a tight credit share): no discretion and no explanation. A four-step checklist with the commands filled in, edits confined to the files named in the assignment, a three-line literal report template, and a circuit breaker: "if an unlisted file needs editing or a command fails twice, `nightshift report ... "BLOCKED: <reason>"` and stop."
+
+Context size decides only whether reference material is inlined or left behind `nightshift help`, and caps the ticket text the Foreman passes into an assignment.
 
 Effort scaling belongs here too: the Foreman brief states how many members this ticket deserves (the ticket's size field or the owner's `--effort` flag), so a one-file fix does not get a five-pane crew.
 
