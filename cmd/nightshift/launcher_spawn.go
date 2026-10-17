@@ -131,6 +131,24 @@ options:
                         start nothing
 `
 
+// shiftKnowsRole: the role is already a member of the shift (crew.json) or in the shift's own manifest.
+func shiftKnowsRole(saved object, role, repoRoot string) bool {
+	members, _ := rowValue(saved, "members").([]any)
+	for _, item := range members {
+		if m, ok := item.(object); ok && (strings.EqualFold(objectString(m, "label"), role) || strings.EqualFold(objectString(m, "role"), role)) {
+			return true
+		}
+	}
+	if manifest, err := loadSavedCrew(saved, repoRoot); err == nil && manifest != nil {
+		for _, r := range manifest.roles {
+			if strings.EqualFold(r.role, role) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func runSpawn(argv []string, quiet bool) error {
 	opts := []writeOption{
 		{name: "--role"},
@@ -206,6 +224,20 @@ func runSpawn(argv []string, quiet bool) error {
 		}
 		if !args.present["--cli"] {
 			tool = specifiedCrewRole.tool
+		}
+	}
+
+	// A role the shift's crew does not have (and that was never in this shift) defaults to the specialists
+	// crew, e.g. Decompiler on Codex; --crew and --cli override it.
+	if specifiedCrewRole == nil && !args.present["--cli"] && !shiftKnowsRole(saved, role, repoRoot) {
+		if manifest, err := loadCrew("specialists", repoRoot); err == nil {
+			for _, r := range manifest.roles {
+				if strings.EqualFold(r.role, role) {
+					specifiedCrewRole = r
+					tool = r.tool
+					break
+				}
+			}
 		}
 	}
 

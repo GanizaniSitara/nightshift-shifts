@@ -1,0 +1,10 @@
+# Specialists: roles the Foreman spawns on demand into a free slot, never started with a shift.
+# `nightshift spawn SHIFT --role Decompiler` takes the role from here when the shift's own crew has no such role
+# (--crew, --cli and the shift's manifest still win). The Foreman is here because every crew needs a human
+# contact; `start --crew specialists` gives a Foreman with a Decompiler and a Researcher.
+name: specialists
+layout: 2x4
+roles:
+  - {role: Foreman, brief: foreman.md, human_contact: true, colour: red, tool: claude, model: claude-opus-5-5}
+  - {role: Decompiler, brief: decompiler.md, colour: purple, tool: claude, model: claude-opus-5-5}
+  - {role: Researcher, brief: coder.md, colour: yellow, tool: claude, model: claude-opus-5-5}
