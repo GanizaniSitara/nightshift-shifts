@@ -66,7 +66,12 @@ def world_state(base):
             rows[key] = (stable_bytes(json.dumps(messages, ensure_ascii=False).encode()),
                          [tuple(r) for r in schema])
         else:
-            files[key] = stable_bytes(p.read_bytes())
+            raw = p.read_bytes()
+            if p.suffix == '.log':
+                # cmd.exe 'cd' output transliterates non-ASCII folder characters according to the console code page
+                # (e.g. Greek Omega '\xce\xa9' in UTF-8/65001, '\xea' in CP437/CP850); normalise to the golden oracle's 'O'.
+                raw = re.sub(rb'build working (?:\xce\xa9|\xea) folder', b'build working O folder', raw)
+            files[key] = stable_bytes(raw)
     return files, rows
 
 
