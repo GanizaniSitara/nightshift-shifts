@@ -29,7 +29,7 @@ const (
 
 func claudeExe() string {
 	if p, err := exec.LookPath("claude"); err == nil {
-		return p
+		return realExe("claude", p)
 	}
 	return "claude"
 }

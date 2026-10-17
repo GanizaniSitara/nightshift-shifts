@@ -157,7 +157,7 @@ func agyStatuslineCmd() string { return statuslineCmd() }
 
 func toolExe(tool string) string {
 	if p, err := exec.LookPath(tool); err == nil {
-		return p
+		return realExe(tool, p)
 	}
 	switch tool {
 	case "agy":
@@ -168,6 +168,30 @@ func toolExe(tool string) string {
 		return filepath.Join(os.Getenv("APPDATA"), "npm", "node_modules", "@github", "copilot", "node_modules", "@github", "copilot-win32-x64", "copilot.exe")
 	}
 	return ""
+}
+
+// realExe swaps a .cmd/.bat shim found on PATH for the executable behind it. A shim runs through cmd.exe,
+// whose 8191-character command limit a brief plus a long ticket overflows ("The command line is too long"),
+// while a real executable gets the 32767-character CreateProcess limit. Tried in order: <tool>.exe elsewhere
+// on PATH, then the native binary inside the npm package beside the shim. Anything else keeps the shim.
+func realExe(tool, p string) string {
+	if ext := strings.ToLower(filepath.Ext(p)); ext != ".cmd" && ext != ".bat" {
+		return p
+	}
+	if exe, err := exec.LookPath(tool + ".exe"); err == nil {
+		return exe
+	}
+	packaged := map[string]string{
+		"claude":  filepath.Join("@anthropic-ai", "claude-code", "bin", "claude.exe"),
+		"codex":   filepath.Join("@openai", "codex", "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe"),
+		"copilot": filepath.Join("@github", "copilot", "node_modules", "@github", "copilot-win32-x64", "copilot.exe"),
+	}
+	if rel, ok := packaged[tool]; ok {
+		if exe := filepath.Join(filepath.Dir(p), "node_modules", rel); fileExists(exe) {
+			return exe
+		}
+	}
+	return p
 }
 
 // pyResolve mirrors pathlib's non-strict Path.resolve() on Windows: the real

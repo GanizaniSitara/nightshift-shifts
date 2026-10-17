@@ -77,3 +77,27 @@ func TestWtCommandWideOpsPaneTakesTwoBottomCells(t *testing.T) {
 		t.Fatalf("ops_width 1: got %q want %q", got, want)
 	}
 }
+
+func TestRealExeSwapsAnNpmShimForItsPackagedBinary(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	shim := filepath.Join(dir, "claude.cmd")
+	exe := filepath.Join(dir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe")
+	for _, f := range []string{shim, exe} {
+		if err := os.MkdirAll(filepath.Dir(f), 0777); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x"), 0666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := realExe("claude", shim); got != exe {
+		t.Fatalf("realExe = %q, want %q", got, exe)
+	}
+	if got := realExe("agy", filepath.Join(dir, "agy.cmd")); got != filepath.Join(dir, "agy.cmd") {
+		t.Fatalf("a shim with nothing behind it must stay: %q", got)
+	}
+	if got := realExe("codex", `C:\x\codex.exe`); got != `C:\x\codex.exe` {
+		t.Fatalf("an executable must stay: %q", got)
+	}
+}
