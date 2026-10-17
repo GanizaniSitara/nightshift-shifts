@@ -1849,6 +1849,10 @@ func main() {
 		// --json anywhere after the command keeps JSON output at a console too.
 		os.Args = append(os.Args[:2:2], stripJSONFlag(os.Args[2:])...)
 	}
+	if len(os.Args) == 2 && (os.Args[1] == "-v" || os.Args[1] == "--version" || os.Args[1] == "version") {
+		out(versionText() + "\n")
+		os.Exit(0)
+	}
 	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-") {
 		os.Exit(topLevel(os.Args[1:]))
 	}
