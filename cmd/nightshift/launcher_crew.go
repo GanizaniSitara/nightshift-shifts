@@ -1196,8 +1196,21 @@ func compactionControl(tool, role string) object {
 	return object{{"automatic", "unsupported"}, {"environment", object{}}, {"reason", compactionUnsupported[tool]}}
 }
 
+// keepClaudeVar: a CLAUDE* variable that is the machine's setup, not a marker of the session that ran start.
+// Login and provider settings (Bedrock, Vertex, Foundry, OAuth token, API key helper, client certificates,
+// config folder) must reach the crew, or a crew pane on an API-key or gateway machine asks for /login.
+func keepClaudeVar(up string) bool {
+	for _, prefix := range []string{"CLAUDE_AFK_", "CLAUDE_CODE_USE_", "CLAUDE_CODE_OAUTH", "CLAUDE_CODE_API_KEY",
+		"CLAUDE_CODE_SKIP_", "CLAUDE_CODE_CLIENT_", "CLAUDE_CONFIG_DIR"} {
+		if strings.HasPrefix(up, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // crewEnv is the environment for a crew member's CLI: inherited Claude Code
-// markers dropped (CLAUDE_AFK_* kept), colour forced on, per-tool settings.
+// session markers dropped (login and provider settings kept), colour forced on, per-tool settings.
 func crewEnv(environ []string, tool string, account any, role string) []string {
 	keys := []string{}
 	values := map[string]string{}
@@ -1217,7 +1230,7 @@ func crewEnv(environ []string, tool string, account any, role string) []string {
 	for _, kv := range environ {
 		k, v, _ := strings.Cut(kv, "=")
 		up := strings.ToUpper(k)
-		if k == "" || (strings.HasPrefix(up, "CLAUDE") && !strings.HasPrefix(up, "CLAUDE_AFK_")) {
+		if k == "" || (strings.HasPrefix(up, "CLAUDE") && !keepClaudeVar(up)) {
 			continue
 		}
 		set(k, v)
