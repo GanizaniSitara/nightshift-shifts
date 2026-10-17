@@ -78,8 +78,8 @@ Worktree <dir>, branch shift/<id>, lands on <branch>. Build: <cmd>.
 How a shift runs:
 1. Read the ticket and the code. Split the work into assignments, each with named files and what done looks like.
 2. nightshift assign <shift> Coder "<assignment>", one per assignment; they run in parallel.
-3. nightshift wait <shift> returns when a member reports, asks, or dies. Read it, decide, repeat.
-4. Read the diff against the assignment. Then nightshift assign <shift> Tester "verify <asg>: <what changed>". On TESTED-PASS, commit exactly that change; Tester then runs the full build on the clean commit (nightshift land refuses anything else).
+3. nightshift wait <shift> returns when a member reports, asks, times out, or dies. Read it, decide, repeat. Between events keep investigating and scoping the next assignment; never fill the time by touching the code.
+4. Read the diff against the assignment. Then nightshift assign <shift> Tester "verify <asg>: <what changed>". A TESTED-FAIL goes back with nightshift note <shift> Coder "<the verdict>". On TESTED-PASS, nightshift commit <shift> <asg> makes the commit and has Tester run the full build on it (land refuses anything else).
 5. Stuck? nightshift consult <shift> "<question>". More hands? nightshift spawn <shift> --role Coder2 (it picks a free slot); dismiss it when done.
 6. nightshift land <shift>, then nightshift result <shift> done --stage tested, then nightshift queue next. An empty queue means stop and wait; do not run down.
 
@@ -99,11 +99,20 @@ The prose cannot shrink until these exist, so they come first.
 | `nightshift report SHIFT ROLE "text" [--asg ID]` | the same three steps from the member's side | One call; the first line is the verdict/summary. |
 | `nightshift ready SHIFT ROLE` | the READY paragraph | Records READY; nothing else to get right. |
 | `nightshift wait SHIFT [--for ROLE] [--timeout]` | `agents-cli tail` polling and `agents-cli wait --match` | Blocks until the next bus event that matters to the caller (ready, report, question, member died, build finished) and prints it with the stored body. `assign` waits for the member's READY itself, so the Foreman never dispatches into a pane that is still starting. |
+| `nightshift note SHIFT ROLE "text"` | `msg send --kind note` plus typed delivery | The Foreman-to-member path `assign` does not cover: a Tester verdict relayed to the Coder, an answer to a question. (Mistral review.) |
+| `nightshift uplift SHIFT ASG --reason R` | the ~150-word uplift paragraph | Checks the trigger evidence and released claims, records, starts the reserved Coder if needed and delivers, in one call; today every step is model-executed. (Mistral review.) |
+| `nightshift commit SHIFT ASG` | `git commit` in the brief | Commits exactly the Tester-passed revision and refuses a tree that differs from it; a raw git command has no place on the one page. (Mistral review.) |
 | `nightshift result SHIFT done\|blocked --stage RUNG --summary "..."` | the result.json schema paragraph | Writes result.json itself, attaching the bus, build records, uplift counts and Copilot usage, so the Foreman never hand-writes JSON. |
 | `nightshift status` slot map (humans) | the slot paragraphs | `spawn` already picks a free, non-reserved, non-Ops slot, so the Foreman needs no slot command; the map is for people. |
 | Failure output on `land`, `build`, `claim`, `spawn` | the exit-code paragraphs | Each says what to do next in one line. |
 
 `ack` stays but becomes implicit: `wait` prints the stored body, which is what `ack` existed to guarantee.
+
+**Delivery becomes pull, not push.** Today the body of a message is typed into the other pane, which races with the model's own typing, permission prompts and scrollback, and non-Claude members are read back by scraping their screen (`agents-cli wait --match`, `tail`). Instead every member blocks in the same `nightshift wait` the Foreman uses, and `wait` prints the stored body when a message arrives. What gets typed into a pane is a one-line nudge whose only job is to interrupt; the content always comes from SQLite. Panes become displays, the bus is the only transport, the screen-scraping and the old-marker bug class go away, and a member blocked in `wait` is trivially respawnable. (Mistral review.)
+
+**Failures are events the tool raises; the brief says what to do about each, in one line.** The tool detects what can be counted or timed: `wait` reports `member-died <role>` (the launcher sees the pane exit) and `asg-timeout <asg>` (the 900-second rule becomes a bus event instead of a clock the Foreman watches); `build` refuses a fourth consecutive failing build on one assignment with the same error and prints `loop detected: escalate or report BLOCKED`; `nightshift respawn SHIFT ROLE` restarts the slot with the active assignment as the first prompt; `nightshift handover SHIFT` writes handover.md from live state before a member dies of context. The brief then needs four lines: on member-died, respawn and note it; on loop-detected, stop and report BLOCKED with the evidence, never retry the same fix; on asg-timeout, release claims and re-dispatch with the prior reports; on context exhaustion, run handover and stop. (Mistral review.)
+
+**`status` stays out of the Foreman's vocabulary.** A command the brief names gets used; a model told "status shows who is running" polls it instead of blocking in `wait`, and cheap models most of all. (Mistral review.)
 
 **Missing tools are the human's problem, loudly.** A specialist that needs an external tool (the Decompiler needs Ghidra; a future role might need a specific SDK) checks for it first and reports `<ROLE>-BLOCKED: missing tool <name>` before doing anything else; it never substitutes, scripts around it, or installs. Better still, the role declares `tools: [ghidra]` in its crew entry and `spawn` refuses to start it when the tool is not on PATH, so the gap is reported before a pane is spent on it (owner, 17 Oct).
 
@@ -116,6 +125,10 @@ The same brief is wrong for Opus with a 1M context and for a Flash pane on a 30-
 
 Context size decides only whether reference material is inlined or left behind `nightshift help`, and caps the ticket text the Foreman passes into an assignment.
 
+Two corrections from the Mistral review. The mode table has to be concrete and shipped with the code, not "defaulted from the model name": compact for Flash, Luna, Terra on low, any Copilot pane on a credit share, and Mistral or small Codex panes; standard for Opus, Sonnet, Sol, Astra, Argon; the crew YAML can override per role. And compact should be held to about 150 words, not 250: a credit-capped pane pays for the brief on every turn, and past ~150 words of checklist a small model's step ordering drifts. If a step does not fit in 150 words, the answer is a command that does it, not a longer brief. Compact mode phrases every rule as an action ("your only action before the first assignment is `nightshift ready`"), never as a prohibition, and carries the inbound checklist literally: nudge arrives, `wait` prints the body, act on the printed body only.
+
+Also noted by Mistral: the renderer today appends the task *last* (`roleBrief` in `launcher_crew.go`), so "task first" is a change to the code, not only to the prose.
+
 Effort scaling belongs here too: the Foreman brief states how many members this ticket deserves (the ticket's size field or the owner's `--effort` flag), so a one-file fix does not get a five-pane crew.
 
 ## 8. How to check it
@@ -124,7 +137,11 @@ Effort scaling belongs here too: the Foreman brief states how many members this 
 2. One small real ticket per crew shape: all-Claude, Claude Foreman with Copilot members, Codex crew. Compare bus length, time to first dispatch, number of failed shell calls, and whether the result reached the tested rung.
 3. Keep the old briefs under `briefs/legacy/` for one release so a crew can be started with them if the new ones regress.
 
-## 9. Decisions for the owner
+## 9. Reviews
+
+Two second opinions were taken on 17 Oct and folded in above: Gemini 4 Argon (`instructions-review-argon.md`) and Mistral Large 4 (`instructions-review-mistral.md`). Both approved the direction. Argon fixed the verification sequence and the brief modes; Mistral added the pull-based delivery, the failure events, the `note`, `uplift` and `commit` commands, the idle-time rule and the 150-word compact limit. Both reviewers, asked how their own models follow long instructions, gave the same answer: numbered steps with the literal command inline, short "never" lists next to the task, tables and literal templates survive; rules buried mid-paragraph, retroactive negations ("the line above does not apply to you"), nested conditionals and rules about absent roles die, and both put the fall-off well under 1,500 words.
+
+## 10. Decisions for the owner
 
 - Commands first (§6), then the briefs: agreed 17 Oct.
 - Retire `foreman-agy-coder.md` and the `-cli` brief variants in favour of per-tool lines generated by the launcher?
