@@ -1247,6 +1247,119 @@ with **Foreman-driven landing (`nightshift land`)**:
 - Whether to converge all messaging on mailbox + agents-cli, or keep native mesh for Claude.
 - Parallel shifts across separate codebases (NGH-013).
 
+## Brief rendering, site layer and `doctor --cwd` (NGH-062)
+
+`roleBrief` (launcher_crew.go, signature unchanged) delegates to `renderRoleBrief(stateDir, role, cwd, repoRoot,
+crew, member)` in `brief_render.go`, which returns `renderedBrief{Text, Mode, Layers, Warnings}`. `crew` is the
+crew.json-shaped object and `member` the role's crew.json member; `roleBrief` finds the member in the shift's
+crew.json by identity. Every pane, `start` (warnings and the dry-run fields) and `doctor --cwd` render through it.
+
+Order of a brief:
+
+1. `# Task` and the human's text verbatim (the human-contact member only; read from `<state_dir>/prompt.txt`,
+   never placeholder-substituted). The pane no longer appends the task after the brief; Claude panes still get the
+   brief by file (`--append-system-prompt-file`).
+2. `## Your shift`: a table of members by slot (slot, role, tool, model, `live` or `asleep` for a reserved
+   Advisor/Coder not yet started) plus the human's Ops pane when the layout has one; then the worktree, branch and
+   target branch from `worktree.json` and the repository's Build, Test one, Lint and Typecheck commands from
+   `.nightshift/config.yaml` (absent ones omitted). Facts carry no word budget.
+3. `# This repository`: `.nightshift/instructions.md` and `.nightshift/<role>.md`; then `# This site`: the site
+   prose (`<state root>/instructions.md`). A heading appears only when its prose exists.
+4. The role page. Standard mode: persona, `common.md` and the role brief as before, then a generated
+   `## Messaging` paragraph (Claude: SendMessage only says to run `wait`; every member uses `nightshift wait` and
+   `report`, the lead `wait`, `assign` and `note`).
+5. `# Rules`, generated per role and never removed by another layer: members edit only claimed files and never
+   commit or push; the lead never edits repository files or runs the suite and sends the human one line per
+   milestone; everyone acts only on the body `wait` or `ack` prints.
+
+Per-crew text. Rewritten briefs may wrap text in `<!-- if KEY -->...<!-- end -->` (keys `apprentice`,
+`reserved_coder`, `advisor`, `copilot`, `non_claude`, `worktree`, `queue`); the block stays only when the crew has
+that member or feature. The legacy brief files are not tagged, so the renderer drops every sentence, and every whole
+list item, of the role page that matches an absent feature (`crewFeatureWords`): Apprentice; summon / reserved
+Coder; Advisor / consult; Copilot credit / credits / max_credits; agents-cli / non-Claude; worktree / land; queue.
+Features: an Apprentice or Advisor member; `coder_slot` (reserved Coder); a Copilot member on a credit share or a
+crew `max_credits`; any non-Claude member; `worktree.json` in the shift (or a `worktree` key in the crew object);
+a container layout (`slots`, which has the Ops pane and the live queue). A crew without an Apprentice therefore has
+no sentence naming the Apprentice in any member's brief. Non-Claude members also lose every sentence naming
+ListAgents or SendMessage and the old "does not apply to you" line; Claude members other than the lead lose
+sentences that drive panes with agents-cli (the lead keeps them while the crew has a non-Claude member).
+
+Modes. A crew role's `brief_mode: standard|compact` (validated by the crew loader, kept in crew.json) wins;
+otherwise `briefModeFor` applies the published table: compact for models containing `flash`, `luna` or `mistral`,
+`terra` on reasoning `low`, any Copilot member on a credit share, and Codex `-mini`/`-nano` models; standard for
+everything else (Opus, Sonnet, Sol, Astra, Argon). Compact replaces the role page with a numbered checklist of
+literal commands (`ready`, `wait`, `claim`, `report`/`release`; the lead `wait`, `assign`/`note`, `commit`,
+`result`), a three-line report template (`<VERDICT>: <summary>`, `Files:`, `Checks:`), the first 30 words of
+`.nightshift/<role>.md` and the circuit breaker ("If a file not named in your assignment needs editing or a command
+fails twice, run `nightshift report SHIFT ROLE "BLOCKED: <reason>"` and stop", the lead `result ... blocked`);
+the shift facts, repository and site prose (repository: `instructions.md` only) and the rules still apply.
+
+Budgets (words, `strings.Fields`): role page 250 standard / 150 compact, repository prose 150 combined per role,
+site prose 50. Over budget is a warning, never an error: `brief <Label>: <layer> layer <n> words, budget <b>`,
+printed by `start` and `doctor --cwd`. The legacy briefs exceed the role budget until NGH-063 rewrites them.
+
+Site call sites in the launcher: `crewEnv` sets `siteEnv()` (sorted) after the inherited environment and before the
+per-tool settings; `toolCommand` inserts `siteWebFlags(tool)` before the prompt (and its `-i`); the pane's Claude
+argv appends `siteWebFlags("claude")`. `.nightshift/config.yaml` accepts the new top-level keys (`build`/`land`
+validate them: `test_one`, `lint`, `typecheck` non-empty strings, `protected_paths` a list of non-empty strings).
+
+### Site layer (`cmd/nightshift/site_layer.go`)
+
+`loadSite()` reads `<state root>/site.yaml` and `<state root>/instructions.md` (the site prose, trimmed; Coder's
+renderer budgets it at 50 words). Absent files give no limits, no env and `WebSearch: true`. `site.yaml` keys:
+`allowed_tools` (list), `allowed_models` (list), `env` (map of string to string), `web_search` (bool, default true);
+any other key is an error (`<path>: unknown site keys: K`), and `start`/`doctor --cwd` stop with exit 1 on an invalid file.
+
+- Allow-lists: empty or absent = any. Entries are `path.Match` globs (`claude-opus-*`); a tool entry also matches its
+  `spawn --cli` alias (`gemini` = `agy`). An empty member tool is `claude`. `start` (before the dry-run plan too)
+  and `doctor --cwd` refuse the first member not allowed, exit 4, one stderr line:
+  `<site.yaml path>: <Role> uses tool <tool>, not in allowed_tools (<list>)` or
+  `<site.yaml path>: <Role> uses model <model>, not in allowed_models (<list>)`.
+- `siteEnv() map[string]string`: the `env` map; `crewEnv` sets it for every member (Coder's one-line call).
+- `siteWebFlags(tool) []string`, non-empty only with `web_search: false` (Coder appends it to `toolCommand`'s argv and to
+  the Claude argv in launcher_pane.go):
+
+| Tool | Flags |
+|---|---|
+| claude | `--disallowedTools WebSearch,WebFetch` |
+| copilot | `--deny-tool url` (Copilot's `url()` permission with no argument covers all URL access of its shell and web-fetch tools) |
+| codex | none: Codex has live web search only with `--search`, which Nightshift never passes |
+| agy | none: no such flag |
+
+### Repository `protected_paths` (`write_claims.go`)
+
+`.nightshift/config.yaml` top-level `protected_paths`: repo-relative globs, `path.Match` syntax, case-insensitive,
+`*` does not cross `/`; a pattern matching a parent folder protects everything under it (`secrets` protects
+`secrets/a/key.txt`). The repository is the shift's `worktree.json` `worktree_dir`, else crew.json `cwd`. A missing or
+unparseable config protects nothing (build/land report config errors). `claim` checks before taking the claims lock
+and refuses the whole claim (all or nothing, nothing written), exit 4, one stderr line for the first protected path:
+`<canonical path> is protected by .nightshift/config.yaml; ask the human`.
+
+### `nightshift doctor --cwd REPO [--crew NAME]` (`init.go`)
+
+Renders every role's brief with `renderRoleBrief("", label, REPO, repoRoot, crew, member)`, the crew being the
+crew.json-shaped object `start` would write (`crewObject`, slots from `crewCells`; identities use the placeholder shift
+`Nightshift-shift-doctor`). Crew: `--crew`, else the repository's `default_crew`, else `default`. Site allow-lists are
+checked first (exit 4 as above). Human output:
+
+    Briefs for <repo root> (crew <name>)
+      <Role>       <mode>    role <w>/<b>  repository <w>/<b>  site <w>/<b>
+    warning: brief <Role>: <layer> layer <n> words, budget <b>     (one per over-budget layer)
+    All within budget.                                           (instead, when there are none)
+
+JSON (`--json` or not a console): `{"repo", "crew", "roles": [{"role", "mode", "layers": [{"name", "words",
+"budget"}]}], "warnings": [...]}`. Exit 0 even over budget; 1 for a missing folder, bad config or crew; 2 for
+`--crew` without `--cwd` (`argument --crew: requires --cwd`). Plain `doctor` is unchanged.
+
+### `start` (`launcher_start.go`)
+
+Slot placement moved into `crewCells` and the crew.json object into `crewObject` (same keys and order as before).
+After the members are known, `start` refuses site-disallowed members (exit 4), renders every member's brief
+(`renderBriefs`) and prints each renderer warning to stderr (when printing; dry-run included), then continues.
+The `--dry-run` plan's role objects gain, after `permission_flags`: `brief_mode`, `brief_layers` {role, repository,
+site: words} and `brief_warnings` (list).
+
+
 ## Per-repository `.nightshift` configuration and instruction layer (NGH-043)
 
 Nightshift keeps its global role personas and protocol briefs repository-agnostic. A repository
@@ -1262,8 +1375,10 @@ crew manifests:
 ```
 
 The supported `config.yaml` keys are `target_branch` (string, default branch for worktree
-creation and landing), `default_crew` (string, used when `start --crew` is omitted), and `build`
-(a mapping with string `cmd` and numeric `timeout`, in seconds). The config timeout is expressed
+creation and landing), `default_crew` (string, used when `start --crew` is omitted), `build`
+(a mapping with string `cmd` and numeric `timeout`, in seconds), and, since NGH-062, the top-level
+strings `test_one`, `lint` and `typecheck` (shown in every brief's shift facts) and `protected_paths`
+(a list of globs `claim` refuses). The config timeout is expressed
 in seconds; the CLI `--timeout` option remains expressed in minutes. Unknown keys and non-mapping
 YAML fail fast with a `SystemExit` naming the config path. When present, `start --dry-run` includes
 the resolved configuration as `repo_config`.

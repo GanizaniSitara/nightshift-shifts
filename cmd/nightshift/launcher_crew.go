@@ -842,6 +842,13 @@ func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, erro
 			}
 			r.opts = append(r.opts, pair{"permissions", permissions})
 		}
+		if v := yamlScalar(entry, "brief_mode"); v != nil {
+			mode := pyStr(v)
+			if mode != "standard" && mode != "compact" {
+				return fail("brief_mode %s for %s must be one of: standard, compact", pyRepr(mode), role)
+			}
+			r.opts = append(r.opts, pair{"brief_mode", mode})
+		}
 		if _, ok := yamlValue(entry, "max_credits"); ok {
 			return fail("max_credits for %s: the Copilot credit cap is the shift budget, set once as a top-level max_credits: key and split across the Copilot panes", role)
 		}
@@ -1101,85 +1108,27 @@ func personaText(role, persona string) (string, error) {
 // pyStrip is str.strip() for the whitespace PyYAML and the briefs carry.
 func pyStrip(s string) string { return strings.TrimSpace(s) }
 
-// roleBrief renders a role's instructions as the oracle's role_brief does.
+// roleBrief renders a role's instructions through renderRoleBrief (NGH-062). The member comes from the shift's
+// crew.json (matched by identity, else role); a crew that has not started renders this member alone.
 func roleBrief(role, identity, peerName, stateDir, brief, persona, cwd, repoRoot string) (string, error) {
-	if persona == "" {
-		persona = defaultPersona(role)
-	}
-	text := "# " + role + "\n\n# Protocol\n\n"
-	if persona != "" {
-		var err error
-		if text, err = personaText(role, persona); err != nil {
-			return "", err
-		}
-	}
-	if brief == "" {
-		brief = strings.ToLower(role) + ".md"
-	}
-	for _, name := range []string{"common.md", brief} {
-		body, err := assetRead("briefs", name)
-		if err != nil {
-			return "", err
-		}
-		text += pyStrip(body) + "\n\n"
-	}
-	text = strings.ReplaceAll(strings.ReplaceAll(text, "# Task\n", ""), humanTaskMarker, "")
-	if cwd == "" && stateDir != "" {
-		if info, _ := worktreeInfo(stateDir); info != nil {
-			cwd = objectString(info, "worktree_dir")
-		}
-		if cwd == "" {
-			if saved, ok := readObject(filepath.Join(stateDir, "crew.json")); ok {
-				if _, isList := rowValue(saved, "members").([]any); isList {
-					cwd = objectString(saved, "cwd")
-				}
-			}
-		}
-	}
-	if cwd == "" {
-		cwd, _ = os.Getwd()
-	}
-	cwd = pyResolve(cwd)
-	if repoRoot == "" {
-		repoRoot = cwd
-	}
-	repoRoot = canonicalRepoRoot(repoRoot, stateDir)
-	config, err := loadRepoConfig(repoRoot)
-	if err != nil {
-		return "", err
-	}
-	repoDir := filepath.Join(repoRoot, ".nightshift")
-	instructions := []string{}
-	for _, p := range []string{filepath.Join(repoDir, "instructions.md"), filepath.Join(repoDir, strings.ToLower(role)+".md")} {
-		if isFile(p) {
-			body, err := readTextUniversal(p)
-			if err != nil {
-				return "", err
-			}
-			instructions = append(instructions, pyStrip(body))
-		}
-	}
-	if config != nil || len(instructions) > 0 {
-		text += "\n# Repository\n\n"
-		if build, ok := rowValue(config, "build").(object); ok {
-			if cmd := configString(build, "cmd"); cmd != "" {
-				text += "- Default build/test command (`{nightshift} build {shift}`): `" + cmd + "`\n\n"
-			}
-		}
-		text += strings.Join(instructions, "\n\n") + "\n\n"
-	}
-	if strings.ToLower(role) == "foreman" {
-		text += "# Task\n\n" + humanTaskMarker + "\n\n"
-	}
-	shift, statePosix := "", ""
+	crew := object{}
 	if stateDir != "" {
-		shift, statePosix = filepath.Base(stateDir), filepath.ToSlash(stateDir)
+		if saved, ok := readObject(filepath.Join(stateDir, "crew.json")); ok {
+			crew = saved
+		}
 	}
-	for _, kv := range [][2]string{{"{role}", role}, {"{identity}", identity}, {"{peer_name}", peerName}, {"{state_dir}", statePosix},
-		{"{shift}", shift}, {"{nightshift}", nightshiftCommand()}, {"{cwd}", filepath.ToSlash(cwd)}} {
-		text = strings.ReplaceAll(text, kv[0], kv[1])
+	var member object
+	for _, m := range crewMemberList(crew) {
+		if (identity != "" && m.identity == identity) || (member == nil && m.role == role && identity == "") {
+			member = m.object()
+		}
 	}
-	return text, nil
+	if member == nil {
+		member = object{{"role", role}, {"label", role}, {"identity", identity}, {"peer", peerName}, {"tool", "claude"}}
+	}
+	member = setValue(setValue(setValue(member, "peer", peerName), "brief", brief), "persona", nullable(persona))
+	r, err := renderRoleBrief(stateDir, role, cwd, repoRoot, crew, member)
+	return r.Text, err
 }
 
 func compactionControl(tool, role string) object {
@@ -1234,6 +1183,15 @@ func crewEnv(environ []string, tool string, account any, role string) []string {
 			continue
 		}
 		set(k, v)
+	}
+	site := siteEnv()
+	siteKeys := make([]string, 0, len(site))
+	for k := range site {
+		siteKeys = append(siteKeys, k)
+	}
+	sort.Strings(siteKeys)
+	for _, k := range siteKeys {
+		set(k, site[k])
 	}
 	unset("NO_COLOR")
 	set("TERM", "xterm-256color")
@@ -1437,11 +1395,23 @@ func copilotUserMCPServers() []string {
 
 // toolCommand is the argv for a non-Claude crew member (agy, codex or copilot).
 func toolCommand(tool, model, brief, firstMessage, permissions, reasoning, context string, sessionName *string, maxCredits int) []string {
+	var cmd []string
 	switch tool {
 	case "agy":
-		return agyCommand(model, brief, firstMessage, permissions)
+		cmd = agyCommand(model, brief, firstMessage, permissions)
 	case "codex":
-		return codexCommand(model, brief, firstMessage, reasoning, permissions)
+		cmd = codexCommand(model, brief, firstMessage, reasoning, permissions)
+	default:
+		cmd = copilotCommand(model, brief, firstMessage, permissions, reasoning, context, sessionName, maxCredits)
 	}
-	return copilotCommand(model, brief, firstMessage, permissions, reasoning, context, sessionName, maxCredits)
+	// site.yaml web_search: false adds the CLI's own switch before the prompt (and its -i).
+	if flags := siteWebFlags(tool); len(flags) > 0 {
+		tail := 1
+		if len(cmd) >= 2 && cmd[len(cmd)-2] == "-i" {
+			tail = 2
+		}
+		cut := len(cmd) - tail
+		cmd = append(append(append([]string{}, cmd[:cut]...), flags...), cmd[cut:]...)
+	}
+	return cmd
 }

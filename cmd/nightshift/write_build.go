@@ -292,10 +292,21 @@ func loadBuildConfig(repo string) (string, float64, error) {
 	if err = yaml.Unmarshal(data, &m); err != nil {
 		return "", 0, fmt.Errorf("%s: %s", path, err)
 	}
-	if unknown := unknownYAMLKeys(m, []string{"target_branch", "default_crew", "build"}); len(unknown) > 0 {
+	if unknown := unknownYAMLKeys(m, []string{"target_branch", "default_crew", "build", "test_one", "lint", "typecheck", "protected_paths"}); len(unknown) > 0 {
 		return "", 0, fmt.Errorf("%s: unknown config keys: %s", path, strings.Join(unknown, ", "))
 	}
-	for _, key := range []string{"target_branch", "default_crew"} {
+	if v, ok := yamlValue(m, "protected_paths"); ok {
+		items, isList := v.([]any)
+		for _, item := range items {
+			if s, ok := item.(string); !ok || strings.TrimSpace(s) == "" {
+				isList = false
+			}
+		}
+		if !isList {
+			return "", 0, fmt.Errorf("%s: protected_paths must be a list of path globs", path)
+		}
+	}
+	for _, key := range []string{"target_branch", "default_crew", "test_one", "lint", "typecheck"} {
 		if v, ok := yamlValue(m, key); ok {
 			s, ok := v.(string)
 			if !ok || strings.TrimSpace(s) == "" {

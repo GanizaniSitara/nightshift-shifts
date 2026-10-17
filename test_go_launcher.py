@@ -407,6 +407,28 @@ def reserve_coder(plan):
     return plan
 
 
+# NGH-062: the start --dry-run plan gains per-role brief_mode/brief_layers/brief_warnings and start prints the brief
+# warnings on stderr (native only, outside the frozen oracle). Parity compares the rest; test_go_brief_render.py and
+# brief_render_test.go check the additions themselves.
+NGH062_PLAN_KEYS = ('brief_mode', 'brief_layers', 'brief_warnings')
+NGH062_WARNING_LINE = re.compile(rb'(?m)^brief \S+: (role|repository|site) layer \d+ words, budget \d+\r?\n')
+
+
+def without_ngh062(args, stdout, stderr):
+    stderr = NGH062_WARNING_LINE.sub(b'', stderr)
+    if args[:1] != ['start'] or '--dry-run' not in args or not stdout.lstrip().startswith(b'{'):
+        return stdout, stderr
+    plan = json.loads(stdout)
+    roles = plan.get('roles')
+    if not isinstance(roles, dict) or not any(isinstance(r, dict) and set(NGH062_PLAN_KEYS) & set(r)
+                                              for r in roles.values()):
+        return stdout, stderr
+    plan['roles'] = {k: {f: v for f, v in r.items() if f not in NGH062_PLAN_KEYS} if isinstance(r, dict) else r
+                     for k, r in roles.items()}
+    rendered = (json.dumps(plan, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+    return (rendered.replace(b'\n', b'\r\n') if b'\r\n' in stdout else rendered), stderr
+
+
 def oracle_with_reserved_coder(args, data):
     """The oracle's start --dry-run stdout re-rendered with reserve_coder (json.dumps as the oracle prints it)."""
     if args[:1] != ['start'] or '--dry-run' not in args or not data.lstrip().startswith(b'{'):
@@ -461,7 +483,8 @@ def oracle_expected(args, env, launcher, before):
                 ngh056_expected(normalise(expected.stderr, launcher, False))[0], expected.returncode)
     def native():
         actual = run(args, env, native=True)
-        return normalise(actual.stdout, launcher, True), normalise(actual.stderr, launcher, True), actual.returncode
+        stdout, stderr = without_ngh062(args, actual.stdout, actual.stderr)
+        return normalise(stdout, launcher, True), normalise(stderr, launcher, True), actual.returncode
     stdout, stderr, code = frozen(native if REBASE else compute, world_root(env), volatile(env), record=REBASE)
     if not REBASE:
         # NGH-060 postdates the recorded goldens: its help lines go on top of the frozen value, never into it.
@@ -479,8 +502,9 @@ def parity(args, env, launcher=None, expect_exit=None):
     if unported(actual):
         pytest.skip(f'native binary has not ported {args[0]} yet: {actual.stderr[:80]!r}')
     assert state_snapshot(env) == before, f'native binary wrote state for dry-run/usage case {args}'
-    for label, a, e in (('stdout', actual.stdout, expected.stdout),
-                        ('stderr', NGH061_SPAWN_LINE.sub(b'', actual.stderr), expected.stderr)):
+    stdout, stderr = without_ngh062(args, actual.stdout, actual.stderr)
+    for label, a, e in (('stdout', stdout, expected.stdout),
+                        ('stderr', NGH061_SPAWN_LINE.sub(b'', stderr), expected.stderr)):
         assert_equal_bytes(normalise(a, launcher, True), e, f'{args} {label}')
     assert actual.returncode == expected.returncode, (args, actual.stderr)
     return expected
@@ -655,13 +679,15 @@ def test_native_copy_without_crews_beside_it_uses_embedded_assets(start_world, p
         actual = subprocess.run([str(copied), *args], cwd=lonely, env=env, capture_output=True, timeout=60,
                                 stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
 
+        native_stdout = without_ngh062(args, actual.stdout, b'')[0]   # NGH-062 plan fields, native only
+
         def native_side():
-            return normalise(actual.stdout, python_launcher, True, exe=copied), actual.returncode
+            return normalise(native_stdout, python_launcher, True, exe=copied), actual.returncode
         stdout, code = frozen(native_side if REBASE else oracle_side, tmp_path, record=REBASE)
         if unported(actual):
             pytest.skip('native binary has not ported start yet')
         assert actual.returncode == code == 0, actual.stderr
-        assert_equal_bytes(normalise(actual.stdout, python_launcher, True, exe=copied), stdout, f'embedded {args}')
+        assert_equal_bytes(normalise(native_stdout, python_launcher, True, exe=copied), stdout, f'embedded {args}')
     assert sorted(p.name for p in lonely.iterdir()) == ['nightshift.exe'], 'embedded assets must not be unpacked'
 
 
@@ -1420,7 +1446,12 @@ def test_hidden_pane_start_runs_same_stub_argv_and_records(tmp_path, fake_bin, s
     def oracle_side():
         text, info, slot_record, calls = observe(False)
         return normalise(text.encode(), python_launcher, False), info, slot_record, calls
-    observed = [frozen(oracle_side, tmp_path, {'SLEEPER_PID': sleeper[0]})]
+
+    def native_side():
+        # NGH-062 re-record: the rendered brief in the stub argv is the renderer's, no longer the oracle's.
+        text, info, slot_record, calls = observe(True)
+        return normalise(text.encode(), python_launcher, True), info, slot_record, calls
+    observed = [frozen(native_side if REBASE else oracle_side, tmp_path, {'SLEEPER_PID': sleeper[0]}, record=REBASE)]
     if not observed[0][3]:
         pytest.fail('oracle did not run the stub; refusing to run the native pane (could reach a real CLI)')
     observed.append(observe(True))

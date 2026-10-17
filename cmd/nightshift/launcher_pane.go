@@ -162,7 +162,7 @@ func memberFromObject(o object) *crewMember {
 		brief: objectString(o, "brief"), colour: objectString(o, "colour"), tool: objectString(o, "tool"),
 		model: objectString(o, "model"), peer: objectString(o, "peer"), persona: rowValue(o, "persona"),
 		human: truthy(rowValue(o, "human_contact")), replacement: truthy(rowValue(o, "replacement"))}
-	for _, key := range []string{"reasoning", "context", "account", "permissions", "max_credits"} {
+	for _, key := range []string{"reasoning", "context", "account", "permissions", "max_credits", "brief_mode"} {
 		if v, ok := objectGet(o, key); ok {
 			m.opts = append(m.opts, pair{key, v})
 		}
@@ -313,13 +313,6 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		if brief, err = roleBrief(member.role, identity, peerName, stateDir, member.brief, persona, cwd, ""); err != nil {
 			return startExit(err.Error())
 		}
-		if member.human {
-			text, err := readTextUniversal(filepath.Join(stateDir, "prompt.txt"))
-			if err != nil {
-				return startExit(err.Error())
-			}
-			brief += text
-		}
 		envRole = member.role
 	}
 	var command []string
@@ -331,6 +324,7 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		command = toolCommand(tool, model, brief, firstMessage, permissionMode, reasoning, context, &session, maxCredits)
 	} else {
 		command = append([]string{claudeExe(), "--name", identity, "--model", model}, permissionFlags("claude", permissionMode)...)
+		command = append(command, siteWebFlags("claude")...)
 		var err error
 		if command, err = appendBrief(command, brief, stateDir, role); err != nil {
 			return startExit(err.Error())
@@ -377,6 +371,7 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		} else {
 			// as the oracle: this rebuild carries no --settings or --effort
 			command = append([]string{claudeExe(), "--name", identity, "--model", model}, permissionFlags("claude", permissionMode)...)
+			command = append(command, siteWebFlags("claude")...)
 			if command, err = appendBrief(command, brief, stateDir, role); err != nil {
 				return startExit(err.Error())
 			}

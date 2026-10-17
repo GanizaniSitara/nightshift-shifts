@@ -31,7 +31,7 @@ options:
   --yes       replace every differing machine crew without asking
 `
 
-const doctorUsage = `usage: nightshift doctor [-h]`
+const doctorUsage = `usage: nightshift doctor [-h] [--cwd REPO] [--crew CREW]`
 
 const doctorHelp = doctorUsage + `
 
@@ -39,8 +39,16 @@ Check this machine without changing anything: state folders, agent tools on
 PATH, and machine crews that differ from the built-in crews. nightshift init
 fixes what it reports.
 
+With --cwd, check a repository instead: render every role's brief for REPO
+and print the words per layer (role, repository, site) against each budget,
+then the over-budget warnings. Exit 0 even when over budget; exit 4 when
+site.yaml does not allow a member's tool or model.
+
 options:
-  -h, --help  show this help message and exit
+  -h, --help   show this help message and exit
+  --cwd REPO   render the briefs for this repository
+  --crew CREW  with --cwd: the crew to render (default: the repository's
+               default_crew, else default)
 `
 
 func init() {
@@ -54,14 +62,22 @@ func setupCommand(argv []string, fix bool) int {
 	if fix {
 		name, usage, help = "nightshift init", initUsage, initHelp
 		options = append(options, writeOption{name: "--yes", flag: true})
+	} else {
+		options = append(options, writeOption{name: "--cwd"}, writeOption{name: "--crew"})
 	}
 	args, parseError := parseWriteArgs(argv, options, nil, nil)
 	if args.help {
 		out(help)
 		return 0
 	}
+	if parseError == "" && args.present["--crew"] && !args.present["--cwd"] {
+		parseError = "argument --crew: requires --cwd"
+	}
 	if parseError != "" {
 		return writeUsage(name, usage, parseError)
+	}
+	if args.present["--cwd"] {
+		return doctorBriefs(args.values["--cwd"], args.values["--crew"])
 	}
 	yes := args.present["--yes"]
 	human := humanOutput()
@@ -204,6 +220,75 @@ func setupCommand(argv []string, fix bool) int {
 	}
 	printResult(object{{"state_root", root}, {"binary", exe}, {"on_path", onPath}, {"folders", folders},
 		{"tools", tools}, {"crews", crews}, {"problems", problems}}, true, false)
+	return 0
+}
+
+// doctorBriefs renders every role's brief for a repository, as start would, with no shift: words per layer per role
+// and the over-budget warnings.
+func doctorBriefs(cwd, crewName string) int {
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return commandExit(err)
+	}
+	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+		errLine("doctor --cwd: " + abs + " is not a folder")
+		return 1
+	}
+	repoRoot := canonicalRepoRoot(abs, "")
+	config, err := loadRepoConfig(repoRoot)
+	if err != nil {
+		errLine(err.Error())
+		return 1
+	}
+	if crewName == "" {
+		crewName = configString(config, "default_crew")
+	}
+	if crewName == "" {
+		crewName = "default"
+	}
+	crew, err := loadCrew(crewName, repoRoot)
+	if err != nil {
+		errLine(err.Error())
+		return 1
+	}
+	members := crewMembersOf(crew, "Nightshift-shift-doctor")
+	if err := startSiteCheck(members); err != nil {
+		return commandExit(err)
+	}
+	_, _, advisorSlot, coderSlot, slots := crewCells(crew, members)
+	crewJSON := crewObject(crew, members, slots, advisorSlot, coderSlot, abs)
+	roles, warnings := []any{}, []string{}
+	human := humanOutput()
+	if human {
+		out(fmt.Sprintf("Briefs for %s (crew %s)\n", repoRoot, crew.name))
+	}
+	for _, m := range members {
+		rendered, err := renderRoleBrief("", m.label, abs, repoRoot, crewJSON, m.object())
+		if err != nil {
+			errLine(fmt.Sprintf("brief %s: %s", m.label, err))
+			return 1
+		}
+		layers, cells := []any{}, []string{}
+		for _, l := range rendered.Layers {
+			layers = append(layers, object{{"name", l.Name}, {"words", l.Words}, {"budget", l.Budget}})
+			cells = append(cells, fmt.Sprintf("%s %d/%d", l.Name, l.Words, l.Budget))
+		}
+		if human {
+			out(fmt.Sprintf("  %-12s %-9s %s\n", m.label, rendered.Mode, strings.Join(cells, "  ")))
+		}
+		roles = append(roles, object{{"role", m.label}, {"mode", rendered.Mode}, {"layers", layers}})
+		warnings = append(warnings, rendered.Warnings...)
+	}
+	if !human {
+		printResult(object{{"repo", repoRoot}, {"crew", crew.name}, {"roles", roles}, {"warnings", stringsToAny(warnings)}}, true, false)
+		return 0
+	}
+	if len(warnings) == 0 {
+		out("All within budget.\n")
+	}
+	for _, w := range warnings {
+		out("warning: " + w + "\n")
+	}
 	return 0
 }
 

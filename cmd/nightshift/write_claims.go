@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
+	"gopkg.in/yaml.v2"
 )
 
 type claimConflictError struct{}
@@ -147,6 +149,46 @@ func claimPaths(args []string) ([]string, error) {
 	return paths, nil
 }
 
+// protectedClaim is the first path matching the repository's .nightshift/config.yaml protected_paths (repo-relative
+// path.Match globs, case-insensitive; a match on a parent folder protects everything under it), or "". The
+// repository is the shift's worktree, else its crew cwd. A missing or malformed config protects nothing.
+func protectedClaim(dir string, paths []string) string {
+	info, _ := readObject(filepath.Join(dir, "worktree.json"))
+	repo := objectString(info, "worktree_dir")
+	if repo == "" {
+		crew, _ := readObject(filepath.Join(dir, "crew.json"))
+		repo = objectString(crew, "cwd")
+	}
+	data, err := os.ReadFile(filepath.Join(repo, ".nightshift", "config.yaml"))
+	if repo == "" || err != nil {
+		return ""
+	}
+	var config struct {
+		Protected []string `yaml:"protected_paths"`
+	}
+	if yaml.Unmarshal(data, &config) != nil || len(config.Protected) == 0 {
+		return ""
+	}
+	root, err := normalizedClaimPath(repo)
+	if err != nil {
+		return ""
+	}
+	for _, p := range paths {
+		rel, err := filepath.Rel(strings.ToLower(root), strings.ToLower(p))
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		for rel = filepath.ToSlash(rel); rel != "."; rel = path.Dir(rel) {
+			for _, pattern := range config.Protected {
+				if ok, _ := path.Match(strings.ToLower(strings.TrimSuffix(filepath.ToSlash(pattern), "/")), rel); ok {
+					return p
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func otherLiveClaims(dir string, paths []string, conflicts map[string]bool) error {
 	for _, otherDir := range shiftDirs() {
 		if otherDir == dir {
@@ -234,6 +276,10 @@ func claimCommand(args []string) int {
 	paths, err := claimPaths(positional[2:])
 	if err != nil {
 		return commandExit(err)
+	}
+	if p := protectedClaim(dir, paths); p != "" {
+		errLine(p + " is protected by .nightshift/config.yaml; ask the human")
+		return 4
 	}
 	role := positional[1]
 	claims := object{}

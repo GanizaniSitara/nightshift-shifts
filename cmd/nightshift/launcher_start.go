@@ -267,33 +267,15 @@ func runStart(argv []string, print bool) (string, error) {
 		cwd = objectString(worktree, "worktree_dir")
 	}
 	members := crewMembersOf(crew, name)
-	// The manifest Advisor is not started with the crew: its cell is an empty, reserved slot (acc1f52).
-	// With an Apprentice in the crew the Coder is held the same way until summon (NGH-056).
-	labels, cells := []string{}, []string{}
-	advisorSlot, coderSlot := 0, 0
-	reserveCoder := crewHasRole(crew, "Apprentice")
+	if err := startSiteCheck(members); err != nil {
+		return "", err
+	}
+	labels, cells, advisorSlot, coderSlot, slots := crewCells(crew, members)
 	colours := map[string]string{}
-	for i, m := range members {
-		if isAdvisor(m) && advisorSlot == 0 {
-			advisorSlot = i + 1
-			cells = append(cells, "")
-		} else if reserveCoder && isCoder(m) && coderSlot == 0 {
-			coderSlot = i + 1
-			cells = append(cells, "")
-		} else {
-			labels = append(labels, m.label)
-			cells = append(cells, m.label)
-		}
+	for _, m := range members {
 		if m.tool == "agy" || m.tool == "codex" || m.tool == "copilot" {
 			colours[m.label] = m.colour
 		}
-	}
-	slots := crew.slots
-	if slots == 0 && (advisorSlot != 0 || coderSlot != 0) {
-		slots = len(members)
-	}
-	for len(cells) < slots {
-		cells = append(cells, "")
 	}
 	title := paneTitle(name)
 	if ticket != "" {
@@ -301,10 +283,17 @@ func runStart(argv []string, print bool) (string, error) {
 	}
 	command := wtCommand(wtSpec{name: name, stateDir: stateDir, agents: true, modeFlag: "--start", cwd: cwd, members: cells,
 		crew: crew.name, ticket: ticket, slots: slots, opsWidth: crew.opsWidth, foremanWidth: crew.foremanWidth, colours: colours, opsDir: repoRoot})
+	crewJSON := crewObject(crew, members, slots, advisorSlot, coderSlot, cwd)
+	briefs, warnings := renderBriefs(stateDir, cwd, repoRoot, crewJSON, members)
+	if print {
+		for _, warning := range warnings {
+			errLine(warning)
+		}
+	}
 	if args.present["--dry-run"] {
 		if print {
 			outLine(renderJSON(startPlan(name, stateDir, cwd, ticket, title, task, required, crew, members, cells, slots, advisorSlot,
-				coderSlot, command, worktree, config), true, false))
+				coderSlot, command, worktree, config, briefs), true, false))
 		}
 		return "", nil
 	}
@@ -334,23 +323,6 @@ func runStart(argv []string, print bool) (string, error) {
 		}
 	}
 	promptFile := filepath.Join(stateDir, "prompt.txt")
-	memberObjects := []any{}
-	for _, m := range members {
-		memberObjects = append(memberObjects, m.object())
-	}
-	crewJSON := object{{"crew", crew.name}}
-	if crew.overrides != nil {
-		crewJSON = append(crewJSON, pair{"overrides", crew.overrides})
-	}
-	crewJSON = append(crewJSON, object{{"members", memberObjects}, {"slots", slotsValue(slots)},
-		{"advisor_slot", slotsValue(advisorSlot)}}...)
-	if coderSlot != 0 {
-		crewJSON = append(crewJSON, pair{"coder_slot", coderSlot})
-	}
-	crewJSON = append(crewJSON, object{{"permission_mode", crew.permissionMode}, {"model", crew.model}, {"cwd", cwd}}...)
-	if crew.maxCredits != nil {
-		crewJSON = append(crewJSON, pair{"max_credits", crew.maxCredits})
-	}
 	writes := [][2]string{{promptFile, task}, {filepath.Join(stateDir, "requires.txt"), required},
 		{filepath.Join(stateDir, "crew.json"), renderJSON(crewJSON, true, true)}}
 	if ticket != "" {
@@ -385,6 +357,87 @@ func runStart(argv []string, print bool) (string, error) {
 	return stateDir, nil
 }
 
+// crewCells places the members in slots. The manifest Advisor is not started with the crew: its cell is an empty,
+// reserved slot (acc1f52). With an Apprentice in the crew the Coder is held the same way until summon (NGH-056).
+func crewCells(crew *crewManifest, members []*crewMember) (labels, cells []string, advisorSlot, coderSlot, slots int) {
+	labels, cells = []string{}, []string{}
+	reserveCoder := crewHasRole(crew, "Apprentice")
+	for i, m := range members {
+		if isAdvisor(m) && advisorSlot == 0 {
+			advisorSlot = i + 1
+			cells = append(cells, "")
+		} else if reserveCoder && isCoder(m) && coderSlot == 0 {
+			coderSlot = i + 1
+			cells = append(cells, "")
+		} else {
+			labels = append(labels, m.label)
+			cells = append(cells, m.label)
+		}
+	}
+	slots = crew.slots
+	if slots == 0 && (advisorSlot != 0 || coderSlot != 0) {
+		slots = len(members)
+	}
+	for len(cells) < slots {
+		cells = append(cells, "")
+	}
+	return labels, cells, advisorSlot, coderSlot, slots
+}
+
+// crewObject is the crew.json-shaped crew the brief renderer takes (start writes the same fields to crew.json).
+func crewObject(crew *crewManifest, members []*crewMember, slots, advisorSlot, coderSlot int, cwd string) object {
+	memberObjects := []any{}
+	for _, m := range members {
+		memberObjects = append(memberObjects, m.object())
+	}
+	o := object{{"crew", crew.name}}
+	if crew.overrides != nil {
+		o = append(o, pair{"overrides", crew.overrides})
+	}
+	o = append(o, object{{"members", memberObjects}, {"slots", slotsValue(slots)}, {"advisor_slot", slotsValue(advisorSlot)}}...)
+	if coderSlot != 0 {
+		o = append(o, pair{"coder_slot", coderSlot})
+	}
+	o = append(o, object{{"permission_mode", crew.permissionMode}, {"model", crew.model}, {"cwd", cwd}}...)
+	if crew.maxCredits != nil {
+		o = append(o, pair{"max_credits", crew.maxCredits})
+	}
+	return o
+}
+
+// startSiteCheck refuses a crew whose tool or model site.yaml does not allow (exit 4, one line on stderr).
+func startSiteCheck(members []*crewMember) error {
+	site, err := loadSite()
+	if err != nil {
+		return startExit(err.Error())
+	}
+	list := [][3]string{}
+	for _, m := range members {
+		list = append(list, [3]string{m.label, m.tool, m.model})
+	}
+	if err := siteCheckMembers(site, list); err != nil {
+		errLine(err.Error())
+		return commandError{4, ""}
+	}
+	return nil
+}
+
+// renderBriefs renders every member's brief: the results by label, and the renderer's over-budget warnings (one
+// line each; a brief that cannot be rendered is a warning too).
+func renderBriefs(stateDir, cwd, repoRoot string, crew object, members []*crewMember) (map[string]renderedBrief, []string) {
+	briefs, warnings := map[string]renderedBrief{}, []string{}
+	for _, m := range members {
+		rendered, err := renderRoleBrief(stateDir, m.label, cwd, repoRoot, crew, m.object())
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("brief %s: %s", m.label, err))
+			continue
+		}
+		briefs[m.label] = rendered
+		warnings = append(warnings, rendered.Warnings...)
+	}
+	return briefs, warnings
+}
+
 func nullable(s string) any {
 	if s == "" {
 		return nil
@@ -416,7 +469,7 @@ func firstSplitLine(s string) string {
 }
 
 func startPlan(name, stateDir, cwd, ticket, title, prompt, required string, crew *crewManifest, members []*crewMember, cells []string,
-	slotCount, advisorSlot, coderSlot int, command []string, worktree, config object) object {
+	slotCount, advisorSlot, coderSlot int, command []string, worktree, config object, briefs map[string]renderedBrief) object {
 	var lock any
 	if worktree == nil {
 		lock = lockPath(cwd)
@@ -452,6 +505,13 @@ func startPlan(name, stateDir, cwd, ticket, title, prompt, required string, crew
 				m.optString("reasoning"), m.optString("context"), &session, credits))})
 		}
 		role = append(role, pair{"permission_flags", stringsToAny(permissionFlags(m.tool, permissions))})
+		if b, ok := briefs[m.label]; ok {
+			layers := object{}
+			for _, l := range b.Layers {
+				layers = append(layers, pair{l.Name, l.Words})
+			}
+			role = append(role, pair{"brief_mode", b.Mode}, pair{"brief_layers", layers}, pair{"brief_warnings", stringsToAny(b.Warnings)})
+		}
 		roles = append(roles, pair{m.label, role})
 	}
 	plan := object{{"dry_run", true}, {"shift", name}, {"state_dir", stateDir}, {"cwd", cwd}, {"ticket", nullable(ticket)},

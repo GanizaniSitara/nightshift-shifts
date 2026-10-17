@@ -108,3 +108,38 @@ Dry-run JSON prints command lines only for non-Claude panes:
 ## 7. Credit limits
 
 Copilot's cap is a soft cap: an ongoing response can overshoot, after which further calls are blocked. If a Copilot pane hits its cap, it stops and Foreman reports it. Raise the shift budget `max_credits` in the manifest or with `--max-credits` only deliberately.
+
+## 8. Repository and site layers
+
+A repository tells every crew about itself in `<repo>/.nightshift/`:
+- `config.yaml`: `target_branch`, `default_crew`, `build` (`cmd`, `timeout`), the commands shown in every brief's
+  "Your shift" table (`test_one`, `lint`, `typecheck`), and `protected_paths`, a list of repo-relative globs
+  (`path.Match` syntax, case-insensitive, `*` stays inside one folder; a match on a folder protects everything under it).
+  `claim` refuses a protected path with exit 4: `<path> is protected by .nightshift/config.yaml; ask the human`.
+- `instructions.md` (every role) and `<role>.md` (one role): repository prose, 150 words combined per role.
+- `crews/NAME.yaml`: repository crews (section 3).
+
+A machine adds settings the tool enforces in `<stateRoot>/site.yaml` (default `C:\nightshift\site.yaml`), and
+up to 50 words of prose for every brief in `<stateRoot>/instructions.md`:
+```yaml
+allowed_tools: [claude, copilot]          # empty or absent = any; gemini also matches agy
+allowed_models: ["claude-opus-*", gemini-3.8-flash]   # globs allowed
+env:                                       # set for every crew member
+  GOPROXY: "off"
+  PIP_NO_INDEX: "1"
+  CARGO_NET_OFFLINE: "true"
+  HTTPS_PROXY: http://proxy.example:8080
+web_search: false                          # default true
+```
+`start` and `doctor --cwd` refuse a crew whose tool or model is not allowed (exit 4, one line naming the role).
+With `web_search: false`, Claude panes get `--disallowedTools WebSearch,WebFetch` and Copilot panes
+`--deny-tool url`; Codex searches only with `--search`, which Nightshift never passes, and agy has no such flag.
+An unknown key in `site.yaml` is an error.
+
+Check a repository before the first shift:
+```bash
+nightshift doctor --cwd <repo> [--crew work]
+```
+It renders every role's brief and prints the words of each layer (role, repository, site) against its budget,
+then one warning per layer over budget; it exits 0 even then. `start` prints the same warnings to stderr and
+continues.
