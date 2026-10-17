@@ -331,7 +331,10 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		command = toolCommand(tool, model, brief, firstMessage, permissionMode, reasoning, context, &session, maxCredits)
 	} else {
 		command = append([]string{claudeExe(), "--name", identity, "--model", model}, permissionFlags("claude", permissionMode)...)
-		command = append(command, "--append-system-prompt", brief)
+		var err error
+		if command, err = appendBrief(command, brief, stateDir, role); err != nil {
+			return startExit(err.Error())
+		}
 		if start && strings.ToLower(member.role) == "foreman" {
 			command = append(command, "--settings", renderJSON(foremanClaudeSettings(cwd), false, true))
 		}
@@ -370,7 +373,9 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		} else {
 			// as the oracle: this rebuild carries no --settings or --effort
 			command = append([]string{claudeExe(), "--name", identity, "--model", model}, permissionFlags("claude", permissionMode)...)
-			command = append(command, "--append-system-prompt", brief)
+			if command, err = appendBrief(command, brief, stateDir, role); err != nil {
+				return startExit(err.Error())
+			}
 		}
 	}
 	code, err := runPaneChild(command, cwd, env, role, identity, peerName, model, tool, colour, firstMessage, stateDir, start, slot, preRecord)
@@ -394,6 +399,16 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 	out("Press Enter to close this pane.")
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	return nil
+}
+
+// appendBrief passes a Claude member its brief as a file in the shift folder: a brief plus a long ticket can pass
+// Windows' 32767-character command line limit, and then the pane cannot start at all.
+func appendBrief(command []string, brief, stateDir, role string) ([]string, error) {
+	path := filepath.Join(stateDir, role+".brief.md")
+	if err := os.WriteFile(path, []byte(brief), 0666); err != nil {
+		return command, err
+	}
+	return append(command, "--append-system-prompt-file", path), nil
 }
 
 // paneChild is a started CLI whose exit can be polled without blocking.

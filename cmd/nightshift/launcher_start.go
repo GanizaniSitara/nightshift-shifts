@@ -1017,6 +1017,9 @@ func launchCrew(command []string, name, stateDir string, extra object, labels []
 			return startExit(fmt.Sprintf("Command %s returned non-zero exit status: %s", pyRepr(step[0]), err))
 		}
 		time.Sleep(wtStepPause)
+		// Every wt.exe call raises the crew window; hand focus straight back so the human's typing is not
+		// captured by a pane while the layout builds.
+		restoreForeground(human)
 	}
 	for i := 0; i < 20; i++ {
 		var created uintptr
