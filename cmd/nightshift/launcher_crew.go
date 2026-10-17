@@ -176,14 +176,12 @@ func toolExe(tool string) string {
 
 // realExe swaps a .cmd/.bat shim found on PATH for the executable behind it. A shim runs through cmd.exe,
 // whose 8191-character command limit a brief plus a long ticket overflows ("The command line is too long"),
-// while a real executable gets the 32767-character CreateProcess limit. Tried in order: <tool>.exe elsewhere
-// on PATH, then the native binary inside the npm package beside the shim. Anything else keeps the shim.
+// while a real executable gets the 32767-character CreateProcess limit. Tried in order: the native binary
+// inside an npm package beside a shim on PATH (PATH order, so the copy the shim would run), then <tool>.exe
+// elsewhere on PATH (which can be an older standalone install). Anything else keeps the shim.
 func realExe(tool, p string) string {
 	if ext := strings.ToLower(filepath.Ext(p)); ext != ".cmd" && ext != ".bat" {
 		return p
-	}
-	if exe, err := exec.LookPath(tool + ".exe"); err == nil {
-		return exe
 	}
 	packaged := map[string]string{
 		"claude":  filepath.Join("@anthropic-ai", "claude-code", "bin", "claude.exe"),
@@ -191,9 +189,17 @@ func realExe(tool, p string) string {
 		"copilot": filepath.Join("@github", "copilot", "node_modules", "@github", "copilot-win32-x64", "copilot.exe"),
 	}
 	if rel, ok := packaged[tool]; ok {
-		if exe := filepath.Join(filepath.Dir(p), "node_modules", rel); fileExists(exe) {
-			return exe
+		for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+			if dir == "" || !fileExists(filepath.Join(dir, tool+".cmd")) {
+				continue
+			}
+			if exe := filepath.Join(dir, "node_modules", rel); fileExists(exe) {
+				return exe
+			}
 		}
+	}
+	if exe, err := exec.LookPath(tool + ".exe"); err == nil {
+		return exe
 	}
 	return p
 }

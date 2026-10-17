@@ -122,3 +122,21 @@ func TestRealExeSwapsAnNpmShimForItsPackagedBinary(t *testing.T) {
 		t.Fatalf("an executable must stay: %q", got)
 	}
 }
+
+func TestRealExePrefersThePackageBehindAShimOverAnOlderExeOnPath(t *testing.T) {
+	shims, old := t.TempDir(), t.TempDir()
+	t.Setenv("PATH", shims+string(os.PathListSeparator)+old)
+	shim := filepath.Join(shims, "codex.cmd")
+	packaged := filepath.Join(shims, "node_modules", "@openai", "codex", "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe")
+	for _, f := range []string{shim, packaged, filepath.Join(old, "codex.exe")} {
+		if err := os.MkdirAll(filepath.Dir(f), 0777); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("x"), 0666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := realExe("codex", shim); got != packaged {
+		t.Fatalf("realExe = %q, want the npm package's %q", got, packaged)
+	}
+}
