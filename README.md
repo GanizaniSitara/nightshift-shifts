@@ -17,11 +17,11 @@ Nightshift coordinates multi-role AI agent crews (Foreman, Advisor, Coder, Teste
    ```cmd
    scripts\build.cmd
    ```
-   By default, this builds into `C:\nightshift\bin\nightshift.exe`. You can also specify an alternate output directory:
+   By default, this builds into `\nightshift\bin\nightshift.exe` on the drive the repo is cloned on (for example `D:\nightshift\bin`), and the binary keeps its state in `\nightshift` on that same drive. You can also specify an alternate output directory:
    ```cmd
    scripts\build.cmd D:\somewhere
    ```
-3. Add `C:\nightshift\bin` (or your custom output directory) to your system `PATH`.
+3. Add that `\nightshift\bin` folder (or your custom output directory) to your system `PATH`.
 4. Verify your installation and inspect available crew manifests:
    ```cmd
    nightshift crews

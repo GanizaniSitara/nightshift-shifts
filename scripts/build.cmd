@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0.."
 
 set "OUTDIR=%~1"
-if "%OUTDIR%"=="" set "OUTDIR=C:\nightshift\bin"
+if "%OUTDIR%"=="" set "OUTDIR=%~d0\nightshift\bin"
 if not exist "%OUTDIR%" mkdir "%OUTDIR%"
 
 rem No GOEXE given: prefer a Go toolchain from the standard module cache (go.mod needs Go 1.25+), else go on PATH.

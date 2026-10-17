@@ -429,7 +429,18 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-func stateRoot() string  { return envOr("NIGHTSHIFT_STATE_ROOT", defaultStateRoot) }
+// stateRoot defaults to \nightshift on the drive the binary runs from, so a build on D: keeps its state on D:.
+func stateRoot() string {
+	if v := os.Getenv("NIGHTSHIFT_STATE_ROOT"); v != "" {
+		return v
+	}
+	if exe, err := os.Executable(); err == nil {
+		if vol := filepath.VolumeName(exe); len(vol) == 2 {
+			return vol + `\nightshift`
+		}
+	}
+	return defaultStateRoot
+}
 func legacyRoot() string { return envOr("NIGHTSHIFT_LEGACY_ROOT", defaultLegacyRoot) }
 
 func shiftDirs() []string {
