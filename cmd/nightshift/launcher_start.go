@@ -1020,35 +1020,62 @@ func launchCrew(command []string, name, stateDir string, extra object, labels []
 	if err := os.WriteFile(launchFile, []byte(renderJSON(record, false, true)), 0666); err != nil {
 		return startExit(err.Error())
 	}
-	for _, step := range wtSteps(command, name) {
+	var created uintptr
+	findCreated := func(tries int) {
+		for i := 0; i < tries && created == 0; i++ {
+			for _, w := range terminalWindows() {
+				if !before[w.hwnd] {
+					created = w.hwnd
+					break
+				}
+			}
+			if created == 0 {
+				time.Sleep(250 * time.Millisecond)
+			}
+		}
+	}
+	// windowClosed: the crew window was seen and is gone. Later steps address the window by name, and
+	// Windows Terminal would open a fresh one for them, so a window the human closed must stop the launch.
+	windowClosed := func() bool {
+		if created == 0 {
+			return false
+		}
+		for _, w := range terminalWindows() {
+			if w.hwnd == created {
+				return false
+			}
+		}
+		return true
+	}
+	closedError := func() error {
+		busAppend(stateDir, "launch_aborted", object{{"reason", "window closed during launch"}})
+		return startExit("the crew window was closed during launch; nothing more was started")
+	}
+	for i, step := range wtSteps(command, name) {
+		if windowClosed() {
+			return closedError()
+		}
 		cmd := exec.Command(step[0], step[1:]...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
 			return startExit(fmt.Sprintf("Command %s returned non-zero exit status: %s", pyRepr(step[0]), err))
 		}
 		time.Sleep(wtStepPause)
+		if i == 0 {
+			findCreated(8)
+		}
 		// Every wt.exe call raises the crew window; hand focus straight back so the human's typing is not
 		// captured by a pane while the layout builds.
 		restoreForeground(human)
 	}
-	for i := 0; i < 20; i++ {
-		var created uintptr
-		for _, w := range terminalWindows() {
-			if !before[w.hwnd] {
-				created = w.hwnd
-				break
-			}
+	findCreated(20)
+	if created != 0 {
+		record = append(record, pair{"hwnd", int64(created)})
+		if err := os.WriteFile(launchFile, []byte(renderJSON(record, false, true)), 0666); err != nil {
+			return startExit(err.Error())
 		}
-		if created != 0 {
-			record = append(record, pair{"hwnd", int64(created)})
-			if err := os.WriteFile(launchFile, []byte(renderJSON(record, false, true)), 0666); err != nil {
-				return startExit(err.Error())
-			}
-			time.Sleep(time.Second)
-			restoreForeground(human)
-			break
-		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(time.Second)
+		restoreForeground(human)
 	}
 	type expectation struct{ label, path string }
 	expected := []expectation{}
@@ -1071,6 +1098,9 @@ func launchCrew(command []string, name, stateDir string, extra object, labels []
 		}
 		if len(pending) == 0 {
 			break
+		}
+		if windowClosed() {
+			return closedError()
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
