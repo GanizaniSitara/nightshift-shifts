@@ -445,8 +445,9 @@ def test_go_land_overlapping_clean_rebase_requires_a_fresh_build_then_lands(tmp_
 
 @pytest.mark.parametrize('brief,tick', [('tester.md', ''), ('tester-cli.md', '`')])
 def test_tester_briefs_run_targeted_tests_while_working_and_one_full_build_on_the_final_commit(brief, tick):
-    """NGH-055: the briefs embedded in the binary say targeted tests while working, one full build at the end."""
-    text = ' '.join((REPO / 'briefs' / brief).read_text(encoding='utf-8').split())
+    """NGH-055: the briefs embedded in the binary say targeted tests while working, one full build at the end.
+    NGH-063 moved these pages to briefs/legacy unchanged (selectable with `briefs: legacy`)."""
+    text = ' '.join((REPO / 'briefs' / 'legacy' / brief).read_text(encoding='utf-8').split())
     for phrase in ['While work is in progress, run only the tests for the changed area',
                    f'(named test functions or {tick}-k{tick} expressions)',
                    'say in the report which tests were run',
@@ -459,24 +460,48 @@ def test_tester_briefs_run_targeted_tests_while_working_and_one_full_build_on_th
     assert 'then run the test suite through' not in text
 
 
+def test_one_page_tester_brief_keeps_targeted_then_full_build():
+    """NGH-063 one-page tester.md keeps the NGH-055 rule in its own words: targeted tests through build --cmd while
+    working, the full configured build (no --cmd) for the final commit, and the report names the tests run."""
+    text = ' '.join((REPO / 'briefs' / 'tester.md').read_text(encoding='utf-8').split())
+    assert re.search(r'\{nightshift\} build \{shift\} --cmd "[^"]*"', text), text
+    assert re.search(r'final commit, the full `\{nightshift\} build \{shift\}[^`]*`', text), text
+    full = re.search(r'final commit, the full `(\{nightshift\} build \{shift\}[^`]*)`', text)[1]
+    assert '--cmd' not in full, full
+    assert re.search(r'tests run', text) and 'builds/<n>.json' in text
+    assert 'then run the test suite through' not in text
+
+
 @pytest.mark.parametrize('brief', [
-    'coder.md',
-    'coder-cli.md',
-    'coder-agy.md',
-    'tester.md',
-    'tester-cli.md',
-    'advisor.md',
-    'advisor-cli.md',
-    'apprentice.md',
+    'legacy/coder.md',
+    'legacy/coder-cli.md',
+    'legacy/coder-agy.md',
+    'legacy/tester.md',
+    'legacy/tester-cli.md',
+    'legacy/advisor.md',
+    'legacy/advisor-cli.md',
+    'legacy/apprentice.md',
 ])
 def test_briefs_use_identity_not_bare_role_in_mailbox_commands(brief):
-    """NGH-036: worker briefs use {identity} in mailbox commands, never bare roles."""
+    """NGH-036: worker briefs use {identity} in mailbox commands, never bare roles (legacy set, NGH-063)."""
     text = (REPO / 'briefs' / brief).read_text(encoding='utf-8')
     assert '{shift} {identity}' in text, f'{brief} missing {{shift}} {{identity}}'
     assert not re.search(
         r'(msg send|msg sent|ack|inbox) \{shift\} (Coder|Tester|Advisor|Apprentice)\b',
         text,
     ), f'{brief} contains bare role in mailbox command'
+
+
+@pytest.mark.parametrize('brief', ['coder.md', 'tester.md', 'advisor.md', 'apprentice.md'])
+def test_one_page_briefs_address_the_member_by_label_never_bare_role(brief):
+    """NGH-036 intent on the NGH-063 pages: every member command names the member as {label} (unique per member, e.g.
+    Coder2), never a bare role."""
+    text = (REPO / 'briefs' / brief).read_text(encoding='utf-8')
+    assert '{shift} {label}' in text, f'{brief} missing {{shift}} {{label}}'
+    assert not re.search(
+        r'(ready|wait|report|claim|release|msg send|msg sent|ack|inbox) \{shift\} (Coder|Tester|Advisor|Apprentice)\b',
+        text,
+    ), f'{brief} contains a bare role in a member command'
 
 
 def test_go_land_disjoint_rebase_refuses_before_rebasing_when_target_is_not_checked_out(tmp_path):

@@ -424,6 +424,7 @@ type crewManifest struct {
 	roles                                         []*crewRole
 	maxCredits                                    any
 	overrides                                     object // start's overrides as recorded; nil when none
+	briefs                                        string // "legacy" reads briefs/legacy and personas/legacy (NGH-063)
 }
 
 type crewMember struct {
@@ -750,13 +751,24 @@ func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, erro
 			return nil, err
 		}
 	}
+	briefSet := ""
+	if v := yamlScalar(data, "briefs"); v != nil {
+		if briefSet = pyStr(v); briefSet != "legacy" {
+			return fail("briefs %s must be legacy (omit it for the current briefs)", pyRepr(briefSet))
+		}
+	}
 	checked := []*crewRole{}
+	retired := [][2]string{} // retired brief names in use, warned about once below
 	for i, raw := range roles {
 		entry, ok := raw.(yaml.MapSlice)
 		if !ok || !truthy(yamlScalar(entry, "role")) || !truthy(yamlScalar(entry, "brief")) {
 			return fail("role %d needs both role: and brief:", i+1)
 		}
 		role, brief := pyStr(yamlScalar(entry, "role")), pyStr(yamlScalar(entry, "brief"))
+		if current := retiredBrief(brief); briefSet == "" && current != "" && !assetIsFile("briefs", brief) && assetIsFile("briefs", current) {
+			retired = append(retired, [2]string{brief, current})
+			brief = current
+		}
 		if !roleNamePattern.MatchString(role) {
 			return fail("role name %s must be letters, digits or _ (it names files and panes)", pyRepr(role))
 		}
@@ -765,18 +777,21 @@ func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, erro
 				return fail("role %s is listed twice; use count: instead", role)
 			}
 		}
-		if !assetIsFile("briefs", brief) {
+		if !assetIsFile("briefs", briefAsset(briefSet, brief)) {
 			dir, _ := assetDir("briefs")
+			if briefSet != "" {
+				dir += "/" + briefSet
+			}
 			return fail("brief %s for %s is not in %s", brief, role, dir)
 		}
 		var persona any
 		if p := yamlScalar(entry, "persona"); truthy(p) {
 			persona = pyStr(p)
-		} else if d := defaultPersona(role); d != "" {
+		} else if d := defaultPersonaIn(briefSet, role); d != "" {
 			persona = d
 		}
 		if persona != nil {
-			if _, err := loadPersona(role, persona.(string)); err != nil {
+			if _, err := loadPersona(role, briefAsset(briefSet, persona.(string))); err != nil {
 				return fail("%s", err)
 			}
 		}
@@ -854,6 +869,7 @@ func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, erro
 		}
 		checked = append(checked, r)
 	}
+	warnRetiredBriefs(name, retired)
 	humans := []*crewRole{}
 	for _, r := range checked {
 		if r.human {
@@ -914,7 +930,7 @@ func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, erro
 		return fail("%d panes do not fit layout %s with ops_width %d and foreman_width %d (%d slots)", panes, layout, opsWidth, foremanWidth, slots)
 	}
 	crew := &crewManifest{name: name, model: launcherModel, permissionMode: startPermissionMode, contract: "result.json", layout: layout, slots: slots,
-		opsWidth: opsWidth, foremanWidth: foremanWidth, roles: checked, overrides: ov.record(machineFile)}
+		opsWidth: opsWidth, foremanWidth: foremanWidth, roles: checked, overrides: ov.record(machineFile), briefs: briefSet}
 	if v := yamlScalar(data, "model"); truthy(v) {
 		crew.model = pyStr(v)
 	}
@@ -1034,12 +1050,24 @@ func openingMessage(m *crewMember, stateDir string) string {
 	return message
 }
 
-func defaultPersona(role string) string {
+func defaultPersona(role string) string { return defaultPersonaIn("", role) }
+
+// defaultPersonaIn is <role>.yaml when the brief set (""; or "legacy") has one.
+func defaultPersonaIn(set, role string) string {
 	name := strings.ToLower(role) + ".yaml"
-	if assetIsFile("personas", name) {
+	if assetIsFile("personas", briefAsset(set, name)) {
 		return name
 	}
 	return ""
+}
+
+// briefAsset is a brief or persona file's name inside its asset folder for a brief set: the current files, or
+// briefs/legacy/ and personas/legacy/ for a crew with briefs: legacy (kept for one release, NGH-063).
+func briefAsset(set, name string) string {
+	if set == "legacy" {
+		return "legacy/" + name
+	}
+	return name
 }
 
 func loadPersona(role, persona string) (yaml.MapSlice, error) {
@@ -1414,4 +1442,39 @@ func toolCommand(tool, model, brief, firstMessage, permissions, reasoning, conte
 		cmd = append(append(append([]string{}, cmd[:cut]...), flags...), cmd[cut:]...)
 	}
 	return cmd
+}
+
+// retiredBrief is the current file for a brief name NGH-063 retired (<role>-cli.md, coder-agy.md,
+// foreman-agy-coder.md), or "" for any other name.
+func retiredBrief(name string) string {
+	switch {
+	case name == "coder-agy.md":
+		return "coder.md"
+	case name == "foreman-agy-coder.md":
+		return "foreman.md"
+	case strings.HasSuffix(name, "-cli.md"):
+		return strings.TrimSuffix(name, "-cli.md") + ".md"
+	}
+	return ""
+}
+
+var retiredBriefWarned = map[string]bool{}
+
+// warnRetiredBriefs prints one deprecation line per crew per process for the retired names it still uses.
+func warnRetiredBriefs(crew string, retired [][2]string) {
+	if len(retired) == 0 || retiredBriefWarned[crew] {
+		return
+	}
+	retiredBriefWarned[crew] = true
+	olds, news := []string{}, []string{}
+	for _, r := range retired {
+		if !contains(olds, r[0]) {
+			olds, news = append(olds, r[0]), append(news, r[1])
+		}
+	}
+	if len(olds) == 1 {
+		errLine(fmt.Sprintf("crew %s: brief %s is retired; using %s; update the crew file", crew, olds[0], news[0]))
+		return
+	}
+	errLine(fmt.Sprintf("crew %s: briefs %s are retired; using %s; update the crew file", crew, strings.Join(olds, ", "), strings.Join(news, ", ")))
 }

@@ -402,6 +402,9 @@ func crewObject(crew *crewManifest, members []*crewMember, slots, advisorSlot, c
 	if crew.maxCredits != nil {
 		o = append(o, pair{"max_credits", crew.maxCredits})
 	}
+	if crew.briefs != "" {
+		o = append(o, pair{"briefs", crew.briefs})
+	}
 	return o
 }
 

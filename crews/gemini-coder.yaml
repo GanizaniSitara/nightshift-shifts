@@ -1,6 +1,6 @@
 # Mixed crew (NGH-012): Claude Foreman, Gemini Coder in Antigravity's agy. `nightshift start --crew gemini-coder`.
-# agy cannot use ListAgents/SendMessage, so Foreman drives the Coder pane with agents-cli send/wait/tail
-# (briefs foreman-agy-coder.md / coder-agy.md). A role's tool: is claude (default) or agy; its model:
+# agy cannot use ListAgents/SendMessage; the renderer gives each member the messaging lines for its tool
+# (one brief per role, NGH-063). A role's tool: is claude (default) or agy; its model:
 # defaults to the crew model.
 name: gemini-coder
 permission_mode: auto        # Claude --permission-mode for Claude panes (agy: auto means --dangerously-skip-permissions, see permission_flags)
@@ -9,12 +9,12 @@ layout: 2x4                  # the container: 2 rows x 4 columns (8 slots), crew
 contract: result.json        # the file Foreman writes in the shift folder when the shift ends
 roles:
   - role: Foreman
-    brief: foreman-agy-coder.md
+    brief: foreman.md
     colour: red
     count: 1
     human_contact: true      # receives the task; the only one who talks to the human
   - role: Coder
-    brief: coder-agy.md
+    brief: coder.md
     tool: agy
     model: gemini-3.8-flash-high
     colour: green

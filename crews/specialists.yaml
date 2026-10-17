@@ -7,4 +7,4 @@ layout: 2x4
 roles:
   - {role: Foreman, brief: foreman.md, human_contact: true, colour: red, tool: claude, model: claude-opus-5-5}
   - {role: Decompiler, brief: decompiler.md, colour: purple, tool: claude, model: claude-opus-5-5}
-  - {role: Researcher, brief: coder.md, colour: yellow, tool: claude, model: claude-opus-5-5}
+  - {role: Researcher, brief: researcher.md, colour: yellow, tool: claude, model: claude-opus-5-5}

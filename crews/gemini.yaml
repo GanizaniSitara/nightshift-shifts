@@ -7,8 +7,8 @@ layout: 2x4
 ops_width: 2                 # the Ops pane (bottom right) spans two cells
 contract: result.json
 roles:
-  - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: agy, model: gemini-4-argon-high, permissions: skip}
-  - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: agy, model: gemini-4-argon-high, permissions: skip}
+  - {role: Foreman, brief: foreman.md, human_contact: true, colour: red, tool: agy, model: gemini-4-argon-high, permissions: skip}
+  - {role: Advisor, brief: advisor.md, colour: purple, tool: agy, model: gemini-4-argon-high, permissions: skip}
   - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: agy, model: gemini-3.8-flash-high, permissions: skip}
-  - {role: Coder, brief: coder-cli.md, colour: green, tool: agy, model: gemini-3.8-flash-high, permissions: skip}
-  - {role: Tester, brief: tester-cli.md, colour: blue, tool: agy, model: gemini-3.8-flash-high, permissions: skip}
+  - {role: Coder, brief: coder.md, colour: green, tool: agy, model: gemini-3.8-flash-high, permissions: skip}
+  - {role: Tester, brief: tester.md, colour: blue, tool: agy, model: gemini-3.8-flash-high, permissions: skip}

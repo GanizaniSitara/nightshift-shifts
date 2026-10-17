@@ -8,8 +8,8 @@ model: PREMIUM-MODEL-AT-WORK
 layout: 2x4
 contract: result.json
 roles:
-  - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: high, permissions: skip}
-  - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: high, permissions: skip}
+  - {role: Foreman, brief: foreman.md, human_contact: true, colour: red, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: high, permissions: skip}
+  - {role: Advisor, brief: advisor.md, colour: purple, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: high, permissions: skip}
   - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: copilot, model: gemini-3.8-flash, reasoning: high, context: long_context, permissions: skip}
-  - {role: Coder, brief: coder-cli.md, colour: green, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: high, permissions: skip}
-  - {role: Tester, brief: tester-cli.md, colour: blue, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: high, permissions: skip}
+  - {role: Coder, brief: coder.md, colour: green, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: high, permissions: skip}
+  - {role: Tester, brief: tester.md, colour: blue, tool: copilot, model: PREMIUM-MODEL-AT-WORK, reasoning: high, permissions: skip}

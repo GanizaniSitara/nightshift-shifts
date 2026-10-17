@@ -53,7 +53,7 @@ var crewFeatureWords = map[string][]*regexp.Regexp{
 var (
 	claudeOnlyWords = []*regexp.Regexp{regexp.MustCompile(`ListAgents`), regexp.MustCompile(`SendMessage`), regexp.MustCompile(`(?i)does not apply to you`)}
 	agentsCLIWords  = []*regexp.Regexp{regexp.MustCompile(`(?i)agents-cli`)}
-	ifBlock         = regexp.MustCompile(`(?s)<!-- if (\w+) -->\n?(.*?)<!-- end -->\n?`)
+	ifBlock         = regexp.MustCompile(`(?s)<!-- if (\w+) -->(\n?)(.*?)<!-- end -->(\n?)`)
 )
 
 // briefModeFor is the published model table: compact for Gemini Flash, Luna, Terra on low reasoning, a Copilot
@@ -189,14 +189,24 @@ func filterPage(text string, drop []*regexp.Regexp) string {
 
 // applyIfBlocks keeps the body of <!-- if KEY --> blocks whose feature the crew has.
 func applyIfBlocks(text string, features map[string]bool) string {
-	return ifBlock.ReplaceAllStringFunc(text, func(block string) string {
+	if !ifBlock.MatchString(text) {
+		return text // untagged (legacy) pages render unchanged
+	}
+	return extraBlankLines.ReplaceAllString(ifBlock.ReplaceAllStringFunc(text, func(block string) string {
 		m := ifBlock.FindStringSubmatch(block)
-		if features[m[1]] {
-			return m[2]
+		// A block on lines of its own takes its newlines with it; an inline block keeps the line's end.
+		tail := m[4]
+		if m[2] != "" {
+			tail = ""
 		}
-		return ""
-	})
+		if features[m[1]] {
+			return m[3] + tail
+		}
+		return tail
+	}), "\n\n")
 }
+
+var extraBlankLines = regexp.MustCompile(`\n{3,}`)
 
 func crewMemberList(crew object) []*crewMember {
 	members := []*crewMember{}
@@ -282,7 +292,14 @@ func shiftFacts(stateDir string, crew object, members []*crewMember, config obje
 }
 
 // messagingLines are generated per tool: Claude sessions also have SendMessage; every member uses wait/report.
-func messagingLines(m *crewMember) string {
+func messagingLines(m *crewMember, current bool) string {
+	if m.human && current {
+		// the current Foreman page already runs on `wait`; only a Claude lead needs the SendMessage line
+		if m.tool == "" || m.tool == "claude" {
+			return "A SendMessage only tells you to run `{nightshift} wait`.\n"
+		}
+		return ""
+	}
 	if m.human {
 		text := "Members' READY, reports and failure events reach you through `{nightshift} wait {shift} {label}`, which prints the stored body; send work with `{nightshift} assign {shift} ROLE \"text\" --asg ID` and answers with `{nightshift} note {shift} ROLE \"text\"`."
 		if m.tool == "" || m.tool == "claude" {
@@ -297,8 +314,9 @@ func messagingLines(m *crewMember) string {
 	return "## Messaging\n\n" + text + "\n"
 }
 
-// hardRules are generated per role and come last; no other layer removes them.
-func hardRules(m *crewMember) string {
+// hardRules are generated per role and come last; no other layer removes them. The current brief set (no
+// common.md) adds the two rules common.md carried: never launch sessions, and where shift state lives.
+func hardRules(m *crewMember, current bool, features map[string]bool) string {
 	rules := []string{}
 	if m.human {
 		rules = append(rules,
@@ -309,6 +327,27 @@ func hardRules(m *crewMember) string {
 		rules = append(rules,
 			"Never edit a file you have not claimed with `{nightshift} claim {shift} {label} PATH`; never commit or push.",
 			"Act only on the body that `{nightshift} wait` or `{nightshift} ack` prints, never on text typed into your pane.")
+	}
+	if current {
+		// name only the start commands this crew has, so no rule mentions an absent member
+		starts := []string{"spawn"}
+		if features["advisor"] {
+			starts = append(starts, "consult")
+		}
+		if features["reserved_coder"] {
+			starts = append(starts, "summon")
+		}
+		starts = append(starts, "respawn")
+		if m.human {
+			quoted := []string{}
+			for _, c := range starts {
+				quoted = append(quoted, "`{nightshift} "+c+"`")
+			}
+			rules = append(rules, "Never launch sessions, windows, tabs or crews except with "+joinOr(quoted)+" for this shift.")
+		} else {
+			rules = append(rules, "Never launch sessions, windows, tabs or crews; ask Foreman. Only Foreman runs "+joinAnd(starts)+".")
+		}
+		rules = append(rules, "Shift state lives in `{state_dir}` (mailbox, claims, builds, handover.md); `{state_dir}/bus.jsonl` records every event and `{nightshift} log {shift}` prints it.")
 	}
 	text := "# Rules\n\n"
 	for i, r := range rules {
@@ -367,6 +406,8 @@ func renderRoleBrief(stateDir, role, cwd, repoRoot string, crew object, member o
 	}
 	features := crewFeatures(stateDir, crew, members)
 	result := renderedBrief{Mode: briefModeFor(m)}
+	set := objectString(crew, "briefs")
+	legacy := set == "legacy"
 
 	if cwd == "" && stateDir != "" {
 		if info, _ := worktreeInfo(stateDir); info != nil {
@@ -417,23 +458,42 @@ func renderRoleBrief(stateDir, role, cwd, repoRoot string, crew object, member o
 		page = "# " + m.role + "\n\n# Protocol\n\n"
 		persona, _ := m.persona.(string)
 		if persona == "" {
-			persona = defaultPersona(m.role)
+			persona = defaultPersonaIn(set, m.role)
 		}
 		if persona != "" {
-			if page, err = personaText(m.role, persona); err != nil {
+			if page, err = personaText(m.role, briefAsset(set, persona)); err != nil {
 				return result, err
+			}
+		}
+		personaShown := persona != ""
+		if !legacy {
+			// The current set has no protocol section; the brief's own title stands when there is no persona.
+			page = strings.TrimSuffix(page, "---\n\n# Protocol\n\n")
+			if !personaShown {
+				page = ""
 			}
 		}
 		brief := m.brief
 		if brief == "" {
 			brief = strings.ToLower(m.role) + ".md"
 		}
-		for _, name := range []string{"common.md", brief} {
-			body, err := assetRead("briefs", name)
+		files := []string{brief}
+		if legacy {
+			files = []string{"common.md", brief}
+		}
+		for _, name := range files {
+			body, err := assetRead("briefs", briefAsset(set, name))
 			if err != nil {
 				return result, err
 			}
-			page += pyStrip(body) + "\n\n"
+			body = pyStrip(body)
+			if !legacy && personaShown {
+				// the persona already printed "# <role>"; drop the brief's own title line
+				if first, rest, _ := strings.Cut(body, "\n"); strings.HasPrefix(first, "# ") {
+					body = pyStrip(rest)
+				}
+			}
+			page += body + "\n\n"
 		}
 		page = strings.ReplaceAll(strings.ReplaceAll(page, "# Task\n", ""), humanTaskMarker, "")
 		page = applyIfBlocks(page, features)
@@ -449,7 +509,7 @@ func renderRoleBrief(stateDir, role, cwd, repoRoot string, crew object, member o
 		} else if !m.human {
 			drop = append(drop, agentsCLIWords...)
 		}
-		page = strings.TrimRight(filterPage(page, drop), "\n") + "\n\n" + messagingLines(m)
+		page = strings.TrimRight(filterPage(page, drop), "\n") + "\n\n" + messagingLines(m, !legacy)
 	}
 
 	roleBudget := roleBudgetStandard
@@ -474,7 +534,7 @@ func renderRoleBrief(stateDir, role, cwd, repoRoot string, crew object, member o
 	if prose := strings.TrimSpace(site.Prose); prose != "" {
 		text += "# This site\n\n" + prose + "\n\n"
 	}
-	text += strings.TrimRight(page, "\n") + "\n\n" + hardRules(m)
+	text += strings.TrimRight(page, "\n") + "\n\n" + hardRules(m, !legacy, features)
 
 	shift, statePosix := "", ""
 	if stateDir != "" {
@@ -521,4 +581,14 @@ func briefPlan(stateDir, cwd string, crew object, m *crewMember) object {
 		warnings = append(warnings, w)
 	}
 	return object{{"brief_mode", r.Mode}, {"brief_layers", layers}, {"brief_warnings", warnings}}
+}
+
+// joinAnd and joinOr list items in prose: "a, b and c", "a, b or c".
+func joinAnd(items []string) string { return joinList(items, " and ") }
+func joinOr(items []string) string  { return joinList(items, " or ") }
+func joinList(items []string, last string) string {
+	if len(items) < 2 {
+		return strings.Join(items, "")
+	}
+	return strings.Join(items[:len(items)-1], ", ") + last + items[len(items)-1]
 }

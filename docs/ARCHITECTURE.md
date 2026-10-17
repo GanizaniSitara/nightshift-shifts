@@ -608,7 +608,7 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 | `nightshift_shifts.py` | the launcher/oracle: `start` (`--no-worktree` supported by NGH-040), `status`, `down` (`--close` default, explicit `--hold`), `spawn` (NGH-025), `land` (NGH-040), `cleaner`, `warden`, `gaffer` and `floor.json` (NGH-035), `floor say/hear` (NGH-053), the optional `loop`, `resume`, `claim/release/claims`, `msg/inbox/ack` (NGH-019), `build` (NGH-020), and `log` (the shift bus, NGH-026) | this repo |
 | `cmd/nightshift` | standalone Go CLI: `status`, `claims`, `inbox`, `log`, `claim/release`, `msg/inbox/ack`, `build`, and native `land`, `down`, `cleaner` lifecycle operations with handover reporting | this repo |
 | `crews/*.yaml` | crew manifests: roles, counts, model, permission mode, colours, which brief each role gets, each role's `tool` (`claude`, `agy`, `codex`, `copilot`), `model`, optional `reasoning` (`low`\|`medium`\|`high`\|`xhigh`; copilot also `none`\|`minimal`\|`max`), `context` (`default`\|`long_context`, copilot only), `account` (`1`\|`2`), `permissions` (`skip`\|`auto`\|`default`) and the top-level `max_credits` (the shift's Copilot credit budget, split evenly across the Copilot panes), pane layout | this repo |
-| `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
+| `briefs/*.md` | one page per role (`foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, `decompiler.md`, `researcher.md`, `uitester.md`; NGH-063), rendered by `renderRoleBrief` with the task first for Foreman; the pre-NGH-063 set (`common.md`, `*-cli.md`, `coder-agy.md`, `foreman-agy-coder.md`) is kept in `briefs/legacy/` for crews with `briefs: legacy` | this repo |
 | `personas/*.yaml` | each role's persona (identity, what good looks like, how you work, never), rendered above the brief (NGH-032) | this repo |
 | shift folder | `C:\nightshift\shifts\<shift>\` — the source of truth for one new shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | on PATH |
@@ -861,7 +861,8 @@ owner's global Claude theme, the common ticket/shift title and the existing Camp
 Each role's persona lives in `personas/<role>.yaml` (`role`, `identity`, `good_looks_like`,
 `how_you_work`, `never`). `role_brief` renders it first, as markdown: a `# <Role>` heading, the
 identity paragraph, then "What good looks like", "How you work" and "What you never do" as bullet
-lists, then `---` and a `# Protocol` heading, followed by `common.md` and the role's brief. The
+lists, then `---` and a `# Protocol` heading, followed by `common.md` and the role's brief (the legacy set;
+since NGH-063 the current set has no `# Protocol` section or `common.md`, see "One-page briefs"). The
 placeholders (`{identity}`, `{shift}`, `{nightshift}`, ...) are filled across the whole text. Every
 CLI (claude, agy, codex, copilot) gets this text, because `--start` builds all of them from `role_brief`.
 
@@ -1265,12 +1266,17 @@ Order of a brief:
    `.nightshift/config.yaml` (absent ones omitted). Facts carry no word budget.
 3. `# This repository`: `.nightshift/instructions.md` and `.nightshift/<role>.md`; then `# This site`: the site
    prose (`<state root>/instructions.md`). A heading appears only when its prose exists.
-4. The role page. Standard mode: persona, `common.md` and the role brief as before, then a generated
-   `## Messaging` paragraph (Claude: SendMessage only says to run `wait`; every member uses `nightshift wait` and
-   `report`, the lead `wait`, `assign` and `note`).
+4. The role page. Standard mode: the persona (identity and what good looks like) and the role's one-page brief,
+   then a generated `## Messaging` paragraph (members: `nightshift wait` and `report`, plus for Claude that a
+   SendMessage only says to run `wait`; a Claude lead gets just that SendMessage line, its page already runs on
+   `wait`). When the persona printed `# <Role>`, the brief's own title line is dropped. A crew with
+   `briefs: legacy` renders persona, `---`, `# Protocol`, `common.md` and the brief exactly as NGH-062 did.
 5. `# Rules`, generated per role and never removed by another layer: members edit only claimed files and never
    commit or push; the lead never edits repository files or runs the suite and sends the human one line per
-   milestone; everyone acts only on the body `wait` or `ack` prints.
+   milestone; everyone acts only on the body `wait` or `ack` prints. The current brief set (NGH-063) adds the two
+   rules `common.md` used to carry: never launch sessions, windows, tabs or crews (members ask Foreman; only
+   Foreman runs spawn, consult, summon and respawn), and where shift state lives (`<state_dir>`, its `bus.jsonl`
+   and `nightshift log`).
 
 Per-crew text. Rewritten briefs may wrap text in `<!-- if KEY -->...<!-- end -->` (keys `apprentice`,
 `reserved_coder`, `advisor`, `copilot`, `non_claude`, `worktree`, `queue`); the block stays only when the crew has
@@ -1296,7 +1302,42 @@ the shift facts, repository and site prose (repository: `instructions.md` only) 
 
 Budgets (words, `strings.Fields`): role page 250 standard / 150 compact, repository prose 150 combined per role,
 site prose 50. Over budget is a warning, never an error: `brief <Label>: <layer> layer <n> words, budget <b>`,
-printed by `start` and `doctor --cwd`. The legacy briefs exceed the role budget until NGH-063 rewrites them.
+printed by `start` and `doctor --cwd`. The legacy briefs exceed the role budget; the NGH-063 pages fit it.
+
+### One-page briefs and `briefs: legacy` (NGH-063)
+
+Every role has one brief file, whatever its tool: the renderer supplies the per-tool lines, so the `-cli`,
+`-agy` and `foreman-agy-coder` variants are gone and every `crews/*.yaml` names `<role>.md`. A brief holds only
+the role page: the numbered loop with literal commands (`{nightshift}`, `{shift}`, `{label}` placeholders),
+role-specific rules, and `<!-- if KEY -->` blocks for crew features (a block on lines of its own takes its
+newlines with it; an inline block keeps the line's end). `common.md` is retired: its live content is the
+"Your shift" table and the two generated rules above. Personas are identity plus what good looks like.
+
+The Foreman page is the §5 loop with the amendments (read the diff before Tester; TESTED-FAIL back with `note`;
+`commit` makes the commit; between events scope the next assignment, never the code; an empty queue means stop
+and wait) and four one-line event rules: `member-died` -> `respawn` and note it; `loop-detected` -> report
+BLOCKED with the evidence, never retry the same fix; `asg-timeout` -> re-dispatch with the prior reports once the
+claims are released; context running out -> `handover`, then stop. The Decompiler keeps its tool check and
+`DECOMPILER-BLOCKED: missing tool <name>`; the Researcher and UI Tester pages follow the same shape.
+
+The old files stay for one release: a crew manifest's top-level `briefs: legacy` (the only value; omit it for the
+current set) makes the loader validate `brief:`/`persona:` names in `briefs/legacy/` and `personas/legacy/`,
+`start` writes `briefs: legacy` into crew.json, and the renderer reads `legacy/common.md` plus the legacy brief
+and persona, reproducing NGH-062's text. `assets.go` embeds both folders. A crew file outside the repository may still name a retired brief (`<role>-cli.md`, `coder-agy.md`, `foreman-agy-coder.md`): without `briefs: legacy` the loader resolves it to the current `<role>.md` (`coder.md`, `foreman.md`), records that name in crew.json, and prints one stderr line per crew per process, `crew <name>: brief <old> is retired; using <new>; update the crew file` (`briefs <a>, <b> are retired; using <x>, <y>` for several); under `briefs: legacy` the old names load the legacy files unchanged.
+
+Role-layer words from `start --dry-run` (`brief_layers.role`, in this repository; budget 250 standard, 150 compact):
+
+| Crew | Foreman | Advisor | Coder | Tester | Apprentice |
+|---|---|---|---|---|---|
+| default | 241 standard | 204 standard | 243 standard | 218 standard | 101 compact |
+| work | 218 standard | 204 standard | 101 compact | 101 compact | - |
+| codex | 232 standard | 194 standard | 233 standard | 208 standard | 208 standard |
+| copilot | 135 compact | 101 compact | 101 compact | 101 compact | 101 compact |
+
+Specialists: Decompiler 235 and Researcher 173 (standard). With `briefs: legacy` the default crew renders
+3671 / 1273 / 1497 / 1557 / 101, as NGH-062 did. This repository's own `.nightshift` prose is 165 words for the
+Foreman (instructions.md plus foreman.md) and 50 for the other roles, so the Foreman's repository layer is the one
+remaining warning.
 
 Site call sites in the launcher: `crewEnv` sets `siteEnv()` (sorted) after the inherited environment and before the
 per-tool settings; `toolCommand` inserts `siteWebFlags(tool)` before the prompt (and its `-i`); the pane's Claude

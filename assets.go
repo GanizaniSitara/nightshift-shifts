@@ -4,5 +4,5 @@ package nightshiftassets
 
 import "embed"
 
-//go:embed crews/*.yaml briefs/*.md personas/*.yaml
+//go:embed crews/*.yaml briefs/*.md personas/*.yaml briefs/legacy/*.md personas/legacy/*.yaml
 var Files embed.FS

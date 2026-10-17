@@ -485,8 +485,9 @@ def test_work_yaml_manifest_fields():
     roles = {r['role']: r for r in data['roles']}
     assert list(roles) == ['Foreman', 'Coder', 'Advisor', 'Tester']
     assert roles['Foreman']['brief'] == 'foreman.md' and roles['Foreman']['human_contact'] is True
-    assert (roles['Coder']['brief'], roles['Coder']['permissions']) == ('coder-cli.md', 'skip')
-    assert (roles['Tester']['brief'], roles['Tester']['permissions']) == ('tester-cli.md', 'skip')
+    # NGH-063: one brief file per role; the renderer emits the per-tool lines.
+    assert (roles['Coder']['brief'], roles['Coder']['permissions']) == ('coder.md', 'skip')
+    assert (roles['Tester']['brief'], roles['Tester']['permissions']) == ('tester.md', 'skip')
     assert [roles[r]['colour'] for r in roles] == ['red', 'green', 'purple', 'blue']
     assert all('reasoning' not in roles[r] for r in ('Foreman', 'Advisor'))
 
@@ -713,7 +714,8 @@ def test_spawn_uses_recorded_crew_file_and_role_override(world, sleeper):
     assert proc.returncode == 0, proc.stderr.decode('utf-8', 'replace')
     member = json.loads(proc.stdout)['member']
     assert member['colour'] == 'purple', 'manifest read through overrides.crew_file'
-    assert member['brief'] == 'tester-cli.md', 'claude -> copilot override swaps the brief'
+    # NGH-063: one brief file per role, so a claude -> copilot override no longer swaps to a -cli brief.
+    assert member['brief'] == 'tester.md', 'one brief per role whatever the tool'
     assert (member['model'], member['reasoning']) == ('gemini-3.8-flash', 'high')
 
 def test_spawn_defaults_an_unknown_role_to_the_specialists_crew(world, sleeper):

@@ -109,6 +109,7 @@ func TestRenderOrderTaskFirstRepositoryThenRoleRulesLast(t *testing.T) {
 	f.write(filepath.Join(f.repo, ".nightshift", "instructions.md"), "REPO-PROSE-MARKER shared rule.")
 	f.write(filepath.Join(f.root, "instructions.md"), "SITE-PROSE-MARKER machine rule.")
 	f.write(filepath.Join(f.stateDir, "prompt.txt"), "TASK-TEXT-MARKER do the thing")
+	tbBriefsDir(t, f, map[string]string{"foreman.md": "ROLE-PAGE-MARKER the foreman page."})
 	text := f.render(tbDefaultCrew(), "Foreman").Text
 	task := tbIndexOrFail(t, text, "# Task")
 	if tbIndexOrFail(t, text, "TASK-TEXT-MARKER") > tbIndexOrFail(t, text, "## Your shift") {
@@ -121,7 +122,7 @@ func TestRenderOrderTaskFirstRepositoryThenRoleRulesLast(t *testing.T) {
 	repo := tbIndexOrFail(t, text, "# This repository")
 	repoProse := tbIndexOrFail(t, text, "REPO-PROSE-MARKER")
 	siteProse := tbIndexOrFail(t, text, "SITE-PROSE-MARKER")
-	role := tbIndexOrFail(t, text, "records the whole shift") // common.md, part of the role page
+	role := tbIndexOrFail(t, text, "ROLE-PAGE-MARKER") // the role page (fixture foreman.md)
 	rules := tbIndexOrFail(t, text, "# Rules")
 	if !(task < shift && shift < repo && repo < repoProse && repoProse < siteProse && siteProse < role && role < rules) {
 		t.Fatalf("order wrong: task %d shift %d repo %d repoProse %d site %d role %d rules %d", task, shift, repo, repoProse, siteProse, role, rules)
@@ -316,12 +317,18 @@ func TestPresentFeaturesKeepTheirParagraphs(t *testing.T) {
 	}
 }
 
-func tbBriefsFixture(t *testing.T, f *tbRenderFixture, coder string) {
+func tbBriefsDir(t *testing.T, f *tbRenderFixture, files map[string]string) {
 	t.Helper()
 	dir := filepath.Join(filepath.Dir(f.root), "briefs")
-	f.write(filepath.Join(dir, "common.md"), "COMMON-MARKER common text.")
-	f.write(filepath.Join(dir, "coder.md"), coder)
+	for name, text := range files {
+		f.write(filepath.Join(dir, name), text)
+	}
 	t.Setenv("NIGHTSHIFT_BRIEFS_DIR", dir)
+}
+
+func tbBriefsFixture(t *testing.T, f *tbRenderFixture, coder string) {
+	t.Helper()
+	tbBriefsDir(t, f, map[string]string{"coder.md": coder})
 }
 
 func TestExplicitIfBlocks(t *testing.T) {
@@ -334,7 +341,7 @@ func TestExplicitIfBlocks(t *testing.T) {
 			t.Fatalf("%q must not survive for a crew without the feature", gone)
 		}
 	}
-	for _, kept := range []string{"BEFORE-MARKER", "AFTER-MARKER", "COMMON-MARKER"} {
+	for _, kept := range []string{"BEFORE-MARKER", "AFTER-MARKER"} {
 		tbIndexOrFail(t, plain, kept)
 	}
 	crew := tbCrewOf(tbCrewMember("Foreman", "Foreman", "claude", "claude-opus-5-5"),
@@ -508,6 +515,7 @@ func TestBudgetsAndWarnings(t *testing.T) {
 	f.write(filepath.Join(f.repo, ".nightshift", "instructions.md"), tbWords(100, "shared"))
 	f.write(filepath.Join(f.repo, ".nightshift", "coder.md"), tbWords(80, "coderonly"))
 	f.write(filepath.Join(f.root, "instructions.md"), tbWords(70, "site"))
+	tbBriefsFixture(t, f, tbWords(300, "rolepage"))
 	out := f.render(tbDefaultCrew(), "Coder")
 	if out.Mode != "standard" {
 		t.Fatalf("mode %q", out.Mode)
@@ -539,7 +547,7 @@ func TestBudgetsAndWarnings(t *testing.T) {
 		}
 		got[m[2]] = true
 	}
-	for _, name := range []string{"repository", "site", "role"} { // the existing coder brief is over 250 tbWords
+	for _, name := range []string{"repository", "site", "role"} { // the fixture coder page is 300 words
 		if !got[name] {
 			t.Fatalf("expected a %s warning, got %v", name, out.Warnings)
 		}

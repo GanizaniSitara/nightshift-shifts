@@ -10,8 +10,8 @@ ops_width: 2                 # the Ops pane (bottom right) spans two cells
 contract: result.json
 max_credits: 120             # shift budget: 4 Copilot panes x 30
 roles:
-  - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: copilot, model: gemini-3.8-flash, reasoning: high, context: long_context, permissions: skip}
+  - {role: Foreman, brief: foreman.md, human_contact: true, colour: red, tool: copilot, model: gemini-3.8-flash, reasoning: high, context: long_context, permissions: skip}
   - {role: Advisor, brief: advisor.md, colour: purple, tool: claude, model: claude-opus-5-5}
   - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: copilot, model: gemini-3.8-flash, reasoning: high, context: long_context, permissions: skip}
-  - {role: Coder, brief: coder-cli.md, colour: green, tool: copilot, model: gemini-3.8-flash, reasoning: high, context: long_context, permissions: skip}
-  - {role: Tester, brief: tester-cli.md, colour: blue, tool: copilot, model: gemini-3.8-flash, reasoning: high, context: long_context, permissions: skip}
+  - {role: Coder, brief: coder.md, colour: green, tool: copilot, model: gemini-3.8-flash, reasoning: high, context: long_context, permissions: skip}
+  - {role: Tester, brief: tester.md, colour: blue, tool: copilot, model: gemini-3.8-flash, reasoning: high, context: long_context, permissions: skip}
