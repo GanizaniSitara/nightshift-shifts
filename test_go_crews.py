@@ -389,7 +389,8 @@ def test_role_reasoning_checked_per_tool(world):
 
 
 def test_role_moving_last_copilot_pane_away_drops_budget(world):
-    plan = plan_of(world, '--crew', 'work', '--role', 'Coder=claude:claude-opus-5-5')
+    plan = plan_of(world, '--crew', 'work', '--role', 'Coder=claude:claude-opus-5-5',
+                   '--role', 'Tester=claude:claude-opus-5-5')
     assert 'max_credits' not in plan and copilot_shares(plan) == {}
 
 
@@ -458,20 +459,21 @@ def test_work_crew_dry_run(world):
     plan = plan_of(world, '--crew', 'work')
     assert plan['crew'] == 'work' and plan['model'] == 'claude-opus-5-5' and plan['permission_mode'] == 'auto'
     assert list(plan['roles']) == ['Foreman', 'Advisor', 'Coder', 'Tester'], 'four roles, no Apprentice'
-    assert plan['max_credits'] == 30
-    for label in ('Foreman', 'Advisor', 'Tester'):
+    assert plan['max_credits'] == 60
+    for label in ('Foreman', 'Advisor'):
         r = plan['roles'][label]
         assert 'tool' not in r and 'model' not in r and 'reasoning' not in r, (label, r)
     advisor = plan['roles']['Advisor']
     assert (advisor['status'], advisor['reserved_slot']) == ('not_started', 2)
-    coder = plan['roles']['Coder']
-    assert (coder['tool'], coder['model'], coder['reasoning'], coder['context'], coder['max_credits']) == \
-        ('copilot', 'gemini-3.8-flash', 'high', 'long_context', 30)
-    cmd = coder['command']
-    assert cmd[cmd.index('--max-ai-credits') + 1] == '30'
-    assert cmd[cmd.index('--context') + 1] == 'long_context'
-    assert cmd[cmd.index('--reasoning-effort') + 1] == 'high'
-    assert coder['permission_flags'] == ['--allow-all']
+    for label in ('Coder', 'Tester'):
+        r = plan['roles'][label]
+        assert (r['tool'], r['model'], r['reasoning'], r['context'], r['max_credits']) == \
+            ('copilot', 'gemini-3.8-flash', 'high', 'long_context', 30), label
+        cmd = r['command']
+        assert cmd[cmd.index('--max-ai-credits') + 1] == '30'
+        assert cmd[cmd.index('--context') + 1] == 'long_context'
+        assert cmd[cmd.index('--reasoning-effort') + 1] == 'high'
+        assert r['permission_flags'] == ['--allow-all']
     assert [s['role'] for s in plan['slots']] == ['Foreman', None, 'Coder', 'Tester', None, None, None], 'Ops spans two cells'
 
 
@@ -479,13 +481,14 @@ def test_work_yaml_manifest_fields():
     import yaml
     data = yaml.safe_load((REPO / 'crews' / 'work.yaml').read_text(encoding='utf-8'))
     assert (data['name'], data['layout'], data['model'], data['permission_mode'], data['contract'],
-            data['max_credits']) == ('work', '2x4', 'claude-opus-5-5', 'auto', 'result.json', 30)
+            data['max_credits']) == ('work', '2x4', 'claude-opus-5-5', 'auto', 'result.json', 60)
     roles = {r['role']: r for r in data['roles']}
     assert list(roles) == ['Foreman', 'Advisor', 'Coder', 'Tester']
     assert roles['Foreman']['brief'] == 'foreman.md' and roles['Foreman']['human_contact'] is True
     assert (roles['Coder']['brief'], roles['Coder']['permissions']) == ('coder-cli.md', 'skip')
+    assert (roles['Tester']['brief'], roles['Tester']['permissions']) == ('tester-cli.md', 'skip')
     assert [roles[r]['colour'] for r in roles] == ['red', 'purple', 'green', 'blue']
-    assert all('reasoning' not in roles[r] for r in ('Foreman', 'Advisor', 'Tester'))
+    assert all('reasoning' not in roles[r] for r in ('Foreman', 'Advisor'))
 
 
 # ---------------------------------------------------------------- reserved Coder (crews with an Apprentice)
