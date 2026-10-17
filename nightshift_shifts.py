@@ -97,8 +97,8 @@ START_MESSAGES = {'Foreman': 'Begin the assignment: the task text is at the end 
                              'wait silently until Foreman messages you.'}
 ADVISOR = 'Advisor'   # the crew label only the human contact may message, and that answers only it (NGH-027)
 MAILKEEP = 'C:/Tools/mailkeep/Mailkeep.Cli.exe'
-NOTIFY_IDENTITY = 'owner_id'                # Mailkeep identity for owner@example.com
-NOTIFY_TO = 'owner@example.com'        # `loop` emails the owner here when it halts or finishes
+NOTIFY_IDENTITY = os.environ.get('NIGHTSHIFT_NOTIFY_IDENTITY', '').strip()  # Mailkeep sender identity
+NOTIFY_TO = os.environ.get('NIGHTSHIFT_NOTIFY_TO', '').strip()  # `loop` emails the owner here when it halts or finishes
 TOOLS = ('claude', 'agy', 'codex', 'copilot')   # the CLI a crew role runs (manifest `tool:`); claude is the default
 # Antigravity's agy (Gemini) as installed by winget; it has no --name or system-prompt flag (NGH-012).
 AGY_EXE = Path(os.environ.get('LOCALAPPDATA', '')) / 'Microsoft' / 'WinGet' / 'Links' / 'agy.exe'
@@ -1163,7 +1163,7 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
             command.extend(['--profile', PROFILE])
         command.extend(['--title', pane_title(ticket or name), '--suppressApplicationTitle',
                         '-d', str(ops_dir) if ops_dir and slots and slot == slots else
-                        cwd if mode_flag == '--start' and cwd else '%USERPROFILE%', 'cmd.exe', '/k', sys.executable, script,
+                        cwd if mode_flag == '--start' and cwd else str(Path.home()), 'cmd.exe', '/k', sys.executable, script,
                         '--slot', str(slot), '--state-dir', str(state_dir)])
 
     def place(parts, i):
@@ -1189,7 +1189,7 @@ def wt_command(name, state_dir, agents, mode_flag=None, brief_file=None, cwd=Non
             # start mode shows '<ticket or shift> shift'; the trial modes keep the shift name in the title.
             title = pane_title(ticket or name) if mode_flag == '--start' else 'Nightshift | ' + role + ' | ' + name
             command.extend(['--title', title, '--suppressApplicationTitle',
-                            '-d', cwd if mode_flag == '--start' and cwd else '%USERPROFILE%',
+                            '-d', cwd if mode_flag == '--start' and cwd else str(Path.home()),
                             sys.executable, script, '--pane', role, '--state-dir', str(state_dir)])
             if mode_flag:
                 command.append(mode_flag)
@@ -3544,6 +3544,9 @@ def notify_owner(subject, body):
     Never raises - a mail failure must not crash the loop. Returns {'sent', 'draft_id', 'error'}.
     """
     outcome = {'sent': False, 'draft_id': None, 'error': None}
+    if not NOTIFY_TO or not NOTIFY_IDENTITY:
+        outcome['error'] = 'NIGHTSHIFT_NOTIFY_TO and NIGHTSHIFT_NOTIFY_IDENTITY not configured'
+        return outcome
 
     def run(argv):
         result = subprocess.run(argv, capture_output=True, timeout=120)

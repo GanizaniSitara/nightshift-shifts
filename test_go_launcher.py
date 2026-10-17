@@ -204,7 +204,7 @@ def base_env(base, fake_bin):
     env.update({'NIGHTSHIFT_STATE_ROOT': str(root), 'NIGHTSHIFT_LEGACY_ROOT': str(legacy),
                 'NIGHTSHIFT_HOME': str(home), 'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1',
                 'FAKE_TASKS_DIR': str(tasks), 'NIGHTSHIFT_ORACLE_ARGV0': exe_path().name, **git_env(),
-                # %TEMP% lies inside the %USERPROFILE% git repo (Foreman msg 27): never let a fixture folder
+                # %TEMP% lies inside the home-folder git repo (Foreman msg 27): never let a fixture folder
                 # discover that repository; only the fixture repos below base are repositories.
                 'GIT_CEILING_DIRECTORIES': str(base)})
     if fake_bin:

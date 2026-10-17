@@ -1901,6 +1901,8 @@ def _fake_mail(monkeypatch, prepare=None, events=None):
         return _ok({'results': [{'id': argv[2], 'ok': True}]})
     monkeypatch.setattr(launcher.subprocess, 'run', run)
     monkeypatch.setattr(launcher, 'notify_owner', _real_notify)
+    monkeypatch.setattr(launcher, 'NOTIFY_IDENTITY', 'owner_id')
+    monkeypatch.setattr(launcher, 'NOTIFY_TO', 'owner@example.com')
     return mail
 
 
