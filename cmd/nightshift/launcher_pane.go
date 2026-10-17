@@ -323,7 +323,10 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		envRole = member.role
 	}
 	var command []string
-	if toolExe(tool) != "" {
+	// A Claude member (tool empty or "claude") always takes the Claude branch: toolExe finds claude on PATH too,
+	// and toolCommand would then build a Copilot command for it.
+	otherTool := tool != "" && tool != "claude" && toolExe(tool) != ""
+	if otherTool {
 		session := role + " (" + identity + ")"
 		command = toolCommand(tool, model, brief, firstMessage, permissionMode, reasoning, context, &session, maxCredits)
 	} else {
@@ -361,7 +364,7 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		if preRecord, firstMessage, err = consultFirstMessage(stateDir, role, identity, peerName, model, cwd, tool, pendingKey, consult, savedCrew); err != nil {
 			return startExit(err.Error())
 		}
-		if toolExe(tool) != "" {
+		if otherTool {
 			session := role + " (" + identity + ")"
 			command = toolCommand(tool, model, brief, firstMessage, permissionMode, reasoning, context, &session, maxCredits)
 		} else {
