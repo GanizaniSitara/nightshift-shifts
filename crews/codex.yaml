@@ -1,7 +1,6 @@
-# Five-role Codex crew in the 2x4 container (slots 1..5 crew, slots 6..8 empty for `nightshift spawn`).
-# Owner, 16 Oct afternoon: Codex usage is high, so the crew steps down the tiers (Astra > Sol > Terra > Luna):
-# Foreman Sol 6.1, Advisor Astra 6 (dormant), Coder and Tester Terra 5.6, Apprentice Luna 5.6 as the cheap coder.
-# Luna only earns its place at its top effort (xhigh, Codex's maximum), and runs on the second Codex account.
+# Five-role Codex crew in the 2x4 container (owner, 17 Oct): GPT-6.1 Sol on high for every working role, the
+# Advisor on GPT-6 Astra (the frontier model; no newer Astra exists as of Codex 0.163), dormant until consulted.
+# The Apprentice runs on the second Codex account to spread the load.
 name: codex
 model: gpt-6.1-sol
 layout: 2x4
@@ -9,6 +8,6 @@ ops_width: 2                 # the Ops pane (bottom right) spans two cells
 roles:
   - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: codex, model: gpt-6.1-sol, reasoning: high}
   - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: codex, model: gpt-6-astra, reasoning: high}
-  - {role: Coder, brief: coder-cli.md, colour: green, tool: codex, model: gpt-5.6-terra, reasoning: high}
-  - {role: Tester, brief: tester-cli.md, colour: blue, tool: codex, model: gpt-5.6-terra, reasoning: high}
-  - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: codex, model: gpt-5.6-luna, reasoning: xhigh, account: 2}
+  - {role: Coder, brief: coder-cli.md, colour: green, tool: codex, model: gpt-6.1-sol, reasoning: high}
+  - {role: Tester, brief: tester-cli.md, colour: blue, tool: codex, model: gpt-6.1-sol, reasoning: high}
+  - {role: Apprentice, brief: apprentice.md, colour: yellow, tool: codex, model: gpt-6.1-sol, reasoning: high, account: 2}
