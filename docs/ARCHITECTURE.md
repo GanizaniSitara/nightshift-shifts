@@ -873,7 +873,7 @@ or not a YAML mapping. The persona is carried on each member in `crew.json`; a s
 (`Coder2`, `Helper`, `Advisor2`) gets `<label>.yaml` if it exists, else `coder.yaml`, matching its
 `coder.md` brief fallback. `role_brief` substitutes `{identity}` with the member's full unique
 session identity; mailbox `resolve_role` then maps that identity back to the canonical crew label.
-Thus these Coder, Tester and Advisor variants address a custom spawned member without changing peer
+Thus these Coder, Tester, Advisor and Apprentice variants address a custom spawned member without changing peer
 references such as `Foreman`.
 
 ## Context exhaustion and compaction safety (NGH-030)

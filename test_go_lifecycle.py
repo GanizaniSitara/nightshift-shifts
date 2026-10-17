@@ -453,6 +453,26 @@ def test_tester_briefs_run_targeted_tests_while_working_and_one_full_build_on_th
     assert 'then run the test suite through' not in text
 
 
+@pytest.mark.parametrize('brief', [
+    'coder.md',
+    'coder-cli.md',
+    'coder-agy.md',
+    'tester.md',
+    'tester-cli.md',
+    'advisor.md',
+    'advisor-cli.md',
+    'apprentice.md',
+])
+def test_briefs_use_identity_not_bare_role_in_mailbox_commands(brief):
+    """NGH-036: worker briefs use {identity} in mailbox commands, never bare roles."""
+    text = (REPO / 'briefs' / brief).read_text(encoding='utf-8')
+    assert '{shift} {identity}' in text, f'{brief} missing {{shift}} {{identity}}'
+    assert not re.search(
+        r'(msg send|msg sent|ack|inbox) \{shift\} (Coder|Tester|Advisor|Apprentice)\b',
+        text,
+    ), f'{brief} contains bare role in mailbox command'
+
+
 def test_go_land_disjoint_rebase_refuses_before_rebasing_when_target_is_not_checked_out(tmp_path):
     env, d, repo, work, info = world(tmp_path)
     commit(work, 'shared.txt', 'crew rebase\n')
