@@ -369,6 +369,12 @@ func landCommand(argv []string) int {
 		return commandExit(err)
 	}
 	printResult(result, false, true)
+	switch objectString(result, "status") {
+	case "conflict":
+		errLine("rebase conflict: assign the conflict to Coder in the worktree, have Tester pass it, then land again")
+	case "rebased_needs_test":
+		errLine("rebased cleanly: have Tester pass the new HEAD, then land again")
+	}
 	return code
 }
 

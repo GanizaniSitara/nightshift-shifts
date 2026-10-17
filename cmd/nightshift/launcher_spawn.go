@@ -391,7 +391,18 @@ func runSpawn(argv []string, quiet bool) error {
 		if args.present["--slot"] {
 			return spawnExit(fmt.Sprintf("no free slot: slot %d is taken", slotArg))
 		}
-		return spawnExit(fmt.Sprintf("no free slot in shift %s (%d slots, all taken)", filepath.Base(stateDir), slots))
+		reserved := []string{}
+		for _, r := range []struct{ label, key, command string }{{advisorLabel, "advisor_slot", "consult"}, {coderLabel, "coder_slot", "summon"}} {
+			if n := intValue(rowValue(saved, r.key)); n != 0 && !strings.EqualFold(role, r.label) {
+				reserved = append(reserved, fmt.Sprintf("%d (%s, until %s)", n, r.label, r.command))
+			}
+		}
+		next := "reserved slots: none"
+		if len(reserved) > 0 {
+			next = "reserved slots: " + strings.Join(reserved, ", ")
+		}
+		next += fmt.Sprintf("; slot %d is the Ops pane (only with --slot %d); down a member or ask the human for a slot", slots, slots)
+		return spawnExit(fmt.Sprintf("no free slot in shift %s (%d slots, all taken)\n%s", filepath.Base(stateDir), slots, next))
 	}
 
 	shift := filepath.Base(stateDir)

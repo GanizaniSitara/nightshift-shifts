@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -338,10 +342,10 @@ func loadBuildConfig(repo string) (string, float64, error) {
 }
 
 const buildUsage = "usage: nightshift build [-h] [--cwd CWD] [--cmd CMD] [--timeout TIMEOUT]\n                        [--cancel]\n                        shift [n]"
-const buildHelp = buildUsage + "\n\nRun a heavy build or test suite in a folder, one at a time across shifts:\nwaits while another live build holds the folder (exit 6 after --timeout), then\nruns COMMAND and records <state_dir>/builds/<n>.json (head, dirty tree, exit,\nlog) as evidence; exit code = COMMAND's. --cancel SHIFT N kills build N's\nprocess tree and marks it cancelled.\n\npositional arguments:\n  shift              shift name, unique suffix, or \"latest\"\n  n                  with --cancel: the build number\n\noptions:\n  -h, --help         show this help message and exit\n  --cwd CWD          folder to build in (its build lock serialises builds\n                     there)\n  --cmd CMD          the command line to run (through the shell)\n  --timeout TIMEOUT  minutes to wait for the folder before giving up with exit\n                     6 (default 60)\n  --cancel           cancel build N of SHIFT\n"
+const buildHelp = buildUsage + "\n\nRun a heavy build or test suite in a folder, one at a time across shifts:\nwaits while another live build holds the folder (exit 6 after --timeout), then\nruns COMMAND and records <state_dir>/builds/<n>.json (head, dirty tree, exit,\nlog) as evidence; exit code = COMMAND's. --cancel SHIFT N kills build N's\nprocess tree and marks it cancelled.\n\npositional arguments:\n  shift              shift name, unique suffix, or \"latest\"\n  n                  with --cancel: the build number\n\noptions:\n  -h, --help         show this help message and exit\n  --cwd CWD          folder to build in (its build lock serialises builds\n                     there)\n  --cmd CMD          the command line to run (through the shell)\n  --timeout TIMEOUT  minutes to wait for the folder before giving up with exit\n                     6 (default 60)\n  --cancel           cancel build N of SHIFT\n  --asg ASG          the assignment this build verifies; a fourth build after\n                     three failures with the same error is refused (exit 4)\n"
 
 func buildCommand(args []string) int {
-	a, pe := parseWriteArgs(args, []writeOption{{name: "--cwd"}, {name: "--cmd"}, {name: "--timeout", number: "float"}, {name: "--cancel", flag: true}}, []string{"shift"}, []string{"n"})
+	a, pe := parseWriteArgs(args, []writeOption{{name: "--cwd"}, {name: "--cmd"}, {name: "--timeout", number: "float"}, {name: "--cancel", flag: true}, {name: "--asg"}}, []string{"shift"}, []string{"n"})
 	if a.help {
 		out(buildHelp)
 		return 0
@@ -403,9 +407,129 @@ func buildCommand(args []string) int {
 	if a.present["--timeout"] {
 		timeout, _ = parseNumber(a.values["--timeout"], "float")
 	}
-	return runBuild(dir, cwd, command, timeout)
+	var asg any
+	if a.present["--asg"] {
+		asg = a.values["--asg"]
+		if loop := loopBuilds(dir, a.values["--asg"]); loop != nil {
+			ns := []any{}
+			for _, b := range loop {
+				ns = append(ns, rowValue(b, "n"))
+			}
+			fields := object{{"asg", asg}, {"builds", ns}, {"signature", rowValue(loop[0], "signature")}}
+			if _, err := raiseEvent(dir, "loop-detected", a.values["--asg"]+"@"+renderJSON(ns, false, true), "loop-detected "+a.values["--asg"], asg, fields); err != nil {
+				return commandExit(err)
+			}
+			errLine("loop detected: escalate or report BLOCKED")
+			return 4
+		}
+	}
+	return runBuild(dir, cwd, command, timeout, asg)
 }
-func runBuild(dir, cwd, command string, timeout float64) int {
+
+// loopBuilds returns the last three finished builds for asg when all three failed with one error signature.
+func loopBuilds(dir, asg string) []object {
+	entries, _ := os.ReadDir(filepath.Join(dir, "builds"))
+	finished := []object{}
+	for _, e := range entries {
+		if _, err := strconv.Atoi(strings.TrimSuffix(e.Name(), ".json")); err != nil || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		record, ok := readObject(filepath.Join(dir, "builds", e.Name()))
+		if ok && rowValue(record, "asg") == asg && !contains([]string{"waiting", "running"}, objectString(record, "status")) {
+			finished = append(finished, record)
+		}
+	}
+	if len(finished) < 3 {
+		return nil
+	}
+	sort.Slice(finished, func(i, j int) bool {
+		return intValue(rowValue(finished[i], "n")) < intValue(rowValue(finished[j], "n"))
+	})
+	last := finished[len(finished)-3:]
+	for _, b := range last {
+		if objectString(b, "status") != "failed" || objectString(b, "signature") == "" || objectString(b, "signature") != objectString(last[0], "signature") {
+			return nil
+		}
+	}
+	return last
+}
+
+var (
+	failureLine = regexp.MustCompile(`^(FAILED |ERROR )|--- FAIL:`)
+	digitRun    = regexp.MustCompile(`[0-9]+`)
+)
+
+// buildSignature hashes the exit code and the log lines naming failures (pytest FAILED/ERROR, go --- FAIL),
+// else the last five non-empty lines, with digits (and so timestamps and durations) normalised.
+func buildSignature(exit int, logText string) string {
+	lines := []string{}
+	for _, line := range strings.Split(strings.ReplaceAll(strings.ToValidUTF8(logText, "\ufffd"), "\r\n", "\n"), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	picked := []string{}
+	for _, line := range lines {
+		if failureLine.MatchString(line) {
+			picked = append(picked, line)
+		}
+	}
+	if len(picked) == 0 {
+		picked = lines[max(0, len(lines)-5):]
+	}
+	for i := range picked {
+		picked[i] = digitRun.ReplaceAllString(picked[i], "N")
+	}
+	sum := sha256.Sum256([]byte(strconv.Itoa(exit) + "\n" + strings.Join(picked, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// gitTree is the tree id of cwd's working tree including untracked, non-ignored files, built in a temporary
+// index so the real one is untouched; nil outside git.
+func gitTree(cwd string) any {
+	f, err := os.CreateTemp("", "nightshift-index-*")
+	if err != nil {
+		return nil
+	}
+	index := f.Name()
+	f.Close()
+	os.Remove(index)
+	defer os.Remove(index)
+	git := func(args ...string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+index)
+		out, err := cmd.Output()
+		return strings.TrimSpace(string(out)), err
+	}
+	if _, err := git("read-tree", "HEAD"); err != nil {
+		if _, err := git("read-tree", "--empty"); err != nil {
+			return nil
+		}
+	}
+	if _, err := git("add", "-A"); err != nil {
+		return nil
+	}
+	tree, err := git("write-tree")
+	if err != nil || tree == "" {
+		return nil
+	}
+	return tree
+}
+
+// buildOutput is the record as build has always printed it, without the NGH-061 fields.
+func buildOutput(record object) object {
+	shown := object{}
+	for _, p := range record {
+		if !contains([]string{"asg", "tree", "signature"}, p.key) {
+			shown = append(shown, p)
+		}
+	}
+	return shown
+}
+
+func runBuild(dir, cwd, command string, timeout float64, asg any) int {
 	builds := filepath.Join(dir, "builds")
 	n, err := reserveBuild(builds)
 	if err != nil {
@@ -414,7 +538,7 @@ func runBuild(dir, cwd, command string, timeout float64) int {
 	path := filepath.Join(builds, strconv.Itoa(n)+".json")
 	marker := filepath.Join(builds, strconv.Itoa(n)+".cancel")
 	log := filepath.Join(builds, strconv.Itoa(n)+".log")
-	record := object{{"n", n}, {"cmd", command}, {"cwd", cwd}, {"head", nil}, {"dirty", nil}, {"porcelain", []any{}}, {"started", nil}, {"ended", nil}, {"exit", nil}, {"log", log}, {"pid", nil}, {"status", "waiting"}}
+	record := object{{"n", n}, {"cmd", command}, {"cwd", cwd}, {"head", nil}, {"dirty", nil}, {"porcelain", []any{}}, {"started", nil}, {"ended", nil}, {"exit", nil}, {"log", log}, {"pid", nil}, {"status", "waiting"}, {"asg", asg}, {"tree", nil}, {"signature", nil}}
 	if err = writeJSONFile(path, record); err != nil {
 		return commandExit(err)
 	}
@@ -446,6 +570,7 @@ func runBuild(dir, cwd, command string, timeout float64) int {
 		record = setValue(record, "head", head)
 		record = setValue(record, "dirty", dirty)
 		record = setValue(record, "porcelain", porcelain)
+		record = setValue(record, "tree", gitTree(cwd))
 		started := time.Now().Format("2006-01-02 15:04:05")
 		record = setValue(record, "started", started)
 		if fileExists(marker) {
@@ -493,12 +618,16 @@ func runBuild(dir, cwd, command string, timeout float64) int {
 			status = "passed"
 		}
 		record = setValue(record, "status", status)
+		if status == "failed" {
+			logText, _ := os.ReadFile(log)
+			record = setValue(record, "signature", buildSignature(code, string(logText)))
+		}
 		return nil
 	}()
 	if err != nil {
 		return commandExit(err)
 	}
-	printResult(record, true, true)
+	printResult(buildOutput(record), true, true)
 	if code, ok := rowValue(record, "exit").(int); ok {
 		return code
 	}

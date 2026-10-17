@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -378,7 +379,7 @@ func releaseWaiter(path string) {
 }
 
 func waitCommand(argv []string) int {
-	a, dir, label, _, code, ok := busParse("wait", argv, []writeOption{{name: "--timeout", number: "float"}}, []string{"shift", "role"})
+	a, dir, label, lead, code, ok := busParse("wait", argv, []writeOption{{name: "--timeout", number: "float"}}, []string{"shift", "role"})
 	if !ok {
 		return code
 	}
@@ -403,6 +404,11 @@ func waitCommand(argv []string) int {
 	for {
 		if err := claimWaiter(waiter, since); err != nil {
 			return busExit(err)
+		}
+		if label == lead {
+			if err := raiseLeadEvents(dir, lead); err != nil {
+				return busExit(err)
+			}
 		}
 		var row object
 		err := withWriteMailbox(dir, func(db *sql.DB) error {
@@ -447,4 +453,87 @@ func waitCommand(argv []string) int {
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// Failure events (NGH-061): durable mailbox rows of kind `event` from `Nightshift` to the lead, so the lead's
+// wait and inbox see them. `reason` holds the (event, subject) key that keeps each one raised at most once.
+
+const eventSender = "Nightshift"
+
+// raiseEvent stores the event row and its bus line unless an event row with the same key exists; it reports
+// whether it raised one.
+func raiseEvent(dir, event, subject, body string, asg any, fields object) (bool, error) {
+	key := event + " " + subject
+	raised := false
+	err := withWriteMailbox(dir, func(db *sql.DB) error {
+		rows, err := queryMessages(db, "SELECT id FROM messages WHERE kind = 'event' AND reason = ?", key)
+		if err != nil || len(rows) > 0 {
+			return err
+		}
+		metadata := object{{"reason", key}, {"evidence", renderJSON(fields, false, true)}}
+		if _, err = insertMessage(db, dir, "event", eventSender, humanLabel(dir), body, asg, metadata); err != nil {
+			return err
+		}
+		raised = true
+		return nil
+	})
+	if raised {
+		busAppend(dir, event, fields)
+	}
+	return raised, err
+}
+
+// raiseLeadEvents runs in the lead's wait poll: member-died for a started member whose pane process is gone,
+// asg-timeout for a coding assignment with no result 900 seconds after delivery. Nothing is raised after down.
+func raiseLeadEvents(dir, lead string) error {
+	if strings.Contains(readText(filepath.Join(dir, "bus.jsonl")), `"event": "down"`) {
+		return nil
+	}
+	rows, err := readMessages(dir)
+	if err != nil {
+		return err
+	}
+	_, members := crewMembers(dir)
+	for _, m := range members {
+		label := objectString(m, "label")
+		info, ok := readObject(filepath.Join(dir, label+".json"))
+		pid := processNumber(info, "pid")
+		started, startedOK := objectNumber(info, "started")
+		if label == lead || !ok || pid == 0 || incarnationRunning(pid, started, startedOK) {
+			continue
+		}
+		var asg any
+		for _, r := range dispatches(dir, rows) {
+			if rowString(r, "recipient") == label && sameNumber(started, startedOK, rowValue(r, "recipient_incarnation")) && !writeDispatchDone(r, rows) {
+				asg = rowValue(r, "asg")
+			}
+		}
+		body := "member-died " + label
+		if asg != nil {
+			body += " active asg " + valueText(asg)
+		}
+		fields := object{{"role", label}, {"pid", int64(pid)}, {"incarnation", numberOrNil(started, startedOK)}, {"asg", asg}}
+		if _, err = raiseEvent(dir, "member-died", label+"@"+valueText(numberOrNil(started, startedOK)), body, asg, fields); err != nil {
+			return err
+		}
+	}
+	now := float64(time.Now().UnixNano()) / 1e9
+	for _, r := range dispatches(dir, rows) {
+		delivered, ok := rowNumber(r, "delivered_epoch")
+		if !ok || rowString(r, "sender") != lead || !contains([]string{"Apprentice", "Coder"}, memberRole(dir, rowString(r, "recipient"))) || now-numberFloat(delivered) < 900 || writeDispatchDone(r, rows) {
+			continue
+		}
+		asg := rowValue(r, "asg")
+		fields := object{{"asg", asg}, {"recipient", rowString(r, "recipient")}, {"delivered_epoch", delivered}}
+		if _, err = raiseEvent(dir, "asg-timeout", valueText(asg)+"@"+valueText(rowValue(r, "recipient_incarnation")), "asg-timeout "+asgText(asg), asg, fields); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// incarnationRunning: the pid exists and was created at the recorded start (any image; pidAlive also checks it).
+func incarnationRunning(pid uint32, started json.Number, startedOK bool) bool {
+	_, created, exists := processInfo(pid)
+	return exists && (!startedOK || created == 0 || math.Abs(created-numberFloat(started)) <= 300)
 }

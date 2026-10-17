@@ -153,6 +153,11 @@ def observed_state(base, env, repo, work):
     return files, logical
 
 
+# NGH-061: land's exit 4 / rebased_needs_test exit 2 add one stderr line after the existing output (native only).
+NGH061_LAND_LINE = re.compile(rb'(rebase conflict: assign the conflict to Coder in the worktree, have Tester pass it, '
+                              rb'then land again|rebased cleanly: have Tester pass the new HEAD, then land again)\r?\n$')
+
+
 def parity(tmp_path, prepare, commands, codes, inspect=None, worktree=True):
     """The same restored fixture path for both sides; the oracle side is a frozen golden (NGH-055)."""
     base = tmp_path / 'private lifecycle fixture'
@@ -167,7 +172,8 @@ def parity(tmp_path, prepare, commands, codes, inspect=None, worktree=True):
         steps = commands(env, d, repo, work, info) if callable(commands) else commands
         for args in steps:
             proc = cli(args, env, native)
-            actual.append((stable(proc.stdout), stable(proc.stderr), proc.returncode))
+            stderr = NGH061_LAND_LINE.sub(b'', proc.stderr) if native else proc.stderr
+            actual.append((stable(proc.stdout), stable(stderr), proc.returncode))
         assert [p[2] for p in actual] == codes, actual
         if inspect:
             inspect(env, d, repo, work, info, actual)

@@ -327,6 +327,34 @@ NGH060_HELP_DELTAS = [
 ]
 
 
+# NGH-061: respawn/uplift after summon; build gains --asg and the loop exit; commit/handover/result after build --cancel;
+# build -h gains the --asg option. Applied after NGH060_HELP_DELTAS (the wait line it anchors on comes from those).
+NGH061_HELP_DELTAS = [
+    ([b'                                              start the reserved Coder (crews with an Apprentice) the same way'],
+     [b'                                              start the reserved Coder (crews with an Apprentice) the same way',
+      b'  respawn SHIFT ROLE                          restart a dead member in its slot; its active assignment is the first prompt',
+      b'  uplift SHIFT ASG TEXT --reason needs-senior|tester-failed-twice|timeout',
+      b'                                              Apprentice -> Coder uplift (summons a not-started Coder); exit 4 = refused']),
+    ([b"  build SHIFT [--cwd DIR] [--cmd 'COMMAND'] [--timeout MIN]",
+      b'                                              run a build one at a time per folder; evidence in builds/<n>.json',
+      b'  build --cancel SHIFT N                      kill build N and mark it cancelled'],
+     [b"  build SHIFT [--cwd DIR] [--cmd 'COMMAND'] [--timeout MIN] [--asg ID]",
+      b'                                              run a build one at a time per folder; evidence in builds/<n>.json;',
+      b'                                              exit 4 = loop detected (a 4th same failure for --asg)',
+      b'  build --cancel SHIFT N                      kill build N and mark it cancelled',
+      b'  commit SHIFT ASG -m MSG                     commit exactly the Tester-passed tree for ASG; exit 4 = differs/no pass',
+      b'  handover SHIFT                              write handover.md from live state (assignments, claims, waits, reports)',
+      b"  result SHIFT done|blocked --stage RUNG --summary TEXT [--changed PATH ...] [--evidence 'stage|what|outcome' ...]",
+      b'                                              write result.json with bus, builds, uplift counts and usage']),
+    ([b'  --cancel           cancel build N of SHIFT'],
+     [b'  --cancel           cancel build N of SHIFT',
+      b'  --asg ASG          the assignment this build verifies; a fourth build after',
+      b'                     three failures with the same error is refused (exit 4)']),
+]
+# NGH-061: spawn's no-free-slot refusal adds one stderr line naming reserved slots and the Ops pane (native only).
+NGH061_SPAWN_LINE = re.compile(rb'reserved slots: [^\r\n]*\r?\n$')
+
+
 def apply_help_deltas(data, deltas):
     applied = 0
     for old, new in deltas:
@@ -437,7 +465,7 @@ def oracle_expected(args, env, launcher, before):
     stdout, stderr, code = frozen(native if REBASE else compute, world_root(env), volatile(env), record=REBASE)
     if not REBASE:
         # NGH-060 postdates the recorded goldens: its help lines go on top of the frozen value, never into it.
-        stdout = apply_help_deltas(stdout, NGH060_HELP_DELTAS)[0]
+        stdout = apply_help_deltas(stdout, NGH060_HELP_DELTAS + NGH061_HELP_DELTAS)[0]
     return subprocess.CompletedProcess(args, code, stdout, stderr)
 
 
@@ -451,7 +479,8 @@ def parity(args, env, launcher=None, expect_exit=None):
     if unported(actual):
         pytest.skip(f'native binary has not ported {args[0]} yet: {actual.stderr[:80]!r}')
     assert state_snapshot(env) == before, f'native binary wrote state for dry-run/usage case {args}'
-    for label, a, e in (('stdout', actual.stdout, expected.stdout), ('stderr', actual.stderr, expected.stderr)):
+    for label, a, e in (('stdout', actual.stdout, expected.stdout),
+                        ('stderr', NGH061_SPAWN_LINE.sub(b'', actual.stderr), expected.stderr)):
         assert_equal_bytes(normalise(a, launcher, True), e, f'{args} {label}')
     assert actual.returncode == expected.returncode, (args, actual.stderr)
     return expected

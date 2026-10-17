@@ -357,3 +357,125 @@ func handoverReport(stateDir string, record object) (string, error) {
 	lines = append(lines, "", "## Test evidence", "", "Recorded build and result evidence above; teardown does not run tests.", "")
 	return strings.Join(lines, "\n"), nil
 }
+
+// `nightshift handover` (NGH-061): handover.md from live state, without capturing or stopping any pane, so a member
+// or Foreman about to run out of context gets it for free. `down` keeps writing its own.
+
+const handoverUsage = "usage: nightshift handover [-h] shift"
+
+const handoverHelp = handoverUsage + `
+
+Write <state_dir>/handover.md from live state: the result, claims, unacked
+messages and builds that down records, plus active assignments, live waiters
+and the last report of each member. Prints the path.
+
+positional arguments:
+  shift       shift name, unique suffix, or "latest"
+
+options:
+  -h, --help  show this help message and exit
+`
+
+func init() { extraCommands["handover"] = handoverCommand }
+
+func handoverCommand(argv []string) int {
+	args, message := parseWriteArgs(argv, nil, []string{"shift"}, nil)
+	if args.help {
+		out(handoverHelp)
+		return 0
+	}
+	if message != "" {
+		return writeUsage("nightshift handover", handoverUsage, message)
+	}
+	dir, err := resolveShift(args.pos[0])
+	if err != nil {
+		return busExit(err)
+	}
+	record, err := statusRecord(dir)
+	if err != nil {
+		return busExit(err)
+	}
+	report, err := handoverReport(dir, record)
+	if err != nil {
+		return busExit(err)
+	}
+	live, err := handoverLive(dir)
+	if err != nil {
+		return busExit(err)
+	}
+	lines := []string{"# Handover: " + objectString(record, "shift"), "", "Task: " + objectString(record, "task"), "Written: " + time.Now().Format("2006-01-02 15:04"), ""}
+	lines = append(lines, live...)
+	lines = append(lines, strings.Split(report, "\n")...)
+	path := filepath.Join(dir, "handover.md")
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(strings.Join(lines, "\n"), "\n", "\r\n")), 0666); err != nil {
+		return busExit(err)
+	}
+	outLine(path)
+	return 0
+}
+
+// handoverLive is the live-state part of a handover: active assignments, waiters and each member's last report.
+func handoverLive(dir string) ([]string, error) {
+	rows, err := readMessages(dir)
+	if err != nil {
+		return nil, err
+	}
+	now := epochNow()
+	age := func(r object) string {
+		at, ok := rowNumber(r, "delivered_epoch")
+		if !ok {
+			return "not delivered"
+		}
+		return (time.Duration(now-numberFloat(at)) * time.Second).Round(time.Second).String()
+	}
+	lines := []string{"## Active assignments", ""}
+	n := len(lines)
+	for _, r := range dispatches(dir, rows) {
+		if !dispatchDone(r, rows) {
+			lines = append(lines, fmt.Sprintf("- %s -> %s (msg:%s %s, age %s)", handoverAsg(rowValue(r, "asg")), rowString(r, "recipient"), handoverText(rowValue(r, "id")), rowString(r, "kind"), age(r)))
+		}
+	}
+	if len(lines) == n {
+		lines = append(lines, "(none)")
+	}
+
+	lines = append(lines, "", "## Live waiters", "")
+	n = len(lines)
+	entries, _ := os.ReadDir(filepath.Join(dir, "waiting"))
+	for _, entry := range entries {
+		waiter, ok := readObject(filepath.Join(dir, "waiting", entry.Name()))
+		if !ok || filepath.Ext(entry.Name()) != ".json" || !processRunning(processNumber(waiter, "pid")) {
+			continue
+		}
+		sinceNumber, _ := objectNumber(waiter, "since")
+		sinceEpoch := numberFloat(sinceNumber)
+		since := time.Unix(int64(sinceEpoch), 0).Format("2006-01-02 15:04:05")
+		lines = append(lines, fmt.Sprintf("- %s (pid %s, since %s)", strings.TrimSuffix(entry.Name(), ".json"), handoverValue(waiter, "pid"), since))
+	}
+	if len(lines) == n {
+		lines = append(lines, "(none)")
+	}
+
+	lines = append(lines, "", "## Last report per member", "")
+	last := map[string]object{}
+	order := []string{}
+	for _, r := range rows {
+		if rowString(r, "kind") != "result" {
+			continue
+		}
+		sender := rowString(r, "sender")
+		if _, seen := last[sender]; !seen {
+			order = append(order, sender)
+		}
+		last[sender] = r
+	}
+	if len(order) == 0 {
+		lines = append(lines, "(none)")
+	}
+	for _, sender := range order {
+		r := last[sender]
+		first, _, _ := strings.Cut(rowString(r, "body"), "\n")
+		lines = append(lines, fmt.Sprintf("- %s msg:%s asg:%s %s: %s", sender, handoverText(rowValue(r, "id")), handoverAsg(rowValue(r, "asg")), rowString(r, "created"), strings.TrimSpace(first)))
+	}
+	return append(lines, ""), nil
+}

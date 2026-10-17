@@ -1003,6 +1003,11 @@ There is no bus process: each command appends its own line and `nightshift log` 
 | `sent` | `msg sent`; `ready`/`assign`/`note`/`report` after delivery (NGH-060) | `id`; NGH-060 rows add `via` (`wait` = recipient was blocked in `wait`, `nudge` = one-line nudge typed) |
 | `ack` | `ack`; `wait` (NGH-060) | `id`, `by`, `outcome` (`acknowledged`, `already acknowledged`, `protocol violation` + `reason`); `wait` adds `via: "wait"` |
 | `nudge-failed` | `ready`/`assign`/`note`/`report` when the nudge could not be delivered (NGH-060) | `id`, `to`, `reason`; the row stays `stored` for the warden |
+| `member-died` | the lead's `wait` poll (NGH-061) | `role`, `pid`, `incarnation`, `asg` (the member's active assignment or null) |
+| `asg-timeout` | the lead's `wait` poll (NGH-061) | `asg`, `recipient`, `delivered_epoch` |
+| `loop-detected` | `build --asg` when it refuses a fourth failing build (NGH-061) | `asg`, `builds` (the three n), `signature` |
+| `commit` | `commit` (NGH-061) | `asg`, `sha`, `build` (n of the build Tester passed) |
+| `respawn` | `respawn`, after the slot was typed into (NGH-061) | `role`, `slot`, `asg` (null when none), `msg` (the original active row id, null when none) |
 | `spawn` | `spawn`, only after the wrapper line was typed into the slot | `role`, `slot`, `tool`, `identity` |
 | `result` | `down`, when `result.json` exists | `result` (its parsed contents; `null` + `error` when unreadable) |
 | `down` | `down`, after the lock is released and before its own process tree is killed | `stopped` (roles), `lock_released` (folders) |
@@ -1048,6 +1053,88 @@ Exit codes: 0 ok; 2 usage error (argparse-style, including empty text); 3 timed 
 `dispatchMetadata` refusal, member asleep, the lead addressing itself, Advisor READY, `report READY`);
 5 reserved; 1 an unexpected failure (unknown shift or role, mailbox error). Every non-zero exit except
 the `wait` timeout prints one stderr line saying what to do next.
+
+### Failure events and lifecycle commands (NGH-061)
+
+Failures the tool can count or time become events, so the lead learns of them by blocking in `wait` instead
+of watching clocks or panes (docs/instructions-review.md §6). An event is a mailbox row of kind `event`, sender
+`Nightshift`, recipient the lead, asg the assignment concerned (or null), body one line starting with the event
+name; its `reason` column holds the dedup key and `evidence` the bus fields as JSON. Each also appends a bus line
+named after the event. `wait SHIFT <lead>` prints an event like any message:
+`msg:N kind:event asg:A from:Nightshift` then the body; `inbox` lists unacknowledged events. Each is raised at
+most once per (event, subject).
+
+| Event | Body | Raised when | Subject |
+|---|---|---|---|
+| `member-died` | `member-died <Role>`, plus ` active asg <asg>` when it had one | the lead's `wait` poll finds a member whose `<Role>.json` records a pid that is not running for its `started` incarnation. A member with no `<Role>.json` (not_started) or no `pid` yet (starting) never counts, and nothing is raised once the bus has a `down` event. | role, incarnation |
+| `asg-timeout` | `asg-timeout <asg>` | the lead's `wait` poll finds the latest assignment/uplift for an asg, from the lead to an Apprentice or Coder, delivered 900s or more ago with no later `result` from that recipient incarnation for that asg | asg, recipient incarnation |
+| `loop-detected` | `loop-detected <asg>` | `build --asg ASG` finds that the last three finished builds recorded for that asg all failed with the same error signature: it refuses with exit 4 and the stderr line `loop detected: escalate or report BLOCKED`, runs nothing and reserves no build number. A build for the asg that passes (or is cancelled or times out) breaks the streak. Builds without `--asg` never trip it. | asg, the three build numbers |
+
+`build` (NGH-061) takes an optional `--asg ASG` and records three more fields in `builds/<n>.json`; its printed
+record, usage line and exit codes are unchanged:
+
+- `asg`: the `--asg` value, or null.
+- `tree`: the git tree id of the working tree including untracked, non-ignored files, taken when the build starts
+  (with `head` and `dirty`). It is written with a temporary `GIT_INDEX_FILE` (`read-tree HEAD`, or `--empty` on an
+  unborn branch, then `add -A` and `write-tree`), so the real index is untouched; null outside git.
+- `signature`: for a failed build, the sha256 of the exit code and the log lines that name failures (pytest
+  `FAILED `/`ERROR ` lines, go `--- FAIL:` lines), falling back to the last five non-empty lines, with every digit
+  run replaced by `N` so timestamps and durations do not matter (`buildSignature(exit, logText)`); null otherwise.
+
+`nightshift commit SHIFT ASG -m "one line"` (`write_commit.go`) commits exactly what Tester passed. It takes the
+latest `result` from a Tester whose body starts `TESTED-PASS` and whose asg is ASG, or is the asg of a verification
+assignment to that Tester with `coding_asg` ASG; reads the first `builds/<n>.json` its body cites; and refuses with
+exit 4 and one stderr line when there is no such pass, the pass cites no build, the build record is missing, it
+did not exit 0, it recorded no tree, or the current tree of the build's `cwd` differs from the recorded `tree`.
+Otherwise it runs `git add -A` and `git commit -m MESSAGE` in that folder (never amends), prints
+`committed <sha> for <ASG> (builds/<n>.json)` and appends bus `commit`. A missing, empty or multi-line `-m` is
+exit 2 with one stderr line; a failing git step is exit 1 with git's first error line.
+
+- `nightshift respawn SHIFT ROLE` (`launcher_respawn.go`): restarts a member whose recorded pid is dead, in the
+  slot whose `slots/<N>.json` names it, through `spawn --slot N`. Its active assignment is the latest
+  `assignment`/`uplift` row to ROLE with no later `result` from ROLE for that asg. When there is one, respawn
+  writes the pending crew.json key `respawn` {role, kind, asg, body, sender, msg, plus coding_asg /
+  source_dispatch_id / reason / evidence when the row had them}; the pane's start hook (`launcher_pane.go`,
+  pendingKey `respawn`, the same path as consult/summon) records the row for its own NEW incarnation with the same
+  kind, asg, body and metadata (not re-validated: it was validated when first sent), marks it sent, clears the key
+  and uses `msg:N kind:K asg:A` + blank line + body as the first prompt, so `wait`/`ack` work. No active
+  assignment: the normal startup prompt. A failed spawn puts crew.json back. Prints
+  `respawned <ROLE> in slot <N> (asg <asg>)` or `respawned <ROLE> in slot <N> (no active assignment)`.
+  Exit 4: `<ROLE> is running; nothing to do`, `<ROLE> was never started; use nightshift spawn, consult or summon`,
+  `no slot is recorded for <ROLE>; start it with nightshift spawn`. Spawn failures keep spawn's own message and code.
+- `nightshift uplift SHIFT ASG TEXT --reason needs-senior|tester-failed-twice|timeout` (`launcher_respawn.go`):
+  Foreman -> Coder uplift with msg send's validation (`dispatchMetadata`: a current Apprentice coding assignment,
+  the trigger evidence, the Apprentice's claims released). A `not_started` Coder is started with
+  `summon --kind uplift`; otherwise the row is stored and delivered as `assign` does (waiter or one-line nudge).
+  Exit 4 with the reason, nothing stored, e.g. `uplift trigger not satisfied: timeout; nothing stored`,
+  `<label> must release claims before transfer: <paths>`, `<asg> is already uplifted to Coder (msg:N); nothing stored`.
+  Exit 2 = usage (missing --reason, empty text).
+- `nightshift handover SHIFT` (`lifecycle_report.go`): writes `<state_dir>/handover.md` (CRLF, like down) from
+  live state without capturing or stopping panes: `# Handover`, Task, Written, then `## Active assignments`
+  (`- <asg> -> <recipient> (msg:N <kind>, age <dur>)`, every dispatch with no result from that incarnation),
+  `## Live waiters` (`waiting/<label>.json` whose pid runs), `## Last report per member` (latest `result` row
+  per sender, first line), then the same report `down` writes (result, denials, claims, unacknowledged
+  messages, builds, token usage, commits). Prints the path. `down` keeps writing its own handover unchanged.
+- `nightshift result SHIFT done|blocked --stage RUNG --summary TEXT [--changed PATH]... [--evidence 'stage|what|outcome']...`
+  (`write_result.go`): `--changed` and `--evidence` are repeatable. Writes result.json {status, stage, summary,
+  changed, evidence [{stage, what, outcome}], bus (path of bus.jsonl), builds [{n, head, dirty, exit, asg}] for
+  every builds/<n>.json, uplift_counts (the object `inbox` prints for the lead), usage when any
+  `<label>-usage.json` exists: {budget: crew.json max_credits, total_used: sum of the files' credits_used,
+  panes: {label: {credits_used, cap: the member's max_credits}}}}. Prints the path. Exit 4:
+  `done at <stage> needs a passed nightshift build on a clean tree on the current HEAD; run nightshift build first, or report --stage implemented or blocked`
+  (done above implemented with no build that passed, exit 0, dirty false, whose head equals the current HEAD of
+  worktree.json's worktree_dir, else of the build's own cwd). Exit 2: usage, including an evidence
+  value without two `|`. `down` still appends the `result` bus event.
+
+Failure lines (stderr, one extra line after the existing output; stdout and exit codes unchanged):
+
+- `land` exit 4 (conflict): `rebase conflict: assign the conflict to Coder in the worktree, have Tester pass it, then land again`
+- `land` exit 2 (rebased_needs_test only, not usage errors): `rebased cleanly: have Tester pass the new HEAD, then land again`
+- `claim` exit 4: after the existing `<path> is already claimed by <holder> ...` lines,
+  `ask Foreman to release or reassign <path>[, <path>...]` (the conflicting paths in argument order).
+- `spawn` with no free slot (no --slot given): after `no free slot in shift <shift> (<n> slots, all taken)`,
+  `reserved slots: <N> (Advisor, until consult), <N> (Coder, until summon); slot <last> is the Ops pane (only with --slot <last>); down a member or ask the human for a slot`
+  (`reserved slots: none; ...` when the crew reserves none; the role's own reserved slot is not listed).
 
 ## Concurrency
 

@@ -26,6 +26,15 @@ INC = {'Boss': 100.25, 'Junior': 200.5, 'Senior': 300.75, 'QA': 400.0}
 
 def bus_world(base):
     env = clean_world(base)
+    # NGH-061: a recorded pid that is not running raises member-died on the lead's wait. These members keep their
+    # incarnation ('started') but record no pid (status 'starting'), so only rows written here reach the lead.
+    for label in INC:
+        p = shift(env) / f'{label}.json'
+        info = json.loads(p.read_text(encoding='utf-8'))
+        info.pop('pid', None)
+        write_json(p, info)
+    advisor = shift(env) / 'Advisor.json'
+    write_json(advisor, {k: v for k, v in json.loads(advisor.read_text(encoding='utf-8')).items() if k != 'pid'})
     with contextlib.closing(sqlite3.connect(shift(env) / 'mailbox.sqlite3')) as conn:
         conn.execute('DELETE FROM messages')
         conn.commit()

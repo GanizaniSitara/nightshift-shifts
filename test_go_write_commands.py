@@ -92,6 +92,22 @@ def clean_world(base):
     return env
 
 
+# NGH-061 additions on the native side, outside the frozen oracle: build records gain trailing asg/tree/signature
+# keys, build -h gains the --asg option, and a claim conflict ends with one "ask Foreman ..." stderr line. Parity
+# compares the rest; test_go_failure_events.py checks the additions themselves.
+NGH061_RECORD_KEYS = re.compile(rb',\r?\n  "asg": [^\r\n]*,\r?\n  "tree": [^\r\n]*,\r?\n  "signature": [^\r\n]*(?=\r?\n\})')
+NGH061_BUILD_HELP = re.compile(rb'  --asg ASG          the assignment this build verifies; a fourth build after\r?\n'
+                               rb'                     three failures with the same error is refused \(exit 4\)\r?\n')
+NGH061_CLAIM_LINE = re.compile(rb'ask Foreman to release or reassign [^\r\n]*\r?\n$')
+
+
+def without_ngh061(outputs, state):
+    outputs = [(NGH061_BUILD_HELP.sub(b'', o), NGH061_CLAIM_LINE.sub(b'', e), c) for o, e, c in outputs]
+    files, rows = state
+    files = {k: NGH061_RECORD_KEYS.sub(b'', v) if Path(k).parent.name == 'builds' else v for k, v in files.items()}
+    return outputs, (files, rows)
+
+
 def parity(tmp_path, prepare, commands, expected_codes=None, extra=None):
     """Restore only the verified private fixture, keeping absolute path bytes equal; the oracle side is frozen."""
     base = tmp_path / 'private write fixture'
@@ -109,7 +125,7 @@ def parity(tmp_path, prepare, commands, expected_codes=None, extra=None):
             outputs.append((stable_bytes(proc.stdout), stable_bytes(proc.stderr), proc.returncode))
         if expected_codes is not None:
             assert [o[2] for o in outputs] == expected_codes, outputs
-        return outputs, world_state(base)
+        return without_ngh061(outputs, world_state(base)) if go else (outputs, world_state(base))
 
     expected = frozen(lambda: observe(REBASE), tmp_path, {'PYTEST_PID': os.getpid(), **(extra or {})}, record=REBASE)
     assert observe(True) == expected

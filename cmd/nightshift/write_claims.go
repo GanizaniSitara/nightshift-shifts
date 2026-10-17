@@ -254,6 +254,13 @@ func claimCommand(args []string) int {
 			}
 		}
 		if len(conflicts) != 0 {
+			held := []string{}
+			for _, path := range paths {
+				if conflicts[path] {
+					held = append(held, path)
+				}
+			}
+			errLine("ask Foreman to release or reassign " + strings.Join(held, ", "))
 			return claimConflictError{}
 		}
 		now := time.Now().Format("2006-01-02 15:04:05")
