@@ -999,9 +999,10 @@ There is no bus process: each command appends its own line and `nightshift log` 
 | Event | Written by | Fields (besides `seq`, `ts`, `event`) |
 |---|---|---|
 | `start` | `start`, once the shift folder exists (never on `--dry-run`) | `shift`, `ticket`, `cwd`, `crew`, `members` (labels) |
-| `msg` | `insert_message`, the one place every mailbox row is stored: `msg send` and the protocol-violation note `ack` files | `id`, `kind`, `sender`, `recipient`, `asg`, `body`; uplift rows also carry `source_dispatch_id`, `reason`, `evidence` |
-| `sent` | `msg sent` | `id` |
-| `ack` | `ack` | `id`, `by`, `outcome` (`acknowledged`, `already acknowledged`, `protocol violation` + `reason`) |
+| `msg` | `insert_message`, the one place every mailbox row is stored: `msg send`, `ready`, `assign`, `note`, `report` and the protocol-violation note `ack` files | `id`, `kind`, `sender`, `recipient`, `asg`, `body`; uplift rows also carry `source_dispatch_id`, `reason`, `evidence` |
+| `sent` | `msg sent`; `ready`/`assign`/`note`/`report` after delivery (NGH-060) | `id`; NGH-060 rows add `via` (`wait` = recipient was blocked in `wait`, `nudge` = one-line nudge typed) |
+| `ack` | `ack`; `wait` (NGH-060) | `id`, `by`, `outcome` (`acknowledged`, `already acknowledged`, `protocol violation` + `reason`); `wait` adds `via: "wait"` |
+| `nudge-failed` | `ready`/`assign`/`note`/`report` when the nudge could not be delivered (NGH-060) | `id`, `to`, `reason`; the row stays `stored` for the warden |
 | `spawn` | `spawn`, only after the wrapper line was typed into the slot | `role`, `slot`, `tool`, `identity` |
 | `result` | `down`, when `result.json` exists | `result` (its parsed contents; `null` + `error` when unreadable) |
 | `down` | `down`, after the lock is released and before its own process tree is killed | `stopped` (roles), `lock_released` (folders) |
@@ -1018,6 +1019,35 @@ There is no bus process: each command appends its own line and `nightshift log` 
   Without `bus.jsonl` it says `no bus yet` on stderr and exits 0, or keeps polling under `--follow`.
 - Every member may read `bus.jsonl` at any time; Tester reads it before acting on an assignment, the
   Advisor reads it for context, and Foreman's `result.json` notes that the bus is complete.
+
+### Pull-based delivery (NGH-060)
+
+Five commands (`cmd/nightshift/write_bus.go`) let a member exchange messages without typing a body
+into another pane (docs/instructions-review.md §6). They use the same mailbox rows, `dispatchMetadata`
+checks and bus events as `msg send`; `msg send|sent`, `ack` and `inbox` are unchanged and the briefs
+do not use these commands yet. ROLE goes through the crew label lookup; the lead is the crew's human
+contact (Foreman).
+
+| Command | Stores | Notes |
+|---|---|---|
+| `ready SHIFT ROLE` | `note` `READY`, ROLE -> lead | A second READY from the same incarnation exits 4; the Advisor never sends READY (exit 4). |
+| `assign SHIFT ROLE TEXT [--asg ID] [--coding-asg CID] [--ready-timeout S]` | `assignment`, lead -> ROLE | Without `--asg` an id `<role>-<n>` is generated. Waits (default 300s) until ROLE's current incarnation has sent READY or acknowledged any row (consult/summon starts never send READY); not ready: exit 3, nothing stored. A reserved member still `not_started`: exit 4 `<ROLE> is asleep; use nightshift consult\|summon`. |
+| `note SHIFT ROLE TEXT [--asg ID] [--ready-timeout S]` | `note`, lead -> ROLE | Same readiness wait; no generated asg. |
+| `report SHIFT ROLE TEXT [--asg ID]` | `result`, ROLE -> lead | `--asg` defaults to the latest assignment/uplift to ROLE's current incarnation. First line is the verdict; a first line starting `APPRENTICE-NEEDS-SENIOR` is stored as `note`. Text `READY` exits 4 (use `ready`). |
+| `wait SHIFT ROLE [--timeout S] [--json]` | nothing; acknowledges | Blocks (polling about once a second; default 540s, 0 = forever) until a `stored`/`sent` row for ROLE's current incarnation exists, acknowledges the lowest id (bus `ack` with `via: "wait"`) and prints `msg:N kind:K asg:A from:SENDER` then the stored body verbatim (`--json`: the row). Timeout: exit 3 and the stdout line `timeout: nothing for ROLE in Ns; run nightshift wait SHIFT ROLE again`. While blocked it owns `<state_dir>/waiting/<ROLE>.json` `{pid, since}`: one live wait owns it, a second wait for the same ROLE leaves it alone and re-claims it on its next poll once the owner's pid is gone, and a wait removes it on exit or Ctrl+C (exit 130) only while it still records its own pid. Negative `--timeout`/`--ready-timeout`: exit 2. |
+
+The four storing commands print the header line `msg:N kind:K asg:A`, then deliver: if the recipient
+has a waiter file whose pid is running, the row is marked sent (`sent` with `via: "wait"`). Otherwise,
+unless `NIGHTSHIFT_NUDGE=off`, one line `msg:N kind:K asg:A  run: nightshift wait SHIFT ROLE` is typed
+into the recipient's live pane (pid and tool from `<ROLE>.json`) with the warden's `agents-cli send`
+path, and the row is marked sent with `via: "nudge"`. A nudge that cannot be delivered leaves the row
+`stored` for the warden, appends `nudge-failed` and warns on stderr; the command still exits 0.
+
+Exit codes: 0 ok; 2 usage error (argparse-style, including empty text); 3 timed out (`wait`, or
+`assign`/`note` waiting for READY); 4 refused (duplicate READY, unreleased claims, any other
+`dispatchMetadata` refusal, member asleep, the lead addressing itself, Advisor READY, `report READY`);
+5 reserved; 1 an unexpected failure (unknown shift or role, mailbox error). Every non-zero exit except
+the `wait` timeout prints one stderr line saying what to do next.
 
 ## Concurrency
 

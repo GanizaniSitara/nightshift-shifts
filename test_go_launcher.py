@@ -313,6 +313,33 @@ NGH056_HELP_DELTAS = [
       b'                                              start the reserved Coder (crews with an Apprentice) the same way']),
 ]
 
+# NGH-060 pull-based bus: the five commands follow ack in the top-level Commands list.
+NGH060_HELP_DELTAS = [
+    ([b'  ack SHIFT ROLE ID                           acknowledge and print the stored body; exit 5 = do not act'],
+     [b'  ack SHIFT ROLE ID                           acknowledge and print the stored body; exit 5 = do not act',
+      b'  ready SHIFT ROLE                            record READY for the lead; exit 4 = already READY',
+      b'  assign SHIFT ROLE TEXT [--asg ID] [--coding-asg CID] [--ready-timeout S]',
+      b'                                              store once ROLE is READY and nudge it; exit 3 = not ready',
+      b'  note SHIFT ROLE TEXT [--asg ID] [--ready-timeout S]',
+      b'                                              the same for a lead -> member note',
+      b'  report SHIFT ROLE TEXT [--asg ID]           store ROLE\'s result for the lead; first line = verdict',
+      b'  wait SHIFT ROLE [--timeout S] [--json]      block for the next message, ack it, print the body; exit 3 = timeout']),
+]
+
+
+def apply_help_deltas(data, deltas):
+    applied = 0
+    for old, new in deltas:
+        if new[1] in data:   # already present (a golden re-recorded from the native side): never duplicate
+            continue
+        pattern = rb'\r?\n'.join(re.escape(line) for line in old) + rb'(?=\r?\n)'
+        match = re.search(pattern, data)
+        if match:
+            nl = b'\r\n' if b'\r\n' in match[0] or b'\r\n' in data else b'\n'
+            data = data[:match.start()] + nl.join(new) + data[match.end():]
+            applied += 1
+    return data, applied
+
 
 def reserve_coder(plan):
     """NGH-056 reserved Coder (Coder msg 18), applied to the oracle's start --dry-run plan: when the crew has an
@@ -382,6 +409,9 @@ def test_ngh056_help_deltas_hit_the_oracle_text(tmp_path):
     assert ngh056_expected(start_help)[1] == 2 and ngh056_expected(top_help)[1] == 2
     for old, _ in NGH056_HELP_DELTAS:
         assert sum(normalise(h).count(old[0]) for h in (start_help, top_help)) == 1, old[0]
+    # NGH-060: its delta anchors on the oracle's ack line, once in the top-level help and never in start -h.
+    assert apply_help_deltas(top_help, NGH060_HELP_DELTAS)[1] == 1
+    assert apply_help_deltas(start_help, NGH060_HELP_DELTAS)[1] == 0
 
 
 def volatile(env):
@@ -405,6 +435,9 @@ def oracle_expected(args, env, launcher, before):
         actual = run(args, env, native=True)
         return normalise(actual.stdout, launcher, True), normalise(actual.stderr, launcher, True), actual.returncode
     stdout, stderr, code = frozen(native if REBASE else compute, world_root(env), volatile(env), record=REBASE)
+    if not REBASE:
+        # NGH-060 postdates the recorded goldens: its help lines go on top of the frozen value, never into it.
+        stdout = apply_help_deltas(stdout, NGH060_HELP_DELTAS)[0]
     return subprocess.CompletedProcess(args, code, stdout, stderr)
 
 
