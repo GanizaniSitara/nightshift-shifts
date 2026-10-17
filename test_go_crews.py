@@ -747,3 +747,11 @@ def test_spawn_defaults_an_unknown_role_to_the_specialists_crew(world, sleeper):
     proc = native(['spawn', 'specfix', '--role', 'Decompiler', '--cli', 'codex', '--dry-run'], w['env'])
     assert json.loads(proc.stdout)['member']['tool'] == 'codex', '--cli overrides the specialists default'
 
+def test_start_refuses_a_task_that_is_only_a_crew_name(world):
+    """`start work` would start the default crew with the task "work"; it is refused with the --crew hint."""
+    proc = native(['start', '--dry-run', '--cwd', str(world['plain']), 'Work'], world['env'])
+    err = proc.stderr.decode('utf-8', 'replace')
+    assert proc.returncode == 2 and 'use nightshift start --crew work' in err, err
+    ok = native(['start', '--dry-run', '--cwd', str(world['plain']), '--crew', 'home-less', 'work'], world['env'])
+    assert b'is a crew name' not in ok.stderr, 'with --crew given, the task text is left alone'
+

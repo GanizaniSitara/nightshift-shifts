@@ -139,6 +139,15 @@ func runStart(argv []string, print bool) (string, error) {
 	if prompt != nil && args.present["--prompt-file"] {
 		return "", startUsageError("give the task either as an argument or with --prompt-file, not both")
 	}
+	// `start work` reads as "start the work crew" but would start the default crew with the task "work".
+	if prompt != nil && !args.present["--crew"] && !args.present["--crew-file"] {
+		word := strings.TrimSpace(*prompt)
+		for _, src := range crewSources(canonicalRepoRoot(args.values["--cwd"], "")) {
+			if strings.EqualFold(src.name, word) {
+				return "", startUsageError(fmt.Sprintf("%q is a crew name, not a task: use nightshift start --crew %s \"<task or ticket>\"", word, src.name))
+			}
+		}
+	}
 	if file := args.values["--prompt-file"]; file != "" {
 		text, err := readTextUniversal(file)
 		if err != nil {
