@@ -36,6 +36,8 @@ copy crews\work.yaml C:\nightshift\crews\work.yaml
 ```
 Edit `C:\nightshift\crews\work.yaml` to adjust tools, models, accounts, or budgets. Because machine manifests shadow repo and built-in manifests, `nightshift start ... --crew work` automatically picks your machine copy.
 
+To update an install in one step, run `scripts\update.cmd` from the clone: it pulls, builds and deploys into `<drive>\nightshift\bin`, runs `nightshift init`, prints the version and warns if an older `nightshift.exe` comes first on `PATH` (`scripts\update.cmd --yes` replaces old crew overrides without asking).
+
 You don't need a machine copy to use a built-in crew. A copy keeps its old settings after an update, so after every pull and rebuild run:
 ```cmd
 nightshift init
