@@ -1,6 +1,6 @@
-# All-Copilot crew with one Claude Advisor (owner, 16 Oct): Gemini 3.8 Flash on GitHub Copilot CLI for every role,
+# All-Copilot crew with one Claude Advisor: Gemini 3.8 Flash on GitHub Copilot CLI for every role,
 # Foreman included; the Advisor is Claude Opus 5.5 on its default effort and starts only when the Foreman consults it
-# (NGH-050). At home Copilot does not offer Opus, so the Advisor runs in Claude Code; at work it can move to Copilot.
+# (NGH-050). Where Copilot does not offer Opus, the Advisor runs in Claude Code; otherwise it can move to Copilot.
 # max_credits is the shift's Copilot budget, split evenly over the four Copilot panes (30 each, Copilot's minimum).
 name: copilot-flash
 permission_mode: auto

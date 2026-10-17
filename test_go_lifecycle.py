@@ -924,7 +924,7 @@ def lifecycle_helper(tmp_path_factory):
     # The root package embeds crews/, briefs/ and personas/ (NGH-052); without it the build fails.
     for name in ('go.mod', 'go.sum', 'assets.go'):
         shutil.copyfile(REPO / name, root / name)
-    for name in ('crews', 'briefs', 'personas'):
+    for name in ('crews', 'briefs', 'personas', 'scripts'):
         shutil.copytree(REPO / name, root / name)
     main = source / 'main.go'
     original = main.read_text(encoding='utf-8')
@@ -932,7 +932,7 @@ def lifecycle_helper(tmp_path_factory):
     main.write_text(original.replace('func main() {', 'func originalMain() {', 1), encoding='utf-8')
     (source / 'fixture_entry.go').write_text(HELPER_MAIN, encoding='utf-8')
     try:
-        built = subprocess.run(['cmd.exe', '/d', '/c', 'C:/scripts/build-nightshift-go.cmd', str(root)],
+        built = subprocess.run(['cmd.exe', '/d', '/c', str(root / 'scripts' / 'build.cmd'), str(root / 'build')],
                                capture_output=True, timeout=90, creationflags=subprocess.CREATE_NO_WINDOW)
         assert built.returncode == 0, (built.stdout, built.stderr)
         yield root / 'build' / 'nightshift.exe'

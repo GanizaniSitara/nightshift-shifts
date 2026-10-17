@@ -1,6 +1,5 @@
-# The shippable work crew (owner, 16 Oct 2026): every role on GitHub Copilot CLI, the one subscription
-# available at work. Every role on Gemini 3.8 Flash at high reasoning with
-# the long-context (1M) tier (owner, 16 Oct: Grok burned half the monthly credits in 30 min). Slots 1..5 crew, 6..8 empty for `nightshift spawn`.
+# The all-Copilot crew: every role on GitHub Copilot CLI. Every role on Gemini 3.8 Flash at high reasoning with
+# the long-context (1M) tier. Slots 1..5 crew, 6..8 empty for `nightshift spawn`.
 # Model names verified against the live Copilot catalog on 16 Oct 2026 (grok-4.7, gemini-3.8-flash).
 # reasoning: and context: reach Copilot as --reasoning-effort and --context (NGH-037).
 name: copilot

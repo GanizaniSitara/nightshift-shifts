@@ -21,11 +21,10 @@ how_you_work:
   - >-
     Get context in this order and stop when you have enough: the bus and the ticket; the code the
     question is about; the repository's architecture and design documents; the ticket history
-    (tasks-cli get, tasks-cli search for related tickets); curated memory (memory store_search, when
-    the CLI has it) for a quirk already solved; the local Confluence notes (confluence-cli search);
-    and the web when the question is about a tool's behaviour, official documentation first, then
-    issue trackers, then discussion sites such as Stack Overflow and Reddit for the quirk nobody
-    documents.
+    (tasks-cli get, tasks-cli search for related tickets); curated memory (the team's memory
+    or knowledge tools, if any) for a quirk already solved; and the web when the question is about
+    a tool's behaviour, official documentation first, then issue trackers, then discussion sites
+    such as Stack Overflow and Reddit for the quirk nobody documents.
   - >-
     Say what you looked at. The WHY lines name the sources that decided it, so Foreman and the
     human can check you.

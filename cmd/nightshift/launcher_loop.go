@@ -21,10 +21,7 @@ import (
 )
 
 const (
-	mailkeepExe    = "C:/Tools/mailkeep/Mailkeep.Cli.exe"
-	notifyIdentity = "owner_id"
-	notifyTo       = "owner@example.com"
-	loopPoll       = 30 * time.Second
+	loopPoll = 30 * time.Second
 )
 
 const loopUsage = `usage: nightshift loop [-h] [--project PREFIX] [--max N] [--cwd CWD]
@@ -424,6 +421,20 @@ func projectTickets(prefix string) ([]string, error) {
 // notifyOwner emails the owner through Mailkeep (prepare, queue, send); it never fails the loop.
 func notifyOwner(subject, body string) object {
 	outcome := object{{"sent", false}, {"draft_id", nil}, {"error", nil}}
+	notifyTo := strings.TrimSpace(os.Getenv("NIGHTSHIFT_NOTIFY_TO"))
+	notifyIdentity := strings.TrimSpace(os.Getenv("NIGHTSHIFT_NOTIFY_IDENTITY"))
+	if notifyTo == "" || notifyIdentity == "" {
+		errLine("nightshift loop: notification skipped: NIGHTSHIFT_NOTIFY_TO and NIGHTSHIFT_NOTIFY_IDENTITY not configured")
+		return outcome
+	}
+	mailkeepExe, err := exec.LookPath("mailkeep")
+	if err != nil {
+		mailkeepExe, err = exec.LookPath("Mailkeep.Cli")
+	}
+	if err != nil {
+		errLine("nightshift loop: notification skipped: mailkeep not found on PATH")
+		return outcome
+	}
 	run := func(argv ...string) (object, error) {
 		stdout, stderr, code := runQuiet(120*time.Second, mailkeepExe, argv...)
 		if code != 0 {
@@ -436,7 +447,7 @@ func notifyOwner(subject, body string) object {
 		o, _ := value.(object)
 		return o, nil
 	}
-	err := func() error {
+	notifyErr := func() error {
 		tmp, err := os.MkdirTemp("", "nightshift-notify-")
 		if err != nil {
 			return err
@@ -480,8 +491,8 @@ func notifyOwner(subject, body string) object {
 		outcome = setValue(outcome, "sent", true)
 		return nil
 	}()
-	if err != nil {
-		outcome = setValue(outcome, "error", err.Error())
+	if notifyErr != nil {
+		outcome = setValue(outcome, "error", notifyErr.Error())
 	}
 	return outcome
 }

@@ -108,10 +108,11 @@ for Claude session-registration lookup).
 
 Mailbox reads take the same named Windows mutex as the Python helper, copy `mailbox.sqlite3` and
 an existing `-wal` to a disposable directory while holding it, and open only that copy. They do
-not create `-shm` or other sidecars beside a live shift mailbox. The build requires the cached Go
-1.25.12 toolchain and the pinned module versions in `go.mod`; the build entrypoint is the external script
-`C:\scripts\build-nightshift-go.cmd <worktree>`, which uses the cached Go toolchain with
-`GOPROXY=off`, `GOSUMDB=off`, and `GOTOOLCHAIN=local` and writes `<worktree>\build\nightshift.exe`.
+not create `-shm` or other sidecars beside a live shift mailbox. The build requires Go
+and the pinned module versions in `go.mod`; the build entrypoint is `scripts\build.cmd [OUTDIR]`,
+which builds `./cmd/nightshift` with `go` from PATH (honouring `GOEXE` if set) using
+`-mod=readonly -trimpath` into `OUTDIR\nightshift.exe` (defaulting to `C:\nightshift\bin\nightshift.exe`).
+`verify.cmd` calls `"%~dp0scripts\build.cmd" "%~dp0build"` to produce `build\nightshift.exe` for tests.
 
 Increment 2 adds native in-shift write commands to that executable. `claim SHIFT ROLE PATH...`
 and `release SHIFT ROLE [PATH...]` use the same state roots and shift resolution as the read-only
@@ -413,9 +414,9 @@ enforce the configured budget stop without waiting for Foreman. Source locations
 are resolved from private configuration, never copied into the brief. Accountant starts observing
 immediately rather than waiting for an implementation assignment.
 
-At work, `crews/claude-work.yaml` is all Claude **Opus 5.5**, including the proposed Accountant;
-there is no Fable there. `crews/copilot.yaml` is all Copilot **Gemini 3.8 Flash**, including the
-proposed Accountant. A cheap observer elsewhere does not override those owner decisions.
+For the `claude-work` crew (`crews/claude-work.yaml`), all roles run Claude **Opus 5.5**,
+including the proposed Accountant. `crews/copilot.yaml` is all Copilot **Gemini 3.8 Flash**,
+including the proposed Accountant. A cheap observer elsewhere does not override those owner decisions.
 
 ### Sources and normalized contract
 
@@ -524,7 +525,7 @@ coverage; summing this shift's session lines cannot reveal monthly account spend
 also supplies polling/freshness/unknown-data policies. Validate positive limits, `0 < warn_at < limit`,
 source coverage, units, period definition/timezone and authority before enabling enforcement. **100 AIC
 is the owner's example, never a shipped default.** Budgets are per crew, persisted in effective shift
-configuration; work values are set at work. Shift budgets run across period boundaries and respawns.
+configuration; local values are set on your machine. Shift budgets run across period boundaries and respawns.
 Period budgets use provider period IDs/reset boundaries (or an explicit daily timezone), not a reset
 inferred from a lower value; source-wide period totals include other shifts without reattribution.
 
@@ -590,8 +591,8 @@ approved deterministic enforcement mechanism is needed before such use.
 
 Owner still needs to choose actual shift/period limits, lower warning thresholds, poll/timeout/staleness
 and unknown-data policy (including observer failure), provider period/timezone, optional hold/grace/release
-authority, and whether level 4 may do more than ask Foreman. Work/cloud feed availability, attribution and
-private mappings must be confirmed at work. These questions do **not** reopen warn-then-kill for Copilot.
+authority, and whether level 4 may do more than ask Foreman. Cloud feed availability, attribution and
+private mappings must be confirmed on your machine. These questions do **not** reopen warn-then-kill for Copilot.
 
 Implementation acceptance must cover: every member including Accountant/dormant/spawned roles; first
 sample spend; decimal AIC; repeat/delayed samples; confirmed reset vs unexplained decrease; respawn and
@@ -610,11 +611,11 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 | `briefs/*.md` | the instructions a role is launched with (`common.md` + `<role>.md`: `foreman.md`, `advisor.md`, `coder.md`, `tester.md`, `apprentice.md`, plus `*-cli.md` for non-Claude crews; placeholders filled in, `{state_dir}` and `{nightshift}` with forward slashes); the task text is appended for Foreman | this repo |
 | `personas/*.yaml` | each role's persona (identity, what good looks like, how you work, never), rendered above the brief (NGH-032) | this repo |
 | shift folder | `C:\nightshift\shifts\<shift>\` — the source of truth for one new shift (below) | data, not code |
-| tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | `C:\Tools\tasks-cli.exe` |
-| agents-cli | universal console driver for any agent TUI: peek a pane, inject a line, press a key, name/wait on a session | `C:\Tools\agents-cli` |
+| tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | on PATH |
+| agents-cli | universal console driver for any agent TUI: peek a pane, inject a line, press a key, name/wait on a session | on PATH |
 | Claude Code mesh | `ListAgents` / `SendMessage` between Claude sessions over named pipes (`~/.claude/sessions/<pid>.json`) | Claude Code |
 | Windows Terminal | one window per shift, one pane per role; a "Nightshift Crew" profile (Cascadia Mono 12, Campbell) | `wt.exe` |
-| `C:\scripts\nightshift.cmd` | shim on PATH that calls the repo script | C:\scripts |
+| `nightshift.exe` | standalone binary built via `scripts\build.cmd` | on PATH (default `C:\nightshift\bin`) |
 
 ## A shift, step by step
 
@@ -715,21 +716,20 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   `permission_flags(tool, permissions)` is the only place the flags are chosen, when the pane command is
   built: claude `skip` = `--dangerously-skip-permissions`, `default` = no flag, anything else =
   `--permission-mode <value>` (so `auto`, or a crew-level `plan`); agy, codex and copilot have no
-  classifier mode, so `skip` and `auto` both mean approve-all (agy `--dangerously-skip-permissions`, as
-  `C:/scripts/launch.ps1` starts agy; codex `--dangerously-bypass-approvals-and-sandbox`; copilot
-  `--allow-all`) and `default` (or any other value) adds nothing. The key travels into `crew.json` and through
-  `spawn` (including `--crew NAME`), and `start --dry-run` shows each pane's resolved `permission_flags`.
-  The Apprentice runs `permissions: skip` in `default.yaml` and the three `apprentice-*` manifests (owner
-  decision, 16 Oct: an agy Apprentice otherwise stops at a shell prompt on every command); Claude roles keep `auto`.
-- An agy pane runs `%LOCALAPPDATA%\Microsoft\WinGet\Links\agy.exe --model <model> <permission flags> -i
-  "<brief>\n\n<opening message>"` (`agy_command`). agy has no launch-time `--name` or system-prompt flag,
-  so the brief is prompt text and `agents-cli name <pid> <identity>` is transport-only. The launcher keeps
-  the exact `<ticket> shift` Windows Terminal title, applies the manifest Windows Terminal colour scheme and background, and configures agy's
-  supported `~/.gemini/antigravity-cli/settings.json` `statusLine` command as
-  `C:/scripts/nightshift.cmd statusline`: per-pane `NIGHTSHIFT_ROLE`, `NIGHTSHIFT_IDENTITY` and manifest
-  colour environment values make that persistent TUI line show the visible role and identity through redraws.
-  It preserves a different existing user `statusLine` command and emits a launch diagnostic that the Nightshift role
-  line is unavailable in that pane. `/color` is Claude-only; the trust dialog is
+  classifier mode, so `skip` and `auto` both mean approve-all (agy `--dangerously-skip-permissions`;
+  codex `--dangerously-bypass-approvals-and-sandbox`; copilot `--allow-all`) and `default` (or any other value)
+  adds nothing. The key travels into `crew.json` and through `spawn` (including `--crew NAME`), and
+  `start --dry-run` shows each pane's resolved `permission_flags`. The Apprentice runs `permissions: skip` in
+  `default.yaml` and the three `apprentice-*` manifests; Claude roles keep `auto`.
+- An agy pane runs `agy` from PATH (or `%LOCALAPPDATA%\Microsoft\WinGet\Links\agy.exe`) with
+  `--model <model> <permission flags> -i "<brief>\n\n<opening message>"` (`agy_command`). agy has no
+  launch-time `--name` or system-prompt flag, so the brief is prompt text and `agents-cli name <pid> <identity>`
+  is transport-only. The launcher keeps the exact `<ticket> shift` Windows Terminal title, applies the manifest
+  Windows Terminal colour scheme and background, and configures agy's supported
+  `~/.gemini/antigravity-cli/settings.json` `statusLine` command as `nightshift statusline` (invoking the running
+  executable): per-pane `NIGHTSHIFT_ROLE`, `NIGHTSHIFT_IDENTITY` and manifest colour environment values make that
+  persistent TUI line show the visible role and identity through redraws. It preserves a different existing user
+  `statusLine` command and emits a launch diagnostic that the Nightshift role line is unavailable in that pane. `/color` is Claude-only; the trust dialog is
   answered per tool (below).
 - `pid_alive` counts `agy.exe` as a crew process alongside `claude.exe`/`node.exe`.
 - `start --dry-run` adds `tool`, `model`, `exe` and `command` to each non-Claude role; `command` is the
@@ -965,6 +965,9 @@ classifier denials → `down --close` → note the ticket → next. A died/stall
 that gets the previous handover (`--retries`, default 2); `blocked` stops the loop for a human.
 By default the loop and `resume` send no completion or halt email. `--notify` explicitly opts
 into owner notification through Mailkeep; the compatible `--no-notify` flag remains accepted.
+Notification is configured via the `NIGHTSHIFT_NOTIFY_TO` (recipient email) and `NIGHTSHIFT_NOTIFY_IDENTITY`
+(Mailkeep identity) environment variables, looking up `mailkeep` on PATH. When not configured or when
+`mailkeep` is absent from PATH, notification is skipped with a stderr note and never fails the loop.
 The loop closes its own window on success. `nightshift resume` reruns tickets whose last shift
 never reached done (after a reboot). The loop is the "guardian"; a model-driven "master of masters"
 is a persona decision not yet taken (NGH-014).
@@ -1195,7 +1198,7 @@ for the Foreman's verbatim human task. Standard placeholders (`{shift}`, `{ident
 section is omitted when no repository config or markdown instructions exist.
 
 This repository self-hosts the layer with `target_branch: main` and configured build command
-`.\verify.cmd` (building `build\nightshift.exe` via `build-nightshift-go.cmd`, running `go test ./...`,
+`.\verify.cmd` (building `build\nightshift.exe` via `scripts\build.cmd`, running `go test ./...`,
 and running Go golden comparisons under pytest xdist: `test_go_readonly.py`, `test_go_write_commands.py`,
 `test_go_lifecycle.py`, `test_go_launcher.py`, `test_go_crews.py`, `test_go_telemetry.py`; `test_nightshift_shifts.py`
 is no longer in the configured build and the Python launcher is frozen). Its shared
@@ -1333,4 +1336,4 @@ Every Python subcommand and option from `nightshift_shifts.py` has been ported t
 - YAML syntax errors display Go `yaml.v2` error text rather than PyYAML's formatting.
 - Go's `-h` / `--help` text is the standard 80-column argparse rendering and ignores `COLUMNS` (Python argparse rewraps to `COLUMNS - 2`).
 
-Installing `nightshift.exe` to `C:\Tools` and pointing `C:\scripts\nightshift.cmd` at it waits for owner sign-off and the two live starts (`crews/gemini.yaml`, `crews/claude-copilot.yaml`).
+Installing `nightshift.exe` to PATH (default `C:\nightshift\bin`) makes the standalone binary available system-wide for live crew execution.

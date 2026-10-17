@@ -1,8 +1,8 @@
-# Run Nightshift at work
+# Run the lean work crew on a machine with limited memory
 
 ## 1. What it is
 
-The `work` crew (`crews/work.yaml`) is tailored for work machines where running five sessions consumes too much memory. It runs a lean 4-role crew in a 2x4 container:
+The `work` crew (`crews/work.yaml`) is tailored for a machine with limited memory where running five sessions consumes too much memory. It runs a lean 4-role crew in a 2x4 container:
 - **Foreman**, **Advisor**, and **Tester** run on Claude Code with `claude-opus-5-5`. The Advisor remains dormant until Foreman consults it.
 - **Coder** runs on GitHub Copilot CLI with `gemini-3.8-flash`, reasoning high, long-context tier (`context: long_context`), and permissions `skip`.
 - There is no Apprentice; the Coder handles coding directly.
@@ -28,7 +28,7 @@ When `--crew NAME` is specified, Nightshift resolves manifests using a three-tie
 2. **Repo**: `<repoRoot>/.nightshift/crews/NAME.yaml`
 3. **Built-in**: `crews/NAME.yaml` (asset directory or embedded)
 
-### Customizing on the work machine
+### Customizing on your machine
 
 To adapt the crew locally without modifying repository files:
 ```cmd

@@ -114,8 +114,7 @@ def exe_path():
 
 
 def go_toolchain():
-    pinned = Path(r'%USERPROFILE%\go\pkg\mod\golang.org\toolchain@v0.0.1-go1.25.12.windows-amd64\bin\go.exe')
-    return str(pinned) if pinned.is_file() else shutil.which('go')
+    return os.environ.get('GOEXE') or shutil.which('go')
 
 
 @pytest.fixture(scope='session')
@@ -200,7 +199,8 @@ def base_env(base, fake_bin):
         d.mkdir(parents=True, exist_ok=True)
     tasks = base / 'tasks'
     tasks.mkdir(exist_ok=True)
-    env = {k: v for k, v in os.environ.items() if k not in ('COLUMNS', 'LINES')}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('COLUMNS', 'LINES', 'NIGHTSHIFT_ROLE', 'NIGHTSHIFT_IDENTITY', 'NIGHTSHIFT_ROLE_COLOUR')}
     env.update({'NIGHTSHIFT_STATE_ROOT': str(root), 'NIGHTSHIFT_LEGACY_ROOT': str(legacy),
                 'NIGHTSHIFT_HOME': str(home), 'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1',
                 'FAKE_TASKS_DIR': str(tasks), 'NIGHTSHIFT_ORACLE_ARGV0': exe_path().name, **git_env(),
@@ -209,6 +209,17 @@ def base_env(base, fake_bin):
                 'GIT_CEILING_DIRECTORIES': str(base)})
     if fake_bin:
         env['PATH'] = str(fake_bin[0]) + os.pathsep + env.get('PATH', '')
+    user = os.environ.get('USERPROFILE', '').lower()
+    paths = [p for p in env.get('PATH', '').split(os.pathsep)
+             if p.strip() and not (
+                 p.lower().startswith('c:\\tools') or
+                 p.lower().startswith('c:\\scripts') or
+                 'npm' in p.lower() or
+                 'nvm4w' in p.lower() or
+                 'codex' in p.lower() or
+                 (user and p.lower().startswith(os.path.join(user, 'bin').lower()))
+             )]
+    env['PATH'] = os.pathsep.join(paths)
     return env
 
 
@@ -1262,12 +1273,17 @@ def pane_world(base, fake_bin, sleeper):
                 'copilot-win32-x64' / 'copilot.exe'):
         exe.parent.mkdir(parents=True)
         shutil.copyfile(fake_bin[0] / 'tasks-cli.exe', exe)
+    stub_bin = base / 'stub bin'
+    stub_bin.mkdir(parents=True, exist_ok=True)
+    for name in ('agy.exe', 'codex.exe', 'copilot.exe'):
+        shutil.copyfile(fake_bin[0] / 'tasks-cli.exe', stub_bin / name)
     record = base / 'record'
     record.mkdir()
     env.update(LOCALAPPDATA=str(local), APPDATA=str(roaming), FAKE_RECORD_DIR=str(record),
                CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='inherited', CLAUDE_AFK_TIMEOUT_MS='9', NO_COLOR='1',
                # Python's Path.home() is USERPROFILE outside the oracle patch; give both the fixture home.
                USERPROFILE=env['NIGHTSHIFT_HOME'])
+    env['PATH'] = str(stub_bin) + os.pathsep + env['PATH']
     repo = make_repo(base / 'pane repo', ('main',))
     (repo / '.nightshift').mkdir()
     (repo / '.nightshift' / 'config.yaml').write_text('build:\n  cmd: pytest -q\n', encoding='utf-8')
@@ -1304,6 +1320,10 @@ def pane_observation(env, d, record, label, slot):
         if c['exe'] == 'agents-cli':
             assert c['argv'][1].isdigit()
             c['argv'][1] = '<child pid>'
+            c['env'] = {k: v for k, v in c['env'].items()
+                        if k in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_AFK_COUNTDOWN_MS',
+                                 'CLAUDE_AFK_TIMEOUT_MS', 'COLORTERM', 'DISABLE_AUTOUPDATER',
+                                 'FORCE_COLOR', 'NO_COLOR', 'TERM')}
     return info, slot_record, calls
 
 

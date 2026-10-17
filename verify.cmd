@@ -2,10 +2,10 @@
 setlocal
 cd /d "%~dp0"
 
-call C:\scripts\build-nightshift-go.cmd "%~dp0."
+call "%~dp0scripts\build.cmd" "%~dp0build"
 if errorlevel 1 exit /b %ERRORLEVEL%
 
-set "GOEXE=%USERPROFILE%\go\pkg\mod\golang.org\toolchain@v0.0.1-go1.25.12.windows-amd64\bin\go.exe"
+if "%GOEXE%"=="" set "GOEXE=go"
 set "GOPROXY=off"
 set "GOSUMDB=off"
 set "GOTOOLCHAIN=local"

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -32,7 +33,6 @@ const (
 	humanTaskMarker     = "The human task for this shift follows, verbatim:"
 	advisorLabel        = "Advisor"
 	coderLabel          = "Coder"
-	agyStatuslineCmd    = "C:/scripts/nightshift.cmd statusline"
 )
 
 var (
@@ -152,7 +152,12 @@ func launcherExe() string {
 // with forward slashes because Git Bash strips unquoted backslashes.
 func nightshiftCommand() string { return filepath.ToSlash(launcherExe()) }
 
+func agyStatuslineCmd() string { return nightshiftCommand() + " statusline" }
+
 func toolExe(tool string) string {
+	if p, err := exec.LookPath(tool); err == nil {
+		return p
+	}
 	switch tool {
 	case "agy":
 		return filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft", "WinGet", "Links", "agy.exe")
@@ -1219,12 +1224,12 @@ func installAgyStatusline() bool {
 		if !ok {
 			return false
 		}
-		if rowValue(o, "command") != agyStatuslineCmd {
+		if rowValue(o, "command") != agyStatuslineCmd() {
 			errLine("Nightshift agy role status line unavailable: preserving the existing custom statusLine command.")
 			return false
 		}
 	}
-	data = setValue(data, "statusLine", object{{"type", "command"}, {"command", agyStatuslineCmd}, {"enabled", true}, {"stack_with_default", true}})
+	data = setValue(data, "statusLine", object{{"type", "command"}, {"command", agyStatuslineCmd()}, {"enabled", true}, {"stack_with_default", true}})
 	if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
 		return false
 	}

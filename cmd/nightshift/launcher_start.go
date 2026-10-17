@@ -718,7 +718,7 @@ type wtSpec struct {
 func wtCommand(w wtSpec) []string {
 	exe := launcherExe()
 	start := w.modeFlag == "--start"
-	dir := "%USERPROFILE%"
+	dir := userHome()
 	if start && w.cwd != "" {
 		dir = w.cwd
 	}

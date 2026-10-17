@@ -1,5 +1,5 @@
-# Work crew (owner, 16 Oct): four members, no Apprentice, because five sessions use too much memory on the work
-# machine. Foreman and Tester on Claude Opus 5.5 (default effort), Coder on GitHub Copilot with Gemini 3.8 Flash,
+# Work crew: four members, no Apprentice, because five sessions use too much memory on a
+# machine with limited memory. Foreman and Tester on Claude Opus 5.5 (default effort), Coder on GitHub Copilot with Gemini 3.8 Flash,
 # Advisor on Claude Opus 5.5 started only when the Foreman consults it (NGH-050), so three sessions run normally.
 # max_credits is the shift's Copilot budget: one Copilot pane, 30 (Copilot's minimum).
 name: work

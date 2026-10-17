@@ -66,7 +66,8 @@ def _variants(name, path):
 
 
 def _substitutions(tmp_path, extra, more_roots=None):
-    roots = [('TMP', tmp_path), ('BASE', tmp_path.parent), ('REPO', REPO)]
+    home = Path(os.environ.get('USERPROFILE', Path.home()))
+    roots = [('TMP', tmp_path), ('BASE', tmp_path.parent), ('REPO', REPO), ('USERHOME', home)]
     # The worker's pytest base temp holds session fixtures (fake bin, helper builds).
     for ancestor in tmp_path.parents:
         if re.fullmatch(r'pytest-\d+|popen-gw\d+', ancestor.name):
