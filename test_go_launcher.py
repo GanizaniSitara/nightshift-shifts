@@ -553,7 +553,7 @@ def test_start_dry_run_work_crew_through_native_binary(start_world):
     assert plan['crew'] == 'work'
     assert plan['max_credits'] == 60
     roles = plan['roles']
-    assert roles['Advisor']['status'] == 'not_started' and roles['Advisor']['reserved_slot'] == 2
+    assert roles['Advisor']['status'] == 'not_started' and roles['Advisor']['reserved_slot'] == 3
     for label in ('Coder', 'Tester'):
         assert roles[label]['tool'] == 'copilot' and roles[label]['model'] == 'gemini-3.8-flash'
         cmd = roles[label]['command']

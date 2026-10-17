@@ -414,6 +414,7 @@ type crewManifest struct {
 	name, model, permissionMode, contract, layout string
 	slots                                         int
 	opsWidth                                      int // cells the Ops pane (the last slot) spans: 1, or 2 on 2x4
+	foremanWidth                                  int // cells the Foreman pane (slot 1) spans: 1, or 2 on 2x4
 	roles                                         []*crewRole
 	maxCredits                                    any
 	overrides                                     object // start's overrides as recorded; nil when none
@@ -883,12 +884,24 @@ func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, erro
 		}
 		opsWidth = n
 	}
-	slots -= opsWidth - 1
+	// foreman_width: 2 merges the top-left two cells of a 2x4 layout into one wide Foreman pane (slot 1).
+	foremanWidth := 1
+	if v := yamlScalar(data, "foreman_width"); v != nil {
+		n, ok := yamlInt(v)
+		if !ok || n < 1 || n > 2 {
+			return fail("foreman_width must be 1 or 2, not %s", pyReprValue(v))
+		}
+		if n == 2 && layout != "2x4" {
+			return fail("foreman_width 2 needs layout 2x4, not %s", layout)
+		}
+		foremanWidth = n
+	}
+	slots -= opsWidth - 1 + foremanWidth - 1
 	if slots != 0 && panes > slots {
-		return fail("%d panes do not fit layout %s with ops_width %d (%d slots)", panes, layout, opsWidth, slots)
+		return fail("%d panes do not fit layout %s with ops_width %d and foreman_width %d (%d slots)", panes, layout, opsWidth, foremanWidth, slots)
 	}
 	crew := &crewManifest{name: name, model: launcherModel, permissionMode: startPermissionMode, contract: "result.json", layout: layout, slots: slots,
-		opsWidth: opsWidth, roles: checked, overrides: ov.record(machineFile)}
+		opsWidth: opsWidth, foremanWidth: foremanWidth, roles: checked, overrides: ov.record(machineFile)}
 	if v := yamlScalar(data, "model"); truthy(v) {
 		crew.model = pyStr(v)
 	}

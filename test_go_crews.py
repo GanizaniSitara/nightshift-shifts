@@ -458,13 +458,13 @@ def test_work_crew_is_in_the_every_manifest_parametrization():
 def test_work_crew_dry_run(world):
     plan = plan_of(world, '--crew', 'work')
     assert plan['crew'] == 'work' and plan['model'] == 'claude-opus-5-5' and plan['permission_mode'] == 'auto'
-    assert list(plan['roles']) == ['Foreman', 'Advisor', 'Coder', 'Tester'], 'four roles, no Apprentice'
+    assert list(plan['roles']) == ['Foreman', 'Coder', 'Advisor', 'Tester'], 'four roles, no Apprentice'
     assert plan['max_credits'] == 60
     for label in ('Foreman', 'Advisor'):
         r = plan['roles'][label]
         assert 'tool' not in r and 'model' not in r and 'reasoning' not in r, (label, r)
     advisor = plan['roles']['Advisor']
-    assert (advisor['status'], advisor['reserved_slot']) == ('not_started', 2)
+    assert (advisor['status'], advisor['reserved_slot']) == ('not_started', 3)
     for label in ('Coder', 'Tester'):
         r = plan['roles'][label]
         assert (r['tool'], r['model'], r['reasoning'], r['context'], r['max_credits']) == \
@@ -474,7 +474,7 @@ def test_work_crew_dry_run(world):
         assert cmd[cmd.index('--context') + 1] == 'long_context'
         assert cmd[cmd.index('--reasoning-effort') + 1] == 'high'
         assert r['permission_flags'] == ['--allow-all']
-    assert [s['role'] for s in plan['slots']] == ['Foreman', None, 'Coder', 'Tester', None, None, None], 'Ops spans two cells'
+    assert [s['role'] for s in plan['slots']] == ['Foreman', 'Coder', None, 'Tester', None, None], 'Foreman and Ops span two cells each'
 
 
 def test_work_yaml_manifest_fields():
@@ -483,11 +483,11 @@ def test_work_yaml_manifest_fields():
     assert (data['name'], data['layout'], data['model'], data['permission_mode'], data['contract'],
             data['max_credits']) == ('work', '2x4', 'claude-opus-5-5', 'auto', 'result.json', 60)
     roles = {r['role']: r for r in data['roles']}
-    assert list(roles) == ['Foreman', 'Advisor', 'Coder', 'Tester']
+    assert list(roles) == ['Foreman', 'Coder', 'Advisor', 'Tester']
     assert roles['Foreman']['brief'] == 'foreman.md' and roles['Foreman']['human_contact'] is True
     assert (roles['Coder']['brief'], roles['Coder']['permissions']) == ('coder-cli.md', 'skip')
     assert (roles['Tester']['brief'], roles['Tester']['permissions']) == ('tester-cli.md', 'skip')
-    assert [roles[r]['colour'] for r in roles] == ['red', 'purple', 'green', 'blue']
+    assert [roles[r]['colour'] for r in roles] == ['red', 'green', 'purple', 'blue']
     assert all('reasoning' not in roles[r] for r in ('Foreman', 'Advisor'))
 
 

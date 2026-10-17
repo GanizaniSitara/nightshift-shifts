@@ -291,7 +291,7 @@ func runStart(argv []string, print bool) (string, error) {
 		title = paneTitle(ticket)
 	}
 	command := wtCommand(wtSpec{name: name, stateDir: stateDir, agents: true, modeFlag: "--start", cwd: cwd, members: cells,
-		crew: crew.name, ticket: ticket, slots: slots, opsWidth: crew.opsWidth, colours: colours, opsDir: repoRoot})
+		crew: crew.name, ticket: ticket, slots: slots, opsWidth: crew.opsWidth, foremanWidth: crew.foremanWidth, colours: colours, opsDir: repoRoot})
 	if args.present["--dry-run"] {
 		if print {
 			outLine(renderJSON(startPlan(name, stateDir, cwd, ticket, title, task, required, crew, members, cells, slots, advisorSlot,
@@ -713,6 +713,7 @@ type wtSpec struct {
 	members                                                []string
 	slots                                                  int
 	opsWidth                                               int // cells the last slot spans (0 or 1: one)
+	foremanWidth                                           int // cells the first slot spans (0 or 1: one)
 	colours                                                map[string]string
 }
 
@@ -790,10 +791,14 @@ func wtCommand(w wtSpec) []string {
 	if n == 0 {
 		n = len(w.members)
 	}
-	// width is the cells a slot spans: the Ops pane (last slot) spans opsWidth, every other one cell.
+	// width is the cells a slot spans: the Ops pane (last slot) spans opsWidth, the Foreman (first slot)
+	// foremanWidth, every other one cell.
 	width := func(i int) int {
 		if w.opsWidth > 1 && w.slots != 0 && i == w.slots-1 {
 			return w.opsWidth
+		}
+		if w.foremanWidth > 1 && w.slots != 0 && i == 0 {
+			return w.foremanWidth
 		}
 		return 1
 	}
@@ -821,10 +826,12 @@ func wtCommand(w wtSpec) []string {
 		// Focus panes by id (creation order: 0 the first pane, 1 the bottom row), not move-focus: move-focus
 		// looks for a neighbour by geometry, and while Terminal is still laying out it finds none, so every
 		// later split lands in the bottom row.
-		top := (n + w.opsWidth) / 2
-		if w.opsWidth < 1 {
-			top = (n + 1) / 2
+		// The top row holds half the cells (rounded up); a wide Foreman there leaves room for one slot fewer.
+		cells := 0
+		for i := 0; i < n; i++ {
+			cells += width(i)
 		}
+		top := (cells+1)/2 - (width(0) - 1)
 		place([]string{"split-pane", "-H", "-s", "0.5"}, top)
 		add([]string{"focus-pane", "-t", "0"}, "")
 		columns(1, top)

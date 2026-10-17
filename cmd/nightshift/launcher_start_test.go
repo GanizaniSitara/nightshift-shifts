@@ -78,6 +78,27 @@ func TestWtCommandWideOpsPaneTakesTwoBottomCells(t *testing.T) {
 	}
 }
 
+func TestWtCommandWideForemanTakesTwoTopCells(t *testing.T) {
+	command := wtCommand(wtSpec{name: "n", stateDir: "s", modeFlag: "--start", members: []string{"Foreman"}, slots: 6,
+		opsWidth: 2, foremanWidth: 2, opsDir: "R"})
+	got, slotAfterH := []string{}, ""
+	for i, part := range command {
+		if part == "split-pane" {
+			got = append(got, command[i+1]+" "+command[i+3])
+		}
+		if part == "--slot" && slotAfterH == "" && len(got) > 0 && got[0] == "-H 0.5" && len(got) == 1 {
+			slotAfterH = command[i+1]
+		}
+	}
+	// Top row Foreman (2 cells), slots 2 and 3; bottom row slots 4 and 5, then Ops (2 cells, slot 6).
+	if want := []string{"-H 0.5", "-V 0.5", "-V 0.5", "-V 0.75", "-V 0.6667"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if slotAfterH != "4" {
+		t.Fatalf("bottom row starts at slot %s, want 4", slotAfterH)
+	}
+}
+
 func TestRealExeSwapsAnNpmShimForItsPackagedBinary(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
