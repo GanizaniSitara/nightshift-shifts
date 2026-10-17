@@ -102,6 +102,8 @@ The prose cannot shrink until these exist, so they come first.
 
 `ack` stays but becomes implicit: `wait` prints the stored body, which is what `ack` existed to guarantee.
 
+**Missing tools are the human's problem, loudly.** A specialist that needs an external tool (the Decompiler needs Ghidra; a future role might need a specific SDK) checks for it first and reports `<ROLE>-BLOCKED: missing tool <name>` before doing anything else; it never substitutes, scripts around it, or installs. Better still, the role declares `tools: [ghidra]` in its crew entry and `spawn` refuses to start it when the tool is not on PATH, so the gap is reported before a pane is spent on it (owner, 17 Oct).
+
 ## 7. Tuning the brief to the model
 
 The same brief is wrong for Opus with a 1M context and for a Flash pane on a 30-credit budget. Two knobs, both set in the crew YAML per role and defaulted from the model name:
