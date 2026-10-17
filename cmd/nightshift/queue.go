@@ -274,6 +274,11 @@ func queueCommand(argv []string) int {
 				errLine("--state must be landed or blocked")
 				return 2
 			}
+			// queue next archives landed.json, so for a worktree shift it exists only if land ran for this item.
+			if info, _ := worktreeInfo(dir); state == "landed" && info != nil && !fileExists(filepath.Join(dir, "landed.json")) {
+				errLine("this item has not been landed: run nightshift land " + filepath.Base(dir) + " first, or mark it --state blocked")
+				return 1
+			}
 		}
 		err := withQueue(dir, func(items []queueItem) ([]queueItem, error) {
 			for i := range items {
