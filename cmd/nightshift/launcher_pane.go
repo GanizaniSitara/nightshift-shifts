@@ -337,8 +337,8 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		}
 	}
 	env := crewEnv(os.Environ(), tool, account, envRole)
-	if tool == "agy" {
-		// agy has no --name: the Nightshift status line shows the role from these (acc1f52)
+	if tool == "agy" || tool == "copilot" {
+		// agy and copilot status lines show the role from these
 		env = append(env, "NIGHTSHIFT_ROLE="+role, "NIGHTSHIFT_IDENTITY="+identity, "NIGHTSHIFT_ROLE_COLOUR="+colour)
 	}
 	tinted := tool == "agy" || tool == "codex" || tool == "copilot"

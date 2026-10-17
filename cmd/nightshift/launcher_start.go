@@ -908,11 +908,20 @@ func installProfile(stateDir string) error {
 		return err
 	}
 	_, members := crewMembers(stateDir)
+	hasAgy, hasCopilot := false, false
 	for _, m := range members {
-		if objectString(m, "tool") == "agy" {
-			installAgyStatusline()
-			break
+		switch objectString(m, "tool") {
+		case "agy":
+			hasAgy = true
+		case "copilot":
+			hasCopilot = true
 		}
+	}
+	if hasAgy {
+		installAgyStatusline()
+	}
+	if hasCopilot {
+		installCopilotStatusline()
 	}
 	return nil
 }

@@ -731,6 +731,11 @@ This ticket changes architecture only; saved fixtures and runtime verification b
   persistent TUI line show the visible role and identity through redraws. It preserves a different existing user
   `statusLine` command and emits a launch diagnostic that the Nightshift role line is unavailable in that pane. `/color` is Claude-only; the trust dialog is
   answered per tool (below).
+- Similarly for Copilot panes, `start` configures Copilot's user `statusLine` command in
+  `%COPILOT_HOME%\settings.json` (or `~/.copilot/settings.json`) as `nightshift statusline`: per-pane
+  `NIGHTSHIFT_ROLE`, `NIGHTSHIFT_IDENTITY` and manifest colour environment values make that
+  persistent TUI line show the visible role and identity through redraws. It preserves a different existing user
+  `statusLine` command and emits a launch diagnostic that the Nightshift role line is unavailable in that pane.
 - `pid_alive` counts `agy.exe` as a crew process alongside `claude.exe`/`node.exe`.
 - `start --dry-run` adds `tool`, `model`, `exe` and `command` to each non-Claude role; `command` is the
   argv the pane will run, built by the same `tool_command` that `pane()` uses, with `<brief>` and

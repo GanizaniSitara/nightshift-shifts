@@ -152,7 +152,8 @@ func launcherExe() string {
 // with forward slashes because Git Bash strips unquoted backslashes.
 func nightshiftCommand() string { return filepath.ToSlash(launcherExe()) }
 
-func agyStatuslineCmd() string { return nightshiftCommand() + " statusline" }
+func statuslineCmd() string    { return nightshiftCommand() + " statusline" }
+func agyStatuslineCmd() string { return statuslineCmd() }
 
 func toolExe(tool string) string {
 	if p, err := exec.LookPath(tool); err == nil {
@@ -1230,6 +1231,43 @@ func installAgyStatusline() bool {
 		}
 	}
 	data = setValue(data, "statusLine", object{{"type", "command"}, {"command", agyStatuslineCmd()}, {"enabled", true}, {"stack_with_default", true}})
+	if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
+		return false
+	}
+	return writeTextFile(path, renderJSON(data, true, true)+"\n") == nil
+}
+
+// installCopilotStatusline points copilot's status line at the generic Nightshift command, keeping a user's own.
+func installCopilotStatusline() bool {
+	home := os.Getenv("COPILOT_HOME")
+	if home == "" {
+		home = filepath.Join(userHome(), ".copilot")
+	}
+	path := filepath.Join(home, "settings.json")
+	data := object{}
+	if fileExists(path) {
+		text, err := readTextUniversal(path)
+		if err != nil {
+			return false
+		}
+		value, err := parseJSON([]byte(text))
+		o, ok := value.(object)
+		if err != nil || !ok {
+			return false
+		}
+		data = o
+	}
+	if current := rowValue(data, "statusLine"); truthy(current) {
+		o, ok := current.(object)
+		if !ok {
+			return false
+		}
+		if rowValue(o, "command") != statuslineCmd() {
+			errLine("Nightshift copilot role status line unavailable: preserving the existing custom statusLine command.")
+			return false
+		}
+	}
+	data = setValue(data, "statusLine", object{{"type", "command"}, {"command", statuslineCmd()}})
 	if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
 		return false
 	}
