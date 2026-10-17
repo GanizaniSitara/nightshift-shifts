@@ -73,3 +73,26 @@ Even with a 1M+ token window, Gemini's **active instruction compliance** drops n
 
 1. **"Nobody publishes a foreman/coder/tester prompt set" is wrong.** MetaGPT, ChatDev, CrewAI, and Microsoft's Magentic-One all publish explicit role-split prompt sets. What is missing in the literature is controlled length-ablation benchmarks on those prompts, not the prompts themselves.
 2. **The `CLAUDE.md` 60–200 line rule is conflated with system prompts.** HumanLayer's guidance targets *repo context files* layered atop Claude Code's built-in ~3,000-word system prompt. That strengthens §4's conclusion: because Claude Code, Copilot, Codex, and `agy` already inject large native system prompts, Nightshift's role brief competes for attention from line 1 and must stay under ~250 words.
+
+---
+
+## Follow-up: repository and site layers
+
+1. **Is the four-layer split right?**
+   The ownership split (Shift facts → Role page → Repository → Site) is right, but **Site is mostly machine config, not prose**. Nearly every example in §7b's Site row (*"which tools exist, which model names work here, the proxy, never push to main, only GitHub is reachable"*) belongs in `<state root>/site.yaml` enforced by `start`, `spawn`, `land`, and `crewEnv`, leaving at most ~50 words of site prose. Also, the §7b table says layers are "rendered in this order" (putting Site last), contradicting the bullet below it that **Hard rules** render last.
+
+2. **Are the budgets (150 words repo prose, 100 site, facts free) workable?**
+   Yes, with three adjustments:
+   - **Make 150 words the combined cap (`instructions.md` + `<role>.md`) per role**, and steer projects toward role-specific files (`tester.md`, `coder.md`) so shared prose does not crowd out the Tester's acceptance checklist.
+   - **Do not strip all repo/site rules from `compact` mode:** Expecting the Foreman to copy repo conventions into every `assign` call is fragile. Allow a **30-word checklist** from `<role>.md` in compact panes.
+   - **Guard "free" facts:** Restrict `config.yaml` facts (`build`, `test_one`, `lint`, `typecheck`, `protected_paths`) to single-line values, and have `nightshift claim` enforce `protected_paths` with exit code 4.
+
+3. **Where should repository prose render relative to the loop and hard rules?**
+   Render `# This repository` (and site rules) **before** `How a shift runs`, not between the loop and the hard rules:
+   `Shift & Repo Facts → # This repository / site → How a shift runs → Hard rules`.
+   Models treat numbered steps as an immediate execution sequence; placing repo rules *above* the loop primes the Foreman and Tester before they scope or verify, while **Hard rules** still win on recency at the bottom.
+
+4. **What goes wrong if "only GitHub is reachable" is just a site-file sentence?**
+   - **Compact panes never see it:** Because §7b drops prose in compact mode, a compact Coder or Tester will run `pip`, `cargo`, `npm`, or web fetches against blocked hosts and hang until the 900s `asg-timeout`.
+   - **Standard panes still try network calls when builds fail:** Models reflexively reach for package managers or web search on missing-import errors despite prose rules.
+   - **Enforce it in the tool:** Declare site constraints in `<state root>/site.yaml` so `crewEnv` sets offline/proxy variables (`PIP_NO_INDEX=1`, `CARGO_NET_OFFLINE=true`, `GOPROXY=off`, `HTTPS_PROXY`), CLI flags disable web search, and `doctor`/`start` validate allowed tools and models upfront.
