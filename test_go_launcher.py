@@ -28,7 +28,7 @@ import time
 
 import pytest
 
-from test_go_readonly import ORACLE_BOOT, RECORD, REPO, frozen, oracle, require_recording, write_json
+from test_go_readonly import ORACLE_BOOT, REBASE, RECORD, REPO, frozen, oracle, require_recording, write_json
 
 
 # argparse's top-level prog is basename(argv[0]); the oracle gets the native executable's name so the
@@ -401,7 +401,10 @@ def oracle_expected(args, env, launcher, before):
         assert state_snapshot(env) == before, f'Python oracle wrote state for dry-run/usage case {args}'
         return (ngh056_expected(normalise(oracle_with_reserved_coder(args, expected.stdout), launcher, False))[0],
                 ngh056_expected(normalise(expected.stderr, launcher, False))[0], expected.returncode)
-    stdout, stderr, code = frozen(compute, world_root(env), volatile(env))
+    def native():
+        actual = run(args, env, native=True)
+        return normalise(actual.stdout, launcher, True), normalise(actual.stderr, launcher, True), actual.returncode
+    stdout, stderr, code = frozen(native if REBASE else compute, world_root(env), volatile(env), record=REBASE)
     return subprocess.CompletedProcess(args, code, stdout, stderr)
 
 
@@ -586,9 +589,12 @@ def test_native_copy_without_crews_beside_it_uses_embedded_assets(start_world, p
             expected = run(args, env, native=False)
             return (normalise(oracle_with_reserved_coder(args, expected.stdout), python_launcher, False),
                     expected.returncode)
-        stdout, code = frozen(oracle_side, tmp_path)
         actual = subprocess.run([str(copied), *args], cwd=lonely, env=env, capture_output=True, timeout=60,
                                 stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+
+        def native_side():
+            return normalise(actual.stdout, python_launcher, True, exe=copied), actual.returncode
+        stdout, code = frozen(native_side if REBASE else oracle_side, tmp_path, record=REBASE)
         if unported(actual):
             pytest.skip('native binary has not ported start yet')
         assert actual.returncode == code == 0, actual.stderr

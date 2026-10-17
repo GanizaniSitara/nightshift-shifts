@@ -56,3 +56,24 @@ func TestWtStepsLeavesASingleCallAlone(t *testing.T) {
 		t.Fatalf("got %q want %q", got, want)
 	}
 }
+
+func TestWtCommandWideOpsPaneTakesTwoBottomCells(t *testing.T) {
+	splits := func(opsWidth, slots int) []string {
+		command := wtCommand(wtSpec{name: "n", stateDir: "s", modeFlag: "--start", members: []string{"Foreman"}, slots: slots,
+			opsWidth: opsWidth, opsDir: "R"})
+		out := []string{}
+		for i, part := range command {
+			if part == "split-pane" {
+				out = append(out, command[i+1]+" "+command[i+3])
+			}
+		}
+		return out
+	}
+	// Bottom row 1, 1 and 2 cells: slot 6 takes 3/4 of slot 5's pane, then Ops takes 2/3 of slot 6's.
+	if got, want := splits(2, 7), []string{"-H 0.5", "-V 0.75", "-V 0.6667", "-V 0.5", "-V 0.75", "-V 0.6667"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ops_width 2: got %q want %q", got, want)
+	}
+	if got, want := splits(1, 8), []string{"-H 0.5", "-V 0.75", "-V 0.6667", "-V 0.5", "-V 0.75", "-V 0.6667", "-V 0.5"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ops_width 1: got %q want %q", got, want)
+	}
+}

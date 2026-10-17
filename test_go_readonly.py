@@ -28,6 +28,9 @@ REPO = Path(__file__).resolve().parent
 GOLDEN = REPO / 'testdata' / 'go_readonly' / 'golden.json'
 GOLDENS = REPO / 'testdata' / 'goldens'
 RECORD = os.environ.get('NIGHTSHIFT_RECORD_GOLDENS') == '1'
+# Rebase: store the native binary's output for start dry-run parity cases whose behaviour moved on past the
+# frozen oracle (e.g. a crew key the oracle never had). Run only the affected tests with it set.
+REBASE = os.environ.get('NIGHTSHIFT_REBASE_GOLDENS') == '1'
 # In-process helpers only (named mutex, claims lock, path normaliser, schema, process probes), copied from
 # the retired Python launcher. Recording goldens needs that launcher: it lives in nightshift-shifts-python-archive.
 spec = importlib.util.spec_from_file_location('golden_oracle', REPO / 'testdata' / 'oracle_helpers.py')
@@ -161,14 +164,14 @@ class _Run:
         self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
 
 
-def frozen(compute, tmp_path, extra=None, roots=None):
+def frozen(compute, tmp_path, extra=None, roots=None, record=False):
     """The oracle's value for this call site. Recording runs compute() (the oracle) and stores it with
     fixture roots (tmp_path, its parent, the worker's base temp, the repository, any named roots) and the
     named volatile values tokenised; otherwise the stored value is returned with today's roots and values
     put back. A CompletedProcess is frozen as stdout, stderr and returncode."""
     path, key = _golden_key()
     pairs = _substitutions(Path(tmp_path), extra, roots)
-    if RECORD:
+    if RECORD or record:
         value = compute()
         stored = ({'run': [value.stdout, value.stderr, value.returncode]}
                   if isinstance(value, subprocess.CompletedProcess) else {'value': value})

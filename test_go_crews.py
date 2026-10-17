@@ -268,7 +268,8 @@ def test_without_drops_role_and_resplits_budget(world):
     # Advisor (slot 2) and Coder (slot 4, the crew still has an Apprentice) are reserved
     assert [s['role'] for s in plan['slots']][:4] == ['Foreman', None, 'Apprentice', None]
     assert plan['roles']['Coder']['reserved_slot'] == 4
-    assert len(plan['slots']) == 8 and 'Tester' not in [s['role'] for s in plan['slots']]
+    # ops_width: 2 merges the bottom-right two cells into the Ops pane, so 7 slots
+    assert len(plan['slots']) == 7 and 'Tester' not in [s['role'] for s in plan['slots']]
 
 
 def test_without_is_case_insensitive_and_idempotent(world):
@@ -471,7 +472,7 @@ def test_work_crew_dry_run(world):
     assert cmd[cmd.index('--context') + 1] == 'long_context'
     assert cmd[cmd.index('--reasoning-effort') + 1] == 'high'
     assert coder['permission_flags'] == ['--allow-all']
-    assert [s['role'] for s in plan['slots']] == ['Foreman', None, 'Coder', 'Tester', None, None, None, None]
+    assert [s['role'] for s in plan['slots']] == ['Foreman', None, 'Coder', 'Tester', None, None, None], 'Ops spans two cells'
 
 
 def test_work_yaml_manifest_fields():

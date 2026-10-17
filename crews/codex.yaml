@@ -5,6 +5,7 @@
 name: codex
 model: gpt-6.1-sol
 layout: 2x4
+ops_width: 2                 # the Ops pane (bottom right) spans two cells
 roles:
   - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: codex, model: gpt-6.1-sol, reasoning: high}
   - {role: Advisor, brief: advisor-cli.md, colour: purple, tool: codex, model: gpt-6-astra, reasoning: high}

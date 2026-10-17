@@ -4,6 +4,7 @@
 name: gemini
 model: gemini-4-argon-high
 layout: 2x4
+ops_width: 2                 # the Ops pane (bottom right) spans two cells
 contract: result.json
 roles:
   - {role: Foreman, brief: foreman-cli.md, human_contact: true, colour: red, tool: agy, model: gemini-4-argon-high, permissions: skip}

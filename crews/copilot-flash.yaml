@@ -6,6 +6,7 @@ name: copilot-flash
 permission_mode: auto
 model: gemini-3.8-flash
 layout: 2x4
+ops_width: 2                 # the Ops pane (bottom right) spans two cells
 contract: result.json
 max_credits: 120             # shift budget: 4 Copilot panes x 30
 roles:
