@@ -28,9 +28,9 @@ REPO = Path(__file__).resolve().parent
 GOLDEN = REPO / 'testdata' / 'go_readonly' / 'golden.json'
 GOLDENS = REPO / 'testdata' / 'goldens'
 RECORD = os.environ.get('NIGHTSHIFT_RECORD_GOLDENS') == '1'
-# In-process helpers only (named mutex, claims lock, path normaliser, schema, process probes):
-# none of them runs the oracle's commands. The oracle CLI itself runs only while recording.
-spec = importlib.util.spec_from_file_location('golden_oracle', REPO / 'nightshift_shifts.py')
+# In-process helpers only (named mutex, claims lock, path normaliser, schema, process probes), copied from
+# the retired Python launcher. Recording goldens needs that launcher: it lives in nightshift-shifts-python-archive.
+spec = importlib.util.spec_from_file_location('golden_oracle', REPO / 'testdata' / 'oracle_helpers.py')
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
 
