@@ -342,7 +342,7 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 			command = append(command, "--effort", reasoning)
 		}
 	}
-	env := crewEnv(os.Environ(), tool, account, envRole)
+	env := crewEnv(withSavedEnv(os.Environ()), tool, account, envRole)
 	if tool == "agy" || tool == "copilot" {
 		// agy and copilot status lines show the role from these
 		env = append(env, "NIGHTSHIFT_ROLE="+role, "NIGHTSHIFT_IDENTITY="+identity, "NIGHTSHIFT_ROLE_COLOUR="+colour)
