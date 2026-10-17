@@ -551,14 +551,15 @@ def test_start_dry_run_work_crew_through_native_binary(start_world):
     assert state_snapshot(env) == before
     plan = json.loads(proc.stdout)
     assert plan['crew'] == 'work'
-    assert plan['max_credits'] == 30
+    assert plan['max_credits'] == 60
     roles = plan['roles']
     assert roles['Advisor']['status'] == 'not_started' and roles['Advisor']['reserved_slot'] == 2
-    assert roles['Coder']['tool'] == 'copilot' and roles['Coder']['model'] == 'gemini-3.8-flash'
-    cmd = roles['Coder']['command']
-    idx = cmd.index('--max-ai-credits')
-    assert cmd[idx + 1] == '30'
-    assert 'tool' not in roles['Foreman'] and 'tool' not in roles['Tester']
+    for label in ('Coder', 'Tester'):
+        assert roles[label]['tool'] == 'copilot' and roles[label]['model'] == 'gemini-3.8-flash'
+        cmd = roles[label]['command']
+        idx = cmd.index('--max-ai-credits')
+        assert cmd[idx + 1] == '30'
+    assert 'tool' not in roles['Foreman']
 
 
 def test_start_dry_run_launcher_normalisation_is_the_only_argv_difference(start_world, python_launcher):

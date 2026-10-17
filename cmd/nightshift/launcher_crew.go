@@ -80,6 +80,10 @@ func assetDir(kind string) (string, fs.FS) {
 	if exe, err := os.Executable(); err == nil {
 		dir := filepath.Dir(exe)
 		for _, d := range []string{dir, filepath.Dir(dir)} {
+			// <state root>/bin/../crews is the machine layer, not the built-in copy.
+			if strings.EqualFold(filepath.Clean(d), filepath.Clean(stateRoot())) {
+				continue
+			}
 			if info, err := os.Stat(filepath.Join(d, kind)); err == nil && info.IsDir() {
 				return pyResolve(filepath.Join(d, kind)), nil
 			}

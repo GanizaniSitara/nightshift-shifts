@@ -36,6 +36,12 @@ copy crews\work.yaml C:\nightshift\crews\work.yaml
 ```
 Edit `C:\nightshift\crews\work.yaml` to adjust tools, models, accounts, or budgets. Because machine manifests shadow repo and built-in manifests, `nightshift start ... --crew work` automatically picks your machine copy.
 
+You don't need a machine copy to use a built-in crew. A copy keeps its old settings after an update, so after every pull and rebuild run:
+```cmd
+nightshift init
+```
+It creates the state folders, checks the agent tools are on `PATH`, and for each machine crew that differs from the built-in one it shows the changed lines and asks whether to replace it (the old file is kept as `NAME.yaml.old`; `--yes` replaces all without asking). `nightshift doctor` makes the same checks without changing anything.
+
 ### Inspecting visible crews
 
 Run `nightshift crews` to list all discovered manifests in JSON:
