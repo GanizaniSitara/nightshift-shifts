@@ -129,7 +129,19 @@ func writeJSONFile(path string, value any) error {
 	if err := os.WriteFile(tmp, []byte(strings.ReplaceAll(renderJSON(value, true, true), "\n", "\r\n")), 0666); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	// A reader holding path makes Windows refuse the rename (sharing violation); retry briefly.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := os.Rename(tmp, path)
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			os.Remove(tmp)
+			return err
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func setValue(o object, key string, value any) object {
