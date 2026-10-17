@@ -17,7 +17,7 @@ Nightshift coordinates multi-role AI agent crews (Foreman, Advisor, Coder, Teste
    ```cmd
    scripts\build.cmd
    ```
-   By default, this builds into `\nightshift\bin\nightshift.exe` on the drive the repo is cloned on (for example `D:\nightshift\bin`), and the binary keeps its state in `\nightshift` on that same drive. You can also specify an alternate output directory:
+   By default, this builds into `\nightshift\bin\nightshift.exe` on the drive the repo is cloned on (for example `D:\nightshift\bin`), and the binary keeps its state in `\nightshift` on that same drive. The crew, brief and persona templates are copied beside it (`\nightshift\bin\crews` and so on); your own crew overrides go in `\nightshift\crews`, and `nightshift init` offers to refresh any that are older than the templates. You can also specify an alternate output directory:
    ```cmd
    scripts\build.cmd D:\somewhere
    ```
