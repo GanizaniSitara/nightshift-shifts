@@ -201,3 +201,26 @@ def test_legacy_assets_are_embedded(start_world, tmp_path):
     # The legacy pages are the long ones: well over the new 250-word role budget.
     assert roles['Foreman']['brief_layers']['role'] > 1000, roles['Foreman']['brief_layers']
     assert sorted(p.name for p in lonely.iterdir()) == ['nightshift.exe']
+
+
+# ---------------------------------------------------------------- c9: the compact Apprentice's breaker feeds needs-senior
+
+@pytest.mark.parametrize('first_line,valid', [('APPRENTICE-NEEDS-SENIOR: the change needs a second file', True),
+                                              ('BLOCKED: the change needs a second file', False)])
+def test_compact_apprentice_breaker_report_makes_needs_senior_uplift_valid(tmp_path, first_line, valid):
+    """End to end: the report the compact Apprentice's circuit breaker tells it to send (brief_pages_test.go pins the
+    rendered line) is stored as the note the needs-senior trigger reads; the old BLOCKED wording is not."""
+    from test_go_bus_commands import bus_world, cli, header, insert, rows
+    env = bus_world(tmp_path / 'needs senior')
+    insert(env, 'assignment', 'Boss', 'Junior', asg='code-a', state='acknowledged')   # Junior is the Apprentice
+    msg_id, kind, asg = header(cli(env, 'report', 'alpha', 'Junior', first_line))
+    assert asg == 'code-a' and kind == ('note' if valid else 'result')
+    header(cli(env, 'ready', 'alpha', 'Senior'))
+    proc = cli(env, 'uplift', 'alpha', 'code-a', 'take it over', '--reason', 'needs-senior')
+    if valid:
+        uplift_id, kind, asg = header(proc)
+        row = next(r for r in rows(env) if r['id'] == uplift_id)
+        assert (kind, asg, row['recipient'], row['reason']) == ('uplift', 'code-a', 'Senior', 'needs-senior')
+        assert str(msg_id) in row['evidence']
+    else:
+        assert proc.returncode == 4 and b'uplift trigger not satisfied: needs-senior' in proc.stderr, proc.stderr

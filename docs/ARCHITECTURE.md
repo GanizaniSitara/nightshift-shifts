@@ -1269,11 +1269,14 @@ Order of a brief:
 4. The role page. Standard mode: the persona (identity and what good looks like) and the role's one-page brief,
    then a generated `## Messaging` paragraph (members: `nightshift wait` and `report`, plus for Claude that a
    SendMessage only says to run `wait`; a Claude lead gets just that SendMessage line, its page already runs on
-   `wait`). When the persona printed `# <Role>`, the brief's own title line is dropped. A crew with
+   `wait`). When the persona printed `# <Role>`, the brief's own title line is dropped and the brief follows under
+   `## Your loop`, so it does not read as part of "What good looks like". A crew with
    `briefs: legacy` renders persona, `---`, `# Protocol`, `common.md` and the brief exactly as NGH-062 did.
 5. `# Rules`, generated per role and never removed by another layer: members edit only claimed files and never
    commit or push; the lead never edits repository files or runs the suite and sends the human one line per
-   milestone; everyone acts only on the body `wait` or `ack` prints. The current brief set (NGH-063) adds the two
+   milestone; everyone acts only on the body `wait` or `ack` prints. In the current set a role page that says its
+   role never edits files (Advisor) or repository files (Decompiler, Researcher) gets "Never edit files" (or
+   "repository files") in place of the claim rule. The current brief set (NGH-063) also adds the two
    rules `common.md` used to carry: never launch sessions, windows, tabs or crews (members ask Foreman; only
    Foreman runs spawn, consult, summon and respawn), and where shift state lives (`<state_dir>`, its `bus.jsonl`
    and `nightshift log`).
@@ -1297,7 +1300,9 @@ everything else (Opus, Sonnet, Sol, Astra, Argon). Compact replaces the role pag
 literal commands (`ready`, `wait`, `claim`, `report`/`release`; the lead `wait`, `assign`/`note`, `commit`,
 `result`), a three-line report template (`<VERDICT>: <summary>`, `Files:`, `Checks:`), the first 30 words of
 `.nightshift/<role>.md` and the circuit breaker ("If a file not named in your assignment needs editing or a command
-fails twice, run `nightshift report SHIFT ROLE "BLOCKED: <reason>"` and stop", the lead `result ... blocked`);
+fails twice, run `nightshift report SHIFT ROLE "BLOCKED: <reason>"` and stop"; an Apprentice reports
+`"APPRENTICE-NEEDS-SENIOR: <reason>"` instead, which `report` stores as the note the needs-senior uplift trigger
+reads; the lead `result ... blocked`);
 the shift facts, repository and site prose (repository: `instructions.md` only) and the rules still apply.
 
 Budgets (words, `strings.Fields`): role page 250 standard / 150 compact, repository prose 150 combined per role,
@@ -1329,9 +1334,9 @@ Role-layer words from `start --dry-run` (`brief_layers.role`, in this repository
 
 | Crew | Foreman | Advisor | Coder | Tester | Apprentice |
 |---|---|---|---|---|---|
-| default | 241 standard | 204 standard | 243 standard | 218 standard | 101 compact |
-| work | 218 standard | 204 standard | 101 compact | 101 compact | - |
-| codex | 232 standard | 194 standard | 233 standard | 208 standard | 208 standard |
+| default | 244 standard | 207 standard | 246 standard | 221 standard | 101 compact |
+| work | 221 standard | 207 standard | 101 compact | 101 compact | - |
+| codex | 235 standard | 197 standard | 236 standard | 211 standard | 211 standard |
 | copilot | 135 compact | 101 compact | 101 compact | 101 compact | 101 compact |
 
 Specialists: Decompiler 235 and Researcher 173 (standard). With `briefs: legacy` the default crew renders

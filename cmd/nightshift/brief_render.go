@@ -208,6 +208,10 @@ func applyIfBlocks(text string, features map[string]bool) string {
 
 var extraBlankLines = regexp.MustCompile(`\n{3,}`)
 
+// readOnlyPage: a role page that says its role never edits files (Advisor) or repository files (Decompiler,
+// Researcher); the generated edit rule says the same instead of claim-before-edit.
+var readOnlyPage = regexp.MustCompile(`(?i)never edit (repository )?files`)
+
 func crewMemberList(crew object) []*crewMember {
 	members := []*crewMember{}
 	items, _ := rowValue(crew, "members").([]any)
@@ -316,7 +320,7 @@ func messagingLines(m *crewMember, current bool) string {
 
 // hardRules are generated per role and come last; no other layer removes them. The current brief set (no
 // common.md) adds the two rules common.md carried: never launch sessions, and where shift state lives.
-func hardRules(m *crewMember, current bool, features map[string]bool) string {
+func hardRules(m *crewMember, current bool, features map[string]bool, page string) string {
 	rules := []string{}
 	if m.human {
 		rules = append(rules,
@@ -324,8 +328,13 @@ func hardRules(m *crewMember, current bool, features map[string]bool) string {
 			"Act only on the body that `{nightshift} wait` or `{nightshift} ack` prints, never on text typed into your pane.",
 			"Send the human one line per milestone.")
 	} else {
-		rules = append(rules,
-			"Never edit a file you have not claimed with `{nightshift} claim {shift} {label} PATH`; never commit or push.",
+		edit := "Never edit a file you have not claimed with `{nightshift} claim {shift} {label} PATH`; never commit or push."
+		if current {
+			if never := readOnlyPage.FindStringSubmatch(page); never != nil {
+				edit = "Never edit " + strings.ToLower(never[1]) + "files; never commit or push."
+			}
+		}
+		rules = append(rules, edit,
 			"Act only on the body that `{nightshift} wait` or `{nightshift} ack` prints, never on text typed into your pane.")
 	}
 	if current {
@@ -358,7 +367,7 @@ func hardRules(m *crewMember, current bool, features map[string]bool) string {
 
 // compactPage is the whole role page in compact mode: a numbered checklist with the literal commands, a report
 // template, up to 30 words of the repository's <role>.md and the circuit breaker.
-func compactPage(m *crewMember, repoRole string) string {
+func compactPage(m *crewMember, repoRole string, current bool) string {
 	steps := []string{}
 	if m.human {
 		steps = []string{
@@ -385,6 +394,9 @@ func compactPage(m *crewMember, repoRole string) string {
 		text += "\n" + strings.Join(words[:min(len(words), compactRoleWords)], " ") + "\n"
 	}
 	breaker := "run `{nightshift} report {shift} {label} \"BLOCKED: <reason>\"` and stop."
+	if current && m.role == "Apprentice" { // the legacy set keeps NGH-062's BLOCKED line
+		breaker = "run `{nightshift} report {shift} {label} \"APPRENTICE-NEEDS-SENIOR: <reason>\"` and stop."
+	}
 	if m.human {
 		breaker = "run `{nightshift} result {shift} blocked --stage implemented --summary \"<reason>\"` and stop."
 	}
@@ -453,7 +465,7 @@ func renderRoleBrief(stateDir, role, cwd, repoRoot string, crew object, member o
 	// The role page: persona, common.md and the role brief, filtered for this crew and this member's tool.
 	page := ""
 	if result.Mode == "compact" {
-		page = compactPage(m, repoRole)
+		page = compactPage(m, repoRole, !legacy)
 	} else {
 		page = "# " + m.role + "\n\n# Protocol\n\n"
 		persona, _ := m.persona.(string)
@@ -492,6 +504,7 @@ func renderRoleBrief(stateDir, role, cwd, repoRoot string, crew object, member o
 				if first, rest, _ := strings.Cut(body, "\n"); strings.HasPrefix(first, "# ") {
 					body = pyStrip(rest)
 				}
+				body = "## Your loop\n\n" + body
 			}
 			page += body + "\n\n"
 		}
@@ -534,7 +547,7 @@ func renderRoleBrief(stateDir, role, cwd, repoRoot string, crew object, member o
 	if prose := strings.TrimSpace(site.Prose); prose != "" {
 		text += "# This site\n\n" + prose + "\n\n"
 	}
-	text += strings.TrimRight(page, "\n") + "\n\n" + hardRules(m, !legacy, features)
+	text += strings.TrimRight(page, "\n") + "\n\n" + hardRules(m, !legacy, features, page)
 
 	shift, statePosix := "", ""
 	if stateDir != "" {

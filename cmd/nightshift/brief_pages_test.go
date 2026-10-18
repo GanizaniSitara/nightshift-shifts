@@ -89,3 +89,81 @@ func TestNewRolePagesWithinBudget(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------- c9 fix-forward
+
+func TestCompactApprenticeBreakerIsTheNeedsSeniorNote(t *testing.T) {
+	f := tbNewRenderFixture(t)
+	crew := tbCrewOf(tbCrewMember("Foreman", "Foreman", "claude", "claude-opus-5-5"),
+		tbCrewMember("Apprentice", "Apprentice", "agy", "gemini-3.8-flash-high"),
+		tbCrewMember("Coder", "Coder", "claude", "claude-opus-5-5", pair{"brief_mode", "compact"}))
+	appr := f.render(crew, "Apprentice")
+	if appr.Mode != "compact" {
+		t.Fatalf("Flash Apprentice renders %s", appr.Mode)
+	}
+	if tbLineWith(appr.Text, " report Nightshift-shift-render Apprentice \"APPRENTICE-NEEDS-SENIOR: <reason>\"") == "" {
+		t.Fatalf("compact Apprentice breaker must be the APPRENTICE-NEEDS-SENIOR report:\n%s", appr.Text)
+	}
+	if strings.Contains(appr.Text, "BLOCKED: <reason>") {
+		t.Fatal("the Apprentice's breaker replaces BLOCKED")
+	}
+	coder := f.render(crew, "Coder").Text
+	if tbLineWith(coder, " report Nightshift-shift-render Coder \"BLOCKED: <reason>\"") == "" || strings.Contains(coder, "APPRENTICE-NEEDS-SENIOR") {
+		t.Fatalf("other compact roles keep BLOCKED:\n%s", coder)
+	}
+}
+
+func TestCurrentPagesPutTheRoleBriefUnderYourLoop(t *testing.T) {
+	f := tbNewRenderFixture(t)
+	for _, label := range []string{"Coder", "Tester"} {
+		text := f.render(tbDefaultCrew(), label).Text
+		loop := tbIndexOrFail(t, text, "## Your loop")
+		good := tbIndexOrFail(t, text, "## What good looks like")
+		first := regexp.MustCompile(`(?m)^1\. `).FindStringIndex(text)
+		if first == nil || !(good < loop && loop < first[0]) {
+			t.Fatalf("%s: '## Your loop' must sit between the persona and the numbered loop", label)
+		}
+		if strings.Count(text, "## Your loop") != 1 {
+			t.Fatalf("%s: one loop heading", label)
+		}
+	}
+	legacy := f.render(tbWithKey(tbDefaultCrew(), "briefs", "legacy"), "Coder").Text
+	if strings.Contains(legacy, "## Your loop") {
+		t.Fatal("legacy renders unchanged: no loop heading")
+	}
+}
+
+func TestReadOnlyRolesGetTheirOwnEditRule(t *testing.T) {
+	f := tbNewRenderFixture(t)
+	crew := tbCrewOf(tbCrewMember("Foreman", "Foreman", "claude", "claude-opus-5-5"),
+		tbCrewMember("Advisor", "Advisor", "claude", "claude-fable-5-1"),
+		setValue(tbCrewMember("Decompiler", "Decompiler", "claude", "claude-opus-5-5"), "persona", ""),
+		setValue(tbCrewMember("Researcher", "Researcher", "claude", "claude-opus-5-5"), "persona", ""),
+		tbCrewMember("Coder", "Coder", "claude", "claude-opus-5-5"),
+		tbCrewMember("Tester", "Tester", "claude", "claude-opus-5-5"),
+		tbCrewMember("UITester", "UITester", "claude", "claude-opus-5-5"))
+	crew = tbWithKey(crew, "advisor_slot", 2)
+	want := map[string]string{
+		"Advisor":    "1. Never edit files; never commit or push.",
+		"Decompiler": "1. Never edit repository files; never commit or push.",
+		"Researcher": "1. Never edit repository files; never commit or push.",
+	}
+	for label, rule := range want {
+		rules := tbRulesSection(t, f.render(crew, label).Text)
+		if !strings.Contains(rules, rule) {
+			t.Fatalf("%s rules lack %q:\n%s", label, rule, rules)
+		}
+		if strings.Contains(rules, "have not claimed") {
+			t.Fatalf("%s never edits: no claim rule:\n%s", label, rules)
+		}
+	}
+	for _, label := range []string{"Coder", "Tester", "UITester"} {
+		if !strings.Contains(tbRulesSection(t, f.render(crew, label).Text), "Never edit a file you have not claimed") {
+			t.Fatalf("%s keeps the claim rule", label)
+		}
+	}
+	legacy := tbRulesSection(t, f.render(tbWithKey(crew, "briefs", "legacy"), "Advisor").Text)
+	if !strings.Contains(legacy, "Never edit a file you have not claimed") {
+		t.Fatalf("legacy renders unchanged (claim rule for the legacy Advisor):\n%s", legacy)
+	}
+}
