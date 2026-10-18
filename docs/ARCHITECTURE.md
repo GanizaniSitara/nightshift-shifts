@@ -844,11 +844,11 @@ helper, text on stdin never argv, started detached and hidden). The helper binar
 
 ## Window and pane titles (NGH-023, NGH-028)
 
-- Every `start` pane, crew panes and empty container slots alike, is titled `<ticket or shift> shift`:
-  `NGH-025 shift`; a free-text shift uses its shift name (`Nightshift-shift-1a2b3c4d shift`). So the
+- NGH-070: every `start` pane, crew panes and empty container slots alike, is titled
+  `shift-<id> | <ticket>` (or just `shift-<id>` for a free-text task). So the
   window reads the same whichever pane has focus. `--suppressApplicationTitle` keeps the CLI from
   overwriting it. Copilot needs `COPILOT_DISABLE_TERMINAL_TITLE=1` because
-  `--suppressApplicationTitle` alone does not hold. One helper (`pane_title`) builds it for
+  `--suppressApplicationTitle` alone does not hold. One helper (`shiftTitle`) builds it for
   `wt_command` and the dry-run plan (`roles` and `slots`). Before NGH-028 panes were
   `<ticket or shift> <Role>` and empty slots
   `<ticket or shift> slot N`.
@@ -856,7 +856,7 @@ helper, text on stdin never argv, started detached and hidden). The helper binar
 - `loop` sets its own console title to `Nightshift <first>..<last>` (`Nightshift NGH-019` for one
   ticket; `loop_title`), and a finished loop closes the Terminal window with that title.
 - `down` closes the hwnd recorded in `launch.json`; without one it falls back to the single window
-  titled `<ticket or shift> shift`, or the older `<ticket or shift> <Role>`, or a bare
+  with the new shift title, or legacy `<ticket or shift> shift`, older `<ticket or shift> <Role>`, or a bare
   `Foreman`/`Coder` for shifts from before NGH-023.
 
 ## Codex identity, colour and ticket extraction (NGH-033)
@@ -1243,11 +1243,25 @@ The Foreman's file also carries its existing `permissions.deny` `Edit(/<repo>/**
 Claude takes one `--settings`. Consult/summon/respawn panes (the rebuilt Claude command) get the same file without the
 deny.
 
-`nightshift statusline` with `--role` reads Claude's status-line JSON from stdin: with `cost.total_cost_usd` it
-prints `<Role> · <identity> · $1.23` in the role colour and, when the value changed, records a `usd` sample (source
-`statusline`) in `<Role>-usage.json`; without it, `· N tokens` from `transcript_path`'s token total (not recorded:
-the patrol samples tokens from the transcript). Without `--role` it is unchanged: `NIGHTSHIFT_ROLE`,
-`NIGHTSHIFT_IDENTITY`, `NIGHTSHIFT_ROLE_COLOUR` (agy and Copilot panes). It always exits 0.
+NGH-070: `nightshift statusline` with `--role` reads Claude's status-line JSON from stdin and prints
+`shift-<id> | <model> | ctx <N>% left`, then ` | $12.30` only when `cost.total_cost_usd` is present
+(including zero, two decimal places). There is no role token, cwd basename or token-total fallback.
+`model.display_name` falls back to `model.id`; `context_window.remaining_percentage` falls back to
+100 minus `used_percentage`. Missing/invalid fields omit their segment. These fields are documented in
+[Claude's status-line contract](https://code.claude.com/docs/en/statusline); the local package is 2.1.295.
+The existing per-pane `<Role>.claude-settings.json` remains the launch override; global settings are untouched.
+Cost changes still record a `usd` sample (source `statusline`) in `<Role>-usage.json`, and NGH-069's
+session-fenced context callback still runs. The patrol's existing dollar parser accepts the final pipe segment.
+Without `--role`, the role-coloured `NIGHTSHIFT_ROLE`/`NIGHTSHIFT_IDENTITY` formatter (agy and Copilot)
+is unchanged. Codex keeps its native footer. The command always exits 0.
+
+New native shifts use `shift-<8 hex digits>` for state folders, worktree basenames and the identity prefix
+(`<shift>-foreman`, etc.). `shortShiftName` normalizes the legacy prefix for display only: no existing folder,
+worktree or live window is renamed. Directory discovery and exact/suffix/latest resolution continue to accept
+`Nightshift-shift-*` for status, down and queue; `--continue-from` still reads either folder path.
+The recorded hwnd remains the primary close target; title fallback recognizes both naming generations.
+Screenshot acceptance needs an existing window running this version; this increment does not launch or modify
+a live crew merely to obtain the requested 2x4 screenshot.
 
 #### Foreman page (`briefs/foreman.md`)
 

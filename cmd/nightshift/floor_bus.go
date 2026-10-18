@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -438,10 +439,10 @@ func statuslineCommand(argv []string) int {
 	colourName := os.Getenv("NIGHTSHIFT_ROLE_COLOUR")
 	// A Claude pane names itself in its settings file (NGH-066): the line also shows, and records, its cost.
 	args, _ := parseWriteArgs(argv, []writeOption{{name: "--state-dir"}, {name: "--role"}, {name: "--identity"}, {name: "--colour"}}, nil, nil)
-	suffix := ""
 	if args.present["--role"] {
 		role, identity, colourName = args.values["--role"], args.values["--identity"], args.values["--colour"]
-		suffix = claudeStatusCost(args.values["--state-dir"], role, input)
+		outLine(claudeStatusline(args.values["--state-dir"], role, input))
+		return 0
 	} else if dir := os.Getenv("NIGHTSHIFT_STATE_DIR"); dir != "" {
 		payload, _ := parseJSON(input)
 		o, _ := payload.(object)
@@ -461,9 +462,43 @@ func statuslineCommand(argv []string) int {
 		case "yellow":
 			colour = "33"
 		}
-		outLine(fmt.Sprintf("\033[%sm%s · %s%s\033[0m", colour, role, identity, suffix))
+		outLine(fmt.Sprintf("\033[%sm%s · %s\033[0m", colour, role, identity))
 	}
 	return 0
+}
+
+func claudeStatusline(stateDir, role string, input []byte) string {
+	_ = claudeStatusCost(stateDir, role, input)
+	payload, _ := parseJSON(input)
+	o, _ := payload.(object)
+	model, _ := rowValue(o, "model").(object)
+	name := objectString(model, "display_name")
+	if name == "" {
+		name = objectString(model, "id")
+	}
+	window, _ := rowValue(o, "context_window").(object)
+	left, ok := objectNumber(window, "remaining_percentage")
+	value := numberFloat(left)
+	if !ok {
+		if used, exists := objectNumber(window, "used_percentage"); exists {
+			value, ok = 100-numberFloat(used), true
+		}
+	}
+	line := shortShiftName(filepath.Base(stateDir))
+	if name != "" {
+		line += " | " + name
+	}
+	if ok && value >= 0 && value <= 100 && !math.IsNaN(value) {
+		line += " | ctx " + strconv.FormatFloat(value, 'f', -1, 64) + "% left"
+	}
+	cost, _ := rowValue(o, "cost").(object)
+	if dollars, exists := objectNumber(cost, "total_cost_usd"); exists {
+		value := numberFloat(dollars)
+		if value >= 0 && !math.IsInf(value, 0) && !math.IsNaN(value) {
+			line += fmt.Sprintf(" | $%.2f", value)
+		}
+	}
+	return line
 }
 
 // claudeStatusCost reads Claude's status-line JSON: cost.total_cost_usd, recorded as a usd sample in the role's

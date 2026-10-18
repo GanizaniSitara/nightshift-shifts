@@ -14,7 +14,7 @@ set "GOTOOLCHAIN=local"
 "%GOEXE%" test ./...
 if errorlevel 1 exit /b %ERRORLEVEL%
 
-C:/miniconda3/envs/python312/python.exe -m pytest test_go_readonly.py test_go_write_commands.py test_go_lifecycle.py test_go_launcher.py test_go_crews.py test_go_telemetry.py test_go_bus_commands.py test_go_failure_events.py test_go_brief_render.py test_go_briefs_pages.py test_go_nudge_retry.py test_go_patrol.py test_go_codex_identity.py test_go_console.py test_go_compaction.py -q -k "not real_console" -n auto --dist loadgroup
+C:/miniconda3/envs/python312/python.exe -m pytest test_go_readonly.py test_go_write_commands.py test_go_lifecycle.py test_go_launcher.py test_go_crews.py test_go_telemetry.py test_go_bus_commands.py test_go_failure_events.py test_go_brief_render.py test_go_briefs_pages.py test_go_nudge_retry.py test_go_patrol.py test_go_codex_identity.py test_go_console.py test_go_compaction.py test_go_footer.py -q -k "not real_console" -n auto --dist loadgroup
 if errorlevel 1 exit /b %ERRORLEVEL%
 
 endlocal & exit /b 0

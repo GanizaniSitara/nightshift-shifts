@@ -187,7 +187,7 @@ func runStart(argv []string, print bool) (string, error) {
 				"committed before redoing anything.\n\n" + text
 		}
 	}
-	name := "Nightshift-shift-" + randomHex(8)
+	name := "shift-" + randomHex(8)
 	stateDir := filepath.Join(stateRoot(), "shifts", name)
 	cwd := args.values["--cwd"]
 	if cwd == "" {
@@ -277,10 +277,7 @@ func runStart(argv []string, print bool) (string, error) {
 			colours[m.label] = m.colour
 		}
 	}
-	title := paneTitle(name)
-	if ticket != "" {
-		title = paneTitle(ticket)
-	}
+	title := shiftTitle(name, ticket)
 	reserved := map[int]string{}
 	for _, slot := range []int{advisorSlot, coderSlot} {
 		if slot > 0 && slot <= len(members) {
@@ -642,7 +639,7 @@ func takeFolderLock(cwd, name, stateDir string) error {
 	path := lockPath(cwd)
 	held := func(shift, dir string) error {
 		message := fmt.Sprintf("folder %s is held by live shift %s (state dir %s); stop it with `nightshift down %s` first",
-			cwd, shift, dir, strings.TrimPrefix(shift, "Nightshift-shift-"))
+			cwd, shift, dir, strings.TrimPrefix(shortShiftName(shift), "shift-"))
 		errLine(message)
 		return commandError{3, message}
 	}
@@ -782,6 +779,21 @@ func layoutDescription(n int) string {
 // paneTitle is the title of every pane and slot of a start container.
 func paneTitle(label string) string { return label + " shift" }
 
+func shortShiftName(name string) string {
+	if strings.HasPrefix(name, "Nightshift-shift-") {
+		return strings.TrimPrefix(name, "Nightshift-")
+	}
+	return name
+}
+
+func shiftTitle(name, ticket string) string {
+	title := shortShiftName(name)
+	if ticket != "" {
+		title += " | " + ticket
+	}
+	return title
+}
+
 func loopTitle(tickets []string) string {
 	if len(tickets) == 0 {
 		return "Nightshift loop"
@@ -820,6 +832,9 @@ func wtCommand(w wtSpec) []string {
 	if w.ticket != "" {
 		label = w.ticket
 	}
+	if start {
+		label = shiftTitle(w.name, w.ticket)
+	}
 	command := []string{"wt.exe", "-w", "-1", "--pos", "0,0", "--maximized"}
 	separate := func(parts []string) {
 		if len(command) > 6 {
@@ -840,7 +855,7 @@ func wtCommand(w wtSpec) []string {
 		}
 		title := "Nightshift | " + role + " | " + w.name
 		if start {
-			title = paneTitle(label)
+			title = label
 		}
 		command = append(command, "--title", title, "--suppressApplicationTitle", "-d", dir, exe, "--pane", role,
 			"--state-dir", w.stateDir)
@@ -877,7 +892,11 @@ func wtCommand(w wtSpec) []string {
 		if w.opsDir != "" && w.slots != 0 && i == w.slots-1 {
 			cellDir = w.opsDir
 		}
-		command = append(command, "--title", paneTitle(label), "--suppressApplicationTitle", "-d", cellDir,
+		cellTitle := paneTitle(label)
+		if start {
+			cellTitle = label
+		}
+		command = append(command, "--title", cellTitle, "--suppressApplicationTitle", "-d", cellDir,
 			"cmd.exe", "/k", exe, "--slot", strconv.Itoa(i+1), "--state-dir", w.stateDir)
 	}
 	n := w.slots

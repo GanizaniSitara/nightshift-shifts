@@ -47,7 +47,7 @@ BOOT = BOOT.replace('n.main()',"n.FLOOR_FILE = n.SOLID_DIR / 'floor.json'\n"
                                        'n.main()')
 DEAD_PID = 2147483000
 INVALID_HWND = 0x7FFFFFFF
-SHIFT_ID = re.compile(rb'Nightshift-shift-([0-9a-f]{8})(?![0-9A-Za-z])')
+SHIFT_ID = re.compile(rb'(?:Nightshift-)?shift-([0-9a-f]{8})(?![0-9A-Za-z])')
 STAMP = re.compile(rb'"(created_at|reaped_at|dispatched_at|last_warden_at)": "'
                    rb'(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)"')
 CREWS = sorted(p.stem for p in (REPO / 'crews').glob('*.yaml'))
@@ -492,6 +492,23 @@ def world_root(env):
     return Path(env['NIGHTSHIFT_HOME']).parent
 
 
+def ngh070_start_expected(data):
+    """Apply only the approved generated-name/title delta to frozen start plans."""
+    try:
+        plan = json.loads(data)
+    except (ValueError, UnicodeDecodeError):
+        return data
+    if not isinstance(plan, dict) or plan.get('shift') != 'Nightshift-shift-<id>':
+        return data
+    old_title = next(iter(plan['roles'].values()))['pane_title']
+    title = 'shift-<id>' + (' | ' + plan['ticket'] if plan.get('ticket') else '')
+    # Preserve every other byte, including legacy source paths and brief content.
+    data = data.replace(b'Nightshift-shift-<id>', b'shift-<id>')
+    old_title = old_title.replace('Nightshift-shift-<id>', 'shift-<id>')
+    return data.replace(json.dumps(old_title, ensure_ascii=True).encode(),
+                        json.dumps(title, ensure_ascii=True).encode())
+
+
 def oracle_expected(args, env, launcher, before):
     """The oracle's run as the native side must reproduce it: launcher pair, NGH-056 deltas and the reserved
     Coder applied. Frozen (NGH-055), so only recording runs the oracle."""
@@ -508,6 +525,8 @@ def oracle_expected(args, env, launcher, before):
     if not REBASE:
         # NGH-060 postdates the recorded goldens: its help lines go on top of the frozen value, never into it.
         stdout = apply_help_deltas(stdout, NGH060_HELP_DELTAS + NGH061_HELP_DELTAS)[0]
+        if args[:1] == ['start']:
+            stdout = ngh070_start_expected(stdout)
     return subprocess.CompletedProcess(args, code, stdout, stderr)
 
 
@@ -703,6 +722,8 @@ def test_native_copy_without_crews_beside_it_uses_embedded_assets(start_world, p
         def native_side():
             return normalise(native_stdout, python_launcher, True, exe=copied), actual.returncode
         stdout, code = frozen(native_side if REBASE else oracle_side, tmp_path, record=REBASE)
+        if not REBASE:
+            stdout = ngh070_start_expected(stdout)
         if unported(actual):
             pytest.skip('native binary has not ported start yet')
         assert actual.returncode == code == 0, actual.stderr
