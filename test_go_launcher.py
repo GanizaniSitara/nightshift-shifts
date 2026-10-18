@@ -64,7 +64,7 @@ import (
 )
 
 // A fake tasks-cli (get ID prints FAKE_TASKS_DIR/ID.json), renamed claude.exe a harmless sleeper, and renamed
-// agy/codex/copilot/agents-cli a stub that appends its argv, cwd and crew env to FAKE_RECORD_DIR/calls.jsonl
+// agy/codex/copilot/console-helper a stub that appends its argv, cwd and crew env to FAKE_RECORD_DIR/calls.jsonl
 // and exits 7 without doing anything.
 func main() {
 	if len(os.Args) == 3 && os.Args[1] == "sleep" {
@@ -136,7 +136,7 @@ def fake_bin(tmp_path_factory):
     sleeper_dir = base / 'sleeper'
     sleeper_dir.mkdir()
     shutil.copyfile(bin_dir / 'tasks-cli.exe', sleeper_dir / 'claude.exe')
-    shutil.copyfile(bin_dir / 'tasks-cli.exe', bin_dir / 'agents-cli.exe')
+    shutil.copyfile(bin_dir / 'tasks-cli.exe', bin_dir / 'console-helper.exe')
     return bin_dir, sleeper_dir / 'claude.exe'
 
 
@@ -209,6 +209,7 @@ def base_env(base, fake_bin):
                 'GIT_CEILING_DIRECTORIES': str(base)})
     if fake_bin:
         env['PATH'] = str(fake_bin[0]) + os.pathsep + env.get('PATH', '')
+        env['NIGHTSHIFT_CONSOLE_HELPER'] = str(fake_bin[0] / 'console-helper.exe')
     user = os.environ.get('USERPROFILE', '').lower()
     paths = [p for p in env.get('PATH', '').split(os.pathsep)
              if p.strip() and not (
@@ -1057,7 +1058,7 @@ def test_floor_oracle_cases_reach_the_intended_branch(floor_world):
 
 def test_warden_delivery_attempt_keys_match_python_float_repr(tmp_path, fake_bin, sleeper):
     """Non-dry-run warden, made safe: no dead slot (so no recover/spawn), no idle session (so no nudge), and the
-    fake agents-cli first on PATH so every send fails. The attempt file must key on id:<Python float repr of the
+    fake console helper so every send fails. The attempt file must key on id:<Python float repr of the
     recipient's current incarnation>, and only rows for the current incarnation are attempted."""
     pid, created = sleeper
     incarnations = {'Tester': created, 'Coder': created + 1 / 3}   # 'x.0' and a long shortest-repr float
@@ -1092,9 +1093,9 @@ def test_warden_delivery_attempt_keys_match_python_float_repr(tmp_path, fake_bin
             states = conn.execute('SELECT id, state FROM messages ORDER BY id').fetchall()
         finally:
             conn.close()
-        calls = [c['argv'][0] for c in map(json.loads, (base / 'calls.jsonl').read_text().splitlines())]
+        calls = [c['argv'][1] if c['argv'][:1] == ['_attach'] else c['argv'][0] for c in map(json.loads, (base / 'calls.jsonl').read_text().splitlines())]
         return (proc.returncode, normalise(proc.stdout), proc.stderr, attempts, states,
-                calls.count('send'))
+                calls.count('inject') if native else calls.count('send'))
     observed = [frozen(lambda: observe(False), tmp_path,
                        {'SLEEPER_PID': pid, 'SLEEPER_STARTED': created, 'CODER_INCARNATION': incarnations['Coder'],
                         'STALE_INCARNATION': created - 50.0})]
@@ -1393,7 +1394,7 @@ def pane_world(base, fake_bin, sleeper):
     record = base / 'record'
     record.mkdir()
     env.update(LOCALAPPDATA=str(local), APPDATA=str(roaming), FAKE_RECORD_DIR=str(record),
-               CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='inherited', CLAUDE_AFK_TIMEOUT_MS='9', NO_COLOR='1',
+               CLAUDECODE='1', CLAUDE_CODE_SESSION_ID='inherited', CLAUDE_AFK_TIMEOUT_MS='9', CLAUDE_AFK_COUNTDOWN_MS='2147483647', DISABLE_AUTOUPDATER='1', NO_COLOR='1',
                # Python's Path.home() is USERPROFILE outside the oracle patch; give both the fixture home.
                USERPROFILE=env['NIGHTSHIFT_HOME'])
     env['PATH'] = str(stub_bin) + os.pathsep + env['PATH']
@@ -1427,16 +1428,8 @@ def pane_observation(env, d, record, label, slot):
     slot_record = json.loads((d / 'slots' / f'{slot}.json').read_text(encoding='utf-8'))
     assert slot_record.pop('wrapper_pid') and isinstance(slot_record.pop('started'), float)
     calls = [json.loads(line) for line in (record / 'calls.jsonl').read_text(encoding='utf-8').splitlines()]
-    # Trust-dialog peeks and Codex rename attempts race the stub's exit; the launch and the agents-cli name are not.
-    calls = [c for c in calls if c['exe'] != 'agents-cli' or c['argv'][:1] == ['name']]
-    for c in calls:
-        if c['exe'] == 'agents-cli':
-            assert c['argv'][1].isdigit()
-            c['argv'][1] = '<child pid>'
-            c['env'] = {k: v for k, v in c['env'].items()
-                        if k in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_AFK_COUNTDOWN_MS',
-                                 'CLAUDE_AFK_TIMEOUT_MS', 'COLORTERM', 'DISABLE_AUTOUPDATER',
-                                 'FORCE_COLOR', 'NO_COLOR', 'TERM')}
+    # Console-helper observations race the stub process exit; compare tool launch records separately.
+    calls = [c for c in calls if c['exe'] not in ('agents-cli', 'console-helper')]
     return info, slot_record, calls
 
 
@@ -1479,7 +1472,11 @@ def test_hidden_pane_start_runs_same_stub_argv_and_records(tmp_path, fake_bin, s
         assert observed[0][1]['history'][-1]['started'] == 1000.5
         assert observed[0][3][0]['env'].get('CODEX_HOME', '').endswith('.codex-second')
     assert 'CLAUDECODE' not in observed[0][3][0]['env'] and observed[0][3][0]['env']['CLAUDE_AFK_TIMEOUT_MS'] == '9'
-    assert_equal_bytes(normalise(observed[1][0].encode(), python_launcher, True), observed[0][0], f'--pane {label}')
+    # NGH-068 removes display-only agents-cli name registration.
+    expected = json.loads(observed[0][0])
+    expected[-1] = [c for c in expected[-1] if c['exe'] != 'agents-cli']
+    expected = json.dumps(expected, ensure_ascii=False, indent=1).encode()
+    assert_equal_bytes(normalise(observed[1][0].encode(), python_launcher, True), expected, f'--pane {label}')
 
 
 def test_hidden_pane_start_rejects_label_outside_crew(tmp_path, fake_bin, sleeper):

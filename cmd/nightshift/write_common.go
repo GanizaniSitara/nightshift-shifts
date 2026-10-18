@@ -55,7 +55,7 @@ func takeFileLock(path string, wait, stale time.Duration) error {
 			if time.Now().After(deadline) {
 				return fmt.Errorf("%s is still held after %.0fs", path, wait.Seconds())
 			}
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 		} else if errors.Is(err, os.ErrPermission) {
 			if time.Now().After(deadline) {
 				return err

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"nightshift-readonly/internal/console"
 )
 
 func loadDenials(stateDir string) []any {
@@ -72,34 +73,13 @@ func recordDenials(stateDir string, tails object) ([]any, error) {
 }
 
 func paneTail(pid uint32, lines int) []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	var stdout bytes.Buffer
-	peek := exec.CommandContext(ctx, "agents-cli", "_attach", "peek", strconv.FormatUint(uint64(pid), 10), "0")
-	peek.Stdout = &stdout
-	if err := peek.Run(); err != nil && ctx.Err() != nil {
-		return []string{}
-	}
-	value, err := parseJSON(stdout.Bytes())
+	screen, err := console.Peek(pid, 0)
 	if err != nil {
 		return []string{}
 	}
-	screen, ok := value.(object)
-	if !ok {
-		return []string{}
-	}
-	value, ok = objectGet(screen, "lines")
-	if !ok {
-		return []string{}
-	}
-	all, ok := value.([]any)
-	if !ok {
-		return []string{}
-	}
-	visible := make([]string, 0, len(all))
-	for _, item := range all {
-		line, ok := item.(string)
-		if ok && strings.TrimSpace(line) != "" {
+	visible := make([]string, 0, len(screen.Lines))
+	for _, line := range screen.Lines {
+		if strings.TrimSpace(line) != "" {
 			visible = append(visible, line)
 		}
 	}

@@ -177,6 +177,10 @@ def test_legacy_briefs_reproduce_ngh062(tmp_path, fake_bin, sleeper, python_laun
     if REBASE:
         return
     actual = observe()
+    # NGH-068 removes display-only agents-cli name registration.
+    expected = json.loads(expected)
+    expected[-1] = [c for c in expected[-1] if c['exe'] != 'agents-cli']
+    expected = json.dumps(expected, ensure_ascii=False, indent=1)
     assert actual == expected, f'briefs: legacy differs from NGH-062 for {label}'
 
 

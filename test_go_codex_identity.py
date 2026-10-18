@@ -8,6 +8,7 @@ import json
 import re
 
 import pytest
+from test_go_console import console_helper
 import yaml
 
 from test_go_launcher import REPO, fake_bin, run, sleeper, start_world
@@ -106,14 +107,17 @@ def test_codex_reserved_slots_open_with_their_role_scheme(start_world):
         assert '--colorScheme' in seg and seg[seg.index('--colorScheme') + 1] == scheme, (slot, seg)
 
 
-def test_codex_pane_start_sends_no_rename(tmp_path, fake_bin, sleeper):
+def test_codex_pane_start_sends_no_rename(tmp_path, fake_bin, sleeper, console_helper):
     """c14/c15 (Foreman msg 186): the /rename injection into Codex panes is gone (it was typed as a message)."""
     from test_go_launcher import pane_world
     env, d, repo, record = pane_world(tmp_path / 'codex pane', fake_bin, sleeper)
+    from test_go_console import console_env, console_calls
+    helper_record = tmp_path / 'console record'
+    env = console_env(env, console_helper, helper_record)
     proc = run(['--pane', 'Coder', '--state-dir', str(d), '--start', '--cwd', str(repo), '--slot', '3'], env, True,
                timeout=120)
     assert proc.returncode == 0, proc.stderr
     calls = [json.loads(line) for line in (record / 'calls.jsonl').read_text(encoding='utf-8').splitlines()]
     assert any(c['exe'] == 'codex' for c in calls), 'the stub codex must have been launched'
-    renames = [c for c in calls if c['exe'] == 'agents-cli' and any('/rename' in a for a in c['argv'])]
+    renames = [c for c in console_calls(helper_record) if '/rename' in c.get('text', '')]
     assert renames == [], renames

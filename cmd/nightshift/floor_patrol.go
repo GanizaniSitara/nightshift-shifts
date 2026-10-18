@@ -2,18 +2,18 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"nightshift-readonly/internal/console"
 )
 
 func init() {
@@ -41,49 +41,28 @@ func staleFileLock(path string) bool {
 	return pid != 0 && !processRunning(pid)
 }
 
-func agentTail(pid uint32) object {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "agents-cli", "tail", strconv.FormatUint(uint64(pid), 10), "--lines", "40")
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		return object{}
+// agentTail is the last 40 lines of a pane and its guessed state; the zero Screen when it cannot be read.
+func agentTail(pid uint32, tool string) console.Screen {
+	if tool == "" {
+		tool = "claude"
 	}
-	val, err := parseJSON(stdout.Bytes())
+	screen, err := console.Tail(pid, tool, 40)
 	if err != nil {
-		return object{}
+		return console.Screen{}
 	}
-	obj, ok := val.(object)
-	if !ok {
-		return object{}
-	}
-	return obj
+	return screen
 }
 
 var promptRegex = regexp.MustCompile(`^\s*[›❯>]`)
 
-func headerSubmitted(pid uint32, header string) bool {
-	tail := agentTail(pid)
-	state := objectString(tail, "state")
-	if state != "idle" && state != "busy" {
+func headerSubmitted(pid uint32, tool, header string) bool {
+	tail := agentTail(pid, tool)
+	if tail.State != "idle" && tail.State != "busy" {
 		return false
 	}
-	linesVal, ok := objectGet(tail, "lines")
-	if !ok {
+	lines := tail.Lines
+	if len(lines) == 0 {
 		return false
-	}
-	linesList, ok := linesVal.([]any)
-	if !ok {
-		return false
-	}
-	var lines []string
-	for _, item := range linesList {
-		if s, ok := item.(string); ok {
-			lines = append(lines, s)
-		} else {
-			lines = append(lines, "")
-		}
 	}
 	var prompts []int
 	for i, line := range lines {
@@ -110,13 +89,10 @@ func headerSubmitted(pid uint32, header string) bool {
 
 var whitespaceRegex = regexp.MustCompile(`\s+`)
 
-func headerInComposer(pid uint32, header string) bool {
-	tail := agentTail(pid)
-	linesVal, _ := objectGet(tail, "lines")
-	linesList, _ := linesVal.([]any)
+func headerInComposer(pid uint32, tool, header string) bool {
 	var lines []string
-	for _, item := range linesList {
-		if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+	for _, s := range agentTail(pid, tool).Lines {
+		if strings.TrimSpace(s) != "" {
 			lines = append(lines, s)
 		}
 	}
@@ -142,46 +118,30 @@ func headerInComposer(pid uint32, header string) bool {
 	return strings.Contains(cleanJoined, cleanHeader)
 }
 
+// sendHeader types a nudge into a pane through the console package and reports whether it was submitted. A nudge
+// is never a SendMessage; console.Send has no Claude-to-Claude refusal (NGH-065 passed --force for that).
 func sendHeader(pid uint32, header, tool string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	// --force: agents-cli refuses Claude-to-Claude sends without it, and a nudge typed by a nightshift process
-	// running under a Claude pane is one (NGH-065). A nudge is never a SendMessage.
-	cmd := exec.CommandContext(ctx, "agents-cli", "send", strconv.FormatUint(uint64(pid), 10), header, "--force")
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		return false
+	if tool == "" {
+		tool = "claude"
 	}
-	val, err := parseJSON(stdout.Bytes())
+	submitted, err := console.Send(pid, tool, header, true)
 	if err != nil {
 		return false
 	}
-	receipt, ok := val.(object)
-	if !ok {
-		return false
+	if submitted || tool != "copilot" {
+		return submitted
 	}
-	if submittedVal, hasSubmitted := objectGet(receipt, "submitted"); hasSubmitted {
-		if submittedVal == true || tool != "copilot" {
-			return submittedVal == true
+	for i := 0; i < copilotEnterTries; i++ {
+		if !headerInComposer(pid, tool, header) {
+			break
 		}
-		for i := 0; i < copilotEnterTries; i++ {
-			if !headerInComposer(pid, header) {
-				break
-			}
-			keyCtx, keyCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_ = exec.CommandContext(keyCtx, "agents-cli", "key", strconv.FormatUint(uint64(pid), 10), "enter").Run()
-			keyCancel()
-			time.Sleep(1 * time.Second)
-			if headerSubmitted(pid, header) {
-				return true
-			}
+		_ = console.Key(pid, tool, "enter")
+		time.Sleep(1 * time.Second)
+		if headerSubmitted(pid, tool, header) {
+			return true
 		}
-		return headerSubmitted(pid, header)
 	}
-	enterVal, hasEnter := objectGet(receipt, "enter")
-	sentVal, hasSent := objectGet(receipt, "sent")
-	return hasEnter && enterVal == true && hasSent && sentVal == header && headerSubmitted(pid, header)
+	return headerSubmitted(pid, tool, header)
 }
 
 func msgHeader(row object) string {
@@ -263,7 +223,7 @@ func deliverPending(dir string, dryRun bool) ([]any, error) {
 		if dryRun {
 			confirmed = true
 		} else if _, inAttempts := objectGet(attempts, key); inAttempts {
-			confirmed = headerSubmitted(pid, msgHeader(row))
+			confirmed = headerSubmitted(pid, objectString(info, "tool"), msgHeader(row))
 		} else {
 			attempts = setValue(attempts, key, object{
 				{"pid", pid},
@@ -322,8 +282,7 @@ func nudgeIdleForemen(dir string, dryRun bool) ([]any, error) {
 	if tool == "claude" {
 		idle = sessionIdleSince(pid)
 	} else {
-		tail := agentTail(pid)
-		if objectString(tail, "state") != "idle" {
+		if agentTail(pid, tool).State != "idle" {
 			return []any{}, nil
 		}
 		lastActivity := float64(time.Now().UnixNano()) / 1e9

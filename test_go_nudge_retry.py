@@ -1,12 +1,12 @@
 """NGH-065 nudges and warden re-nudge (native only, no oracle).
 
-Every nudge goes through `agents-cli send --force` (Claude panes included). The warden re-nudges an unacked row
+Every nudge goes through the internal console sender (Claude panes included). The warden re-nudges an unacked row
 older than 10 minutes whose recipient pid is alive and has no live waiter (bus `nudge-retry` {id, to, attempt}),
 retries at least 10 minutes apart, and the third retry raises `member-stalled <Role>` to the lead once per
 (role, msg id) plus a floor-bus line to the owner.
 
 Fixtures: a private state root; members are our own harmless sleeper (a copy named claude.exe, so the pid counts as
-a live pane); a stub agents-cli first on PATH records argv and reports success without typing into anything. The
+a live pane); a stub console helper records argv and reports success without typing into anything. The
 warden runs made safe as in test_go_launcher's delivery test: no slots (nothing to recover), no session files (no
 idle-Foreman nudge), no live-shift queue.
 """
@@ -49,7 +49,7 @@ func main() {
 		f.Write(append(line, '\n'))
 		f.Close()
 	}
-	os.Stdout.WriteString("{\"submitted\": true, \"enter\": true, \"ok\": true}\n")
+	os.Stdout.WriteString("{\"lines\": [\"❯\"], \"ok\": true}\n")
 }
 '''
 
@@ -58,12 +58,12 @@ func main() {
 def agents_stub(tmp_path_factory):
     go = go_toolchain()
     if not go:
-        pytest.skip('no Go toolchain to build the stub agents-cli')
+        pytest.skip('no Go toolchain to build the stub console helper')
     base = tmp_path_factory.mktemp('agents stub')
     (base / 'stub.go').write_text(STUB, encoding='utf-8')
     out = base / 'bin'
     out.mkdir()
-    built = subprocess.run([go, 'build', '-o', str(out / 'agents-cli.exe'), str(base / 'stub.go')], cwd=base,
+    built = subprocess.run([go, 'build', '-o', str(out / 'console-helper.exe'), str(base / 'stub.go')], cwd=base,
                            capture_output=True, timeout=300,
                            env={**os.environ, 'GOTOOLCHAIN': 'local', 'GOPROXY': 'off', 'GOFLAGS': '',
                                 'GO111MODULE': 'off'})
@@ -78,7 +78,7 @@ class World:
         self.record = base / 'stub record'
         self.record.mkdir()
         self.env.update(STUB_RECORD_DIR=str(self.record),
-                        PATH=str(agents_stub) + os.pathsep + self.env['PATH'])
+                        NIGHTSHIFT_CONSOLE_HELPER=str(agents_stub / 'console-helper.exe'))
         self.env.pop('NIGHTSHIFT_NUDGE', None)
         self.root = Path(self.env['NIGHTSHIFT_STATE_ROOT'])
         self.d = self.root / 'shifts' / SHIFT
@@ -128,7 +128,7 @@ class World:
     def sends(self):
         p = self.record / 'agents.jsonl'
         calls = [json.loads(line) for line in p.read_text(encoding='utf-8').splitlines()] if p.exists() else []
-        return [c['argv'] for c in calls if c['argv'][:1] == ['send']]
+        return [c['argv'][1:3] + [c['stdin'], c['argv'][3]] for c in calls if c['argv'][:2] == ['_attach', 'inject']]
 
     def warden(self):
         proc = run(['warden', SHIFT], self.env, True, timeout=120)
@@ -154,8 +154,8 @@ def world(tmp_path, fake_bin, sleeper, agents_stub):
 
 
 def assert_forced_send(argv, pid):
-    # Agreed shape (Foreman msg 137): agents-cli send <pid> <header> --force
-    assert len(argv) == 4 and argv[0] == 'send' and argv[1] == str(pid) and argv[3] == '--force', argv
+    # Helper receives text on stdin, with Enter requested.
+    assert len(argv) == 4 and argv[0] == 'inject' and argv[1] == str(pid) and argv[3] == '1', argv
 
 
 # ---------------------------------------------------------------- every nudge is forced

@@ -1,7 +1,7 @@
 """NGH-066 in-shift patrol: liveness, stalls, re-nudges, costs and the budget stop (native only, no oracle).
 
 Contract: C:/nightshift/shifts/<shift>/contract-ngh066.md. The world is test_go_nudge_retry's: members are our own
-harmless claude.exe sleeper, a stub agents-cli first on PATH records every call (send, key, tail) and types into
+harmless claude.exe sleeper, a stub console helper records every call (send, key, tail) and types into
 nothing, and the shift has no slots and no session files. `patrol --once` runs one tick; the loop form runs with
 NIGHTSHIFT_PATROL_INTERVAL=1 under a timeout. Usage figures are written into <Role>-usage.json in the contract schema,
 because the stub's screen carries no footer. No window is opened.
@@ -35,10 +35,12 @@ def event_rows(world, name):
 
 
 def calls(world, verb):
+    if verb == 'send':
+        return world.sends()
     p = world.record / 'agents.jsonl'
     if not p.exists():
         return []
-    return [c['argv'] for c in map(json.loads, p.read_text(encoding='utf-8').splitlines()) if c['argv'][:1] == [verb]]
+    return [c['argv'][1:] for c in map(json.loads, p.read_text(encoding='utf-8').splitlines()) if c['argv'][:2] == ['_attach', verb]]
 
 
 def write_usage(world, role, unit, value):
@@ -100,7 +102,7 @@ def test_patrol_renudges_at_ten_minutes_and_raises_member_stalled_after_three(wo
     stalled = event_rows(world, 'member-stalled')
     assert len(stalled) == 1 and stalled[0]['body'].startswith('member-stalled Coder')
     for argv in calls(world, 'send'):
-        assert argv[-1] == '--force', argv
+        assert argv[-1] == '1', argv
 
 
 def test_floor_warden_leaves_patrolled_shifts_alone(world, sleeper):

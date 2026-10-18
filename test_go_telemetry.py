@@ -9,11 +9,121 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import time
 
+import pytest
+
 from test_go_lifecycle import DEAD_PID, cli, exe_path, owned_fixture_process, world, write_json
-from test_go_launcher import fake_bin, pane_world, run, sleeper
-from test_go_readonly import oracle
+from test_go_launcher import fake_bin, go_toolchain, pane_world, run, sleeper
+from test_go_readonly import REPO, oracle
+
+
+COMPLETION_REGRESSION = r'''package main
+
+import (
+    "os"
+    "path/filepath"
+    "sync"
+    "testing"
+    "time"
+)
+
+var refreshEntered = make(chan struct{})
+var refreshRelease = make(chan struct{})
+var refreshOnce sync.Once
+
+func refreshRoleTelemetry(stateDir, role string, pid uint32, started float64, harvest bool) error {
+    refreshOnce.Do(func() { close(refreshEntered); <-refreshRelease })
+    return originalRefreshRoleTelemetry(stateDir, role, pid, started, harvest)
+}
+
+func TestWatcherShortLivedChild(t *testing.T) {
+    if os.Getenv("NIGHTSHIFT_COMPLETION_CHILD") == "1" {
+        _ = os.WriteFile(os.Getenv("NIGHTSHIFT_COMPLETION_EXIT"), []byte("exiting"), 0600)
+        os.Exit(0)
+    }
+    // This test exercises telemetry only; never let a Go test executable act
+    // as the real console helper while its disposable child is starting.
+    delete(trustPrompts,"codex")
+    base:=t.TempDir()
+    home:=filepath.Join(base,"home")
+    state:=filepath.Join(base,"state")
+    if err:=os.MkdirAll(state,0700);err!=nil {t.Fatal(err)}
+    t.Setenv("NIGHTSHIFT_HOME",home)
+    codexHome:=filepath.Join(home,".codex")
+    t.Setenv("CODEX_HOME",codexHome)
+    transcript:=filepath.Join(codexHome,"sessions","rollout-completion.jsonl")
+    if err:=os.MkdirAll(filepath.Dir(transcript),0700);err!=nil {t.Fatal(err)}
+    stamp:=time.Now().UTC().Format(time.RFC3339)
+    meta:=object{{"type","session_meta"},{"payload",object{{"id","completion-session"},{"cwd",base},{"timestamp",stamp}}}}
+    if err:=os.WriteFile(transcript,[]byte(renderJSON(meta,false,true)+"\n"),0600);err!=nil {t.Fatal(err)}
+    exe,err:=os.Executable();if err!=nil {t.Fatal(err)}
+    childExit:=filepath.Join(base,"child-exiting")
+    env:=append(os.Environ(),"NIGHTSHIFT_COMPLETION_CHILD=1","NIGHTSHIFT_COMPLETION_EXIT="+childExit)
+    returned:=make(chan error,1)
+    go func(){ _,err:=runPaneChild([]string{exe,"-test.run=^TestWatcherShortLivedChild$"},base,env,"Coder","fixture-coder","","","codex","","",state,true,0,nil);returned<-err }()
+    released:=false
+    defer func(){if !released {close(refreshRelease)}}()
+    select {
+    case <-refreshEntered:
+    case err:=<-returned:t.Fatalf("wrapper returned before watcher started: %v",err)
+    case <-time.After(10*time.Second):t.Fatal("watcher did not start")
+    }
+    deadline:=time.Now().Add(10*time.Second)
+    for !fileExists(childExit) && time.Now().Before(deadline) {time.Sleep(time.Millisecond)}
+    if !fileExists(childExit) {t.Fatal("short-lived child did not exit")}
+    select {
+    case err:=<-returned:t.Fatalf("wrapper returned with refresh blocked: %v",err)
+    case <-time.After(200*time.Millisecond):
+    }
+    close(refreshRelease);released=true
+    select {
+    case err:=<-returned:if err!=nil {t.Fatal(err)}
+    case <-time.After(10*time.Second):t.Fatal("wrapper failed to finish after refresh")
+    }
+    record,ok:=readObject(filepath.Join(state,"Coder.json"))
+    if !ok || objectString(record,"session_id")!="completion-session" || objectString(record,"transcript")!=transcript {t.Fatal(record)}
+    if rowValue(record,"usage")!=nil {t.Fatal("watcher harvested usage")}
+}
+'''
+
+
+def test_go_short_lived_child_waits_for_blocked_telemetry_refresh(tmp_path):
+    """Block discovery in a disposable build; child exit cannot finish its wrapper early."""
+    cached = sorted(Path.home().glob('go/pkg/mod/golang.org/toolchain@v0.0.1-go1.2*.windows-amd64/bin/go.exe'))
+    go = os.environ.get('GOEXE') or (str(cached[-1]) if cached else go_toolchain())
+    if not go:
+        pytest.skip('no provisioned Go toolchain')
+    source = tmp_path / 'completion source'
+    source.mkdir()
+    for name in ('go.mod', 'go.sum', 'assets.go'):
+        shutil.copyfile(REPO / name, source / name)
+    for name in ('cmd', 'internal', 'crews', 'briefs', 'personas'):
+        shutil.copytree(REPO / name, source / name)
+    telemetry = source / 'cmd' / 'nightshift' / 'telemetry.go'
+    original = telemetry.read_text(encoding='utf-8')
+    signature = 'func refreshRoleTelemetry('
+    assert original.count(signature) == 1
+    telemetry.write_text(original.replace(signature, 'func originalRefreshRoleTelemetry(', 1), encoding='utf-8')
+    (telemetry.parent / 'completion_regression_test.go').write_text(COMPLETION_REGRESSION, encoding='utf-8')
+    result = subprocess.run([go, 'test', './cmd/nightshift', '-run', '^TestWatcherShortLivedChild$', '-count=1'],
+                            cwd=source, capture_output=True, timeout=90,
+                            env={**os.environ, 'GOTOOLCHAIN': 'local', 'GOPROXY': 'off', 'GOSUMDB': 'off'},
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    # Prove this barrier detects the regression, using only the disposable source.
+    launcher = telemetry.parent / 'launcher_pane.go'
+    original = launcher.read_text(encoding='utf-8')
+    join = '\tif telemetryDone != nil {\n\t\t<-telemetryDone\n\t}'
+    assert original.count(join) == 1
+    launcher.write_text(original.replace(join, '', 1), encoding='utf-8')
+    broken = subprocess.run([go, 'test', './cmd/nightshift', '-run', '^TestWatcherShortLivedChild$', '-count=1'],
+                            cwd=source, capture_output=True, timeout=90,
+                            env={**os.environ, 'GOTOOLCHAIN': 'local', 'GOPROXY': 'off', 'GOSUMDB': 'off'},
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+    assert broken.returncode != 0 and b'wrapper returned' in broken.stdout, (broken.stdout, broken.stderr)
 
 
 def native_down(env, shift='fixture'):

@@ -70,23 +70,21 @@ The machine-level floor bus is a separate, append-only communication channel:
   ticket (when present). Dry-run and failed starts append no automatic start event. Go parity is
   deferred.
 
-Warden delivers only stored messages addressed to the recipient's current incarnation. A modern
-`agents-cli send` receipt must say `submitted: true`. An older `enter: true`/`sent: <header>` receipt
-also needs tail evidence: the header in history above an empty current composer. Explicit
-`submitted: false` remains unconfirmed, except on a copilot pane: Copilot can leave the pasted header
-in its composer (TECH-225, seen live 16 Oct), so `send_header` presses `agents-cli key PID enter` up to
+Warden delivers only stored messages addressed to the recipient's current incarnation. A send
+(`console.Send`, NGH-068) must report submitted. Not submitted remains unconfirmed, except on a copilot pane: Copilot can leave the pasted header
+in its composer (TECH-225, seen live 16 Oct), so `send_header` presses `console.Key(pid, tool, "enter")` up to
 `COPILOT_ENTER_TRIES` (3) times, each only while the tail shows the header still in the current
 composer and no select/confirm menu footer, and confirms with the same tail check. The per-shift `warden-delivery.json` records each attempt
 before injection; subsequent patrols check uncertain delivery through the tail without injecting
 the same header again. If confirmation stays unavailable, the row remains stored for inspection.
 
-Claude idle time comes from its session record. Other CLIs require `agents-cli tail` to report
+Claude idle time comes from its session record. Other CLIs require `console.Tail` to report
 `idle`, plus at least 300 seconds since the latest Foreman bus activity or process start. Busy or
 unknown state is never nudged. `warden-nudge.json` throttles attempts, including uncertain sends.
 
-Every nudge, from the warden or from `ready`/`assign`/`note`/`report`, runs `agents-cli send <pid> <line> --force`
-for every tool, Claude included (NGH-065): agents-cli refuses a Claude-to-Claude send without `--force`, and a nudge
-typed by a nightshift process under a Claude pane is one. A nudge is never a SendMessage.
+Every nudge, from the warden or from `ready`/`assign`/`note`/`report`, is `console.Send(pid, tool, line, true)`
+for every tool, Claude included (NGH-065, NGH-068): unlike agents-cli, which needed `--force` for that, the console
+package has no Claude-to-Claude refusal. A nudge is never a SendMessage.
 
 Re-nudge (NGH-065). Each patrol, a row in state `stored` or `sent` (not acknowledged) whose recipient pid is alive
 for the row's recipient incarnation and who has no live waiter file (`waiting/<ROLE>.json`) is due a retry when
@@ -147,6 +145,10 @@ prints the Python-compatible owner lines to stderr, leaves `claims.json` unchang
 `release` removes only claims owned by the requested role, all of them when no paths are supplied;
 claims held by another role remain untouched. These commands mutate only the shift claim records.
 
+NGH-068 shortens the shared file-lock retry interval on an existing lock from 100 ms to 5 ms,
+matching the release retry cadence. This reduces opportunities for new writers to barge ahead of
+sleeping waiters and starve them; timeout and stale-lock thresholds remain unchanged.
+
 The same increment carries the mailbox and evidence writes: `msg send` inserts a stored row and
 prints its header, `msg sent` advances that row to sent, and `ack` accepts only the addressed,
 current-incarnation message and prints its stored body. Unknown, wrong-recipient, or stale-incarnation
@@ -165,8 +167,12 @@ finished shifts and preserves unexpected files.
 
 The lifecycle helpers are native Go: `handoverReport` renders the result, denial, claim, mailbox, build,
 commit and test-evidence sections; `recordDenials` deduplicates pane lines and persists `denials.json`;
-and `paneTail` reads visible pane lines through `agents-cli`. These lifecycle operations do not launch
+and `paneTail` reads visible pane lines through `console.Peek`. These lifecycle operations do not launch
 sessions; `down --close` preserves the existing WM_CLOSE window-closing contract.
+
+NGH-068 makes the pane wrapper join its telemetry watcher after child exit. The watcher makes a final
+discovery-only refresh before returning, so a short-lived CLI cannot lose its session metadata when
+the wrapper exits; usage harvesting remains the responsibility of `down`.
 
 NGH-048 adds best-effort, Go-only session telemetry. A live pane discovers its own Claude or Codex
 session/transcript and records `session_id` and `transcript` on its current `<Role>.json` only when a
@@ -196,7 +202,7 @@ executable launches a container and exits: one Windows Terminal tab holding a gr
 (2x4 = 8 slots across two rows of four columns; 1x4 = 4 slots also supported), the first slots
 filled with the crew from the manifest, the rest empty shells. From then on **Foreman owns the
 container**: it may fill an empty slot through `nightshift spawn` (any CLI; the Nightshift CLI
-is the one component that knows how to put a session into a tab slot, agents-cli only drives
+is the one component that knows how to put a session into a tab slot; its console package drives
 consoles), and when the ticket is tested and deployed it writes the records and runs
 `nightshift down` itself. If a core member crashes while the shift is active, `nightshift warden`
 can recover its pane; if recovery cannot proceed, the shift remains for human inspection. The
@@ -245,7 +251,7 @@ As built (NGH-025):
   with the same role else yellow, peer = the human contact; Foreman's own peer list is not rewritten),
   preserving a dead member's `role`, `label`, `identity`, `brief`, `colour`, `tool` and `model` when
   restarting it, types the pane wrapper line (paths double-quoted, `--slot N`) into that slot's cmd with
-  `agents-cli _attach inject`, and marks the slot with the role and a `spawned` time. A start-mode pane reads its member
+  `console.Inject`, and marks the slot with the role and a `spawned` time. A start-mode pane reads its member
   from `crew.json` (falling back to the manifest), so spawned roles run like launched ones; `status`,
   `down` and the mailbox pick them up from `crew.json`.
 - **spawn --crew NAME (NGH-029).** Takes the spawned role's brief, colour, tool, model, `reasoning` and
@@ -629,10 +635,37 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 | `personas/*.yaml` | each role's persona (identity, what good looks like, how you work, never), rendered above the brief (NGH-032) | this repo |
 | shift folder | `C:\nightshift\shifts\<shift>\` — the source of truth for one new shift (below) | data, not code |
 | tasks-cli | the work queue: the loop takes ticket IDs, reads `codebase:` for the working folder, crews write notes, the loop moves status | on PATH |
-| agents-cli | universal console driver for any agent TUI: peek a pane, inject a line, press a key, name/wait on a session | on PATH |
+| `internal/console` | the console driver (NGH-068, a hard fork of agents-cli's console code, which is no longer a dependency): peek a pane, tail it with a guessed state, send a line per tool with submit verification, inject raw text, press a key | this repo |
 | Claude Code mesh | `ListAgents` / `SendMessage` between Claude sessions over named pipes (`~/.claude/sessions/<pid>.json`) | Claude Code |
 | Windows Terminal | one window per shift, one pane per role; a "Nightshift Crew" profile (Cascadia Mono 12, Campbell) | `wt.exe` |
 | `nightshift.exe` | standalone binary built via `scripts\build.cmd` | on PATH (default `C:\nightshift\bin`) |
+
+## Console driver (NGH-068)
+
+`cmd/nightshift` drives panes through its own package `nightshift-readonly/internal/console` (owner decision 18 Oct: a
+hard fork of agents-cli's console code; `C:\git\agents-cli` is read-only reference, never a go.mod dependency,
+vendored copy or sync source). agents-cli is no longer needed on PATH and `doctor` no longer checks it.
+
+| Function | Was | Does |
+|---|---|---|
+| `Peek(pid, above)` | `agents-cli _attach peek` | the pane's visible lines (`Screen.Lines`, `Title`, `Width`) |
+| `Tail(pid, tool, lines)` | `agents-cli tail <pid> --lines N` | the last N lines plus `Screen.State` (`busy`, `idle`, `prompt`, ...) guessed for the tool |
+| `Send(pid, tool, text, enter)` | `agents-cli send <pid> <text> --force` | the per-tool send (copilot, agy, gemini, else inject plus the submit verifier); returns submitted |
+| `Inject(pid, text, enter)` | `agents-cli _attach inject` | raw console input, no verification |
+| `Key(pid, tool, key)` | `agents-cli key` | a named key (`enter`, `down`, `escape`, ...) |
+
+Callers: `floor_patrol.go` (`agentTail`, `headerSubmitted`, `headerInComposer`, `sendHeader`; the tool now comes from
+`<Role>.json`, empty meaning claude), `write_bus.go` (nudges; a failed one records reason `console send did not submit
+the nudge`), `patrol.go` (budget-stop escape), `usage_sample.go` (`paneScreen`), `lifecycle_report.go` (`paneTail`),
+`launcher_spawn.go` (the slot wrapper line), `launcher_pane.go` (`peekLines`, `trustScreen`, trust-prompt keys,
+`injectCommand`). `agents-cli name <pid> <identity>` (`registerName`) is dropped: it only registered the identity in
+agents-cli's own registry for humans and other tools; nightshift always addresses a pane by pid.
+
+Attaching to another console is done by a child process: the parent re-executes the helper binary with the hidden
+`nightshift _attach <op> ...` subcommand (`console.HelperMain`; same argv, stdin and JSON protocol as agents-cli's
+helper, text on stdin never argv, started detached and hidden). The helper binary is `os.Executable()` unless
+`NIGHTSHIFT_CONSOLE_HELPER=<exe>` names another one; that variable is the only test seam (pytest stubs are small
+`_attach` helpers rather than a fake agents-cli on PATH).
 
 ## A shift, step by step
 
@@ -944,7 +977,7 @@ its brief variants require this order around any compaction event: before compac
 mailbox/bus note; after compaction, first reread `ticket.txt`, `prompt.txt`, `requires.txt` and the
 result ladder, claims, inbox, and `handover.md`, then continue.
 
-`spawn` sends the wrapper command to `agents-cli _attach inject PID 1` through stdin, matching the
+`spawn` sends the wrapper command with `console.Inject(cmdPid, line, true)` (helper `_attach inject PID 1`, text on stdin), matching the
 installed helper protocol; command text is not placed in argv. `inject_command` (Claude `/color`) does the
 same (NGH-041; the Codex `/rename` injection did too until NGH-067 removed it); passing the text as argv made the
 helper fail, which is how Claude panes lost their role colours.
@@ -956,7 +989,7 @@ for Claude, the banner that proves it is already past it: Claude `Yes, I trust t
 Codex can read...` / `› Trust and continue`; Copilot `Do you trust the files in this folder?` /
 `❯ 1. Yes` (not option 2, which remembers the folder). The texts come from agents-cli's agy fixtures
 and from the strings in the installed codex.exe and Copilot `index.js`. Answering is the same as for
-Claude: poll `agents-cli _attach peek` for about 20 s, act only while the dialog text is on screen (the
+Claude: poll `console.Peek` for about 20 s, act only while the dialog text is on screen (the
 sentence is matched across wrapped lines and box borders), press Down until the accepting option is
 highlighted, then Enter. The CLI runs in the shift's own folder, so the dialog is about that folder.
 When Codex says trusting would apply to the repository root instead, the dialog is left for the human. Failed injection reports stdout and
@@ -1075,7 +1108,7 @@ contact (Foreman).
 The four storing commands print the header line `msg:N kind:K asg:A`, then deliver: if the recipient
 has a waiter file whose pid is running, the row is marked sent (`sent` with `via: "wait"`). Otherwise,
 unless `NIGHTSHIFT_NUDGE=off`, one line `msg:N kind:K asg:A  run: nightshift wait SHIFT ROLE` is typed
-into the recipient's live pane (pid and tool from `<ROLE>.json`) with the warden's `agents-cli send ... --force`
+into the recipient's live pane (pid and tool from `<ROLE>.json`) with the warden's `console.Send`
 path, and the row is marked sent with `via: "nudge"`. A nudge that cannot be delivered leaves the row
 `stored` for the warden, appends `nudge-failed` and warns on stderr; the command still exits 0.
 
@@ -1105,7 +1138,7 @@ the shift folder (crew.json) is gone. It ticks every 30 seconds (`NIGHTSHIFT_PAT
    unit (`usd`, `credits`, `tokens`). A crew manifest sets `budget_usd` and `budget_tokens` as top-level
    non-negative numbers; the loader validates them and `start` copies them into crew.json. Reaching 80% of a budget
    raises `budget-warning <unit> <total>/<budget>` once; reaching 100% raises `budget-stop <unit> <total>/<budget>`
-   once and then, with no model judgement: `agents-cli key <pid> escape` for every live member, handover.md written
+   once and then, with no model judgement: `console.Key(pid, tool, "escape")` for every live member, handover.md written
    from live state (as `nightshift handover` writes it), bus `paused` {reason, unit, total, budget}, and result.json
    `{"status": "paused", "stage": <the existing result's stage, else implemented>, "summary": "budget stop: <unit>
    <total>/<budget>"}`; the patrol then exits. The shift stays resumable with `nightshift start --continue-from
@@ -1122,7 +1155,7 @@ The patrol takes one figure per live member per tick with `sampleMember(dir, mem
 
 - Sources, file first. Claude and Codex: the token total of the transcript recorded in `<Role>.json` (`transcript`,
   NGH-048), unit `tokens`, source `transcript`. Otherwise the pane's screen (`paneScreen(pid)`, a package var over
-  `agents-cli tail <pid> --lines 40`, stubbed in tests) through `parseFooter(tool, screen)`, source `screen`.
+  `console.Tail(pid, tool, 40)`, stubbed in tests) through `parseFooter(tool, screen)`, source `screen`.
   Copilot and agy write no usage file Nightshift can read (the bundled Copilot rejects `--usage-output-file`), so they
   are always read from the screen. A Claude pane's dollars come from its status line, which records them itself.
 - `parseFooter` (pure; the last match on screen wins; an empty tool is claude):
@@ -1638,7 +1671,7 @@ Every Python subcommand and option from `nightshift_shifts.py` has been ported t
 | `spawn` | `--crew` | native, golden-tested | `test_go_launcher.py:test_spawn_dry_run_matches_oracle` |
 | `spawn` | `--slot` | native, golden-tested | `test_go_launcher.py:test_spawn_dry_run_matches_oracle` |
 | `spawn` | `--dry-run` | native, golden-tested | `test_go_launcher.py:test_spawn_dry_run_matches_oracle`, `test_go_launcher.py:test_spawn_dry_run_oracle_cases_reach_the_intended_branch` |
-| `spawn` | `(live spawn: agents-cli inject)` | native, live-only | `launcher_spawn.go`: injects launcher command line into live pane shell |
+| `spawn` | `(live spawn: console.Inject)` | native, live-only | `launcher_spawn.go`: injects launcher command line into live pane shell |
 | `spawn` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
 | `loop` | `tickets` (positional) | native, golden-tested | `test_go_launcher.py:test_loop_usage_errors_match_oracle` |
 | `loop` | `--project` | native, golden-tested | `test_go_launcher.py:test_loop_usage_errors_match_oracle` |
@@ -1696,7 +1729,7 @@ Every Python subcommand and option from `nightshift_shifts.py` has been ported t
 | `cleaner` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
 | `warden` | `shift` (positional) | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
 | `warden` | `--dry-run` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
-| `warden` | `(non-dry-run delivery/nudge/recovery)` | native, live-only | `floor_patrol.go`: delivery of stored assignments, nudge via agents-cli, and crash recovery |
+| `warden` | `(non-dry-run delivery/nudge/recovery)` | native, live-only | `floor_patrol.go`: delivery of stored assignments, nudge via the console package, and crash recovery |
 | `warden` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
 | `gaffer` | `--max-shifts` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |
 | `gaffer` | `--ticket` | native, golden-tested | `test_go_launcher.py:test_floor_dry_runs_match_oracle` |

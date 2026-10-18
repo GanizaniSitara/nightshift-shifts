@@ -423,6 +423,7 @@ func watchRoleTelemetry(child *paneChild, stateDir, role string, pid uint32, sta
 		_ = refreshRoleTelemetry(stateDir, role, pid, started, false)
 		select {
 		case <-child.done:
+			_ = refreshRoleTelemetry(stateDir, role, pid, started, false)
 			return
 		case <-time.After(time.Second):
 		}
