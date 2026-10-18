@@ -442,6 +442,10 @@ func statuslineCommand(argv []string) int {
 	if args.present["--role"] {
 		role, identity, colourName = args.values["--role"], args.values["--identity"], args.values["--colour"]
 		suffix = claudeStatusCost(args.values["--state-dir"], role, input)
+	} else if dir := os.Getenv("NIGHTSHIFT_STATE_DIR"); dir != "" {
+		payload, _ := parseJSON(input)
+		o, _ := payload.(object)
+		recordClaudeContext(dir, role, o)
 	}
 	if role != "" && identity != "" {
 		colour := "37"
@@ -467,6 +471,9 @@ func statuslineCommand(argv []string) int {
 func claudeStatusCost(stateDir, role string, input []byte) string {
 	status, _ := parseJSON(input)
 	o, _ := status.(object)
+	if stateDir != "" {
+		recordClaudeContext(stateDir, role, o)
+	}
 	cost, _ := rowValue(o, "cost").(object)
 	if n, ok := objectNumber(cost, "total_cost_usd"); ok {
 		value := numberFloat(n)

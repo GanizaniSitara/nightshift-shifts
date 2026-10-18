@@ -512,7 +512,7 @@ func startPlan(name, stateDir, cwd, ticket, title, prompt, required string, crew
 		} else if m.model != crew.model {
 			role = append(role, pair{"model", m.model})
 		}
-		for _, key := range []string{"reasoning", "context", "account", "max_credits"} {
+		for _, key := range []string{"reasoning", "context", "account", "max_credits", "compact_at"} {
 			if m.has(key) {
 				role = append(role, pair{key, m.opt(key)})
 			}

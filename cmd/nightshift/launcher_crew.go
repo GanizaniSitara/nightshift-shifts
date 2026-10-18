@@ -759,6 +759,12 @@ func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, erro
 		}
 	}
 	checked := []*crewRole{}
+	compactAt, compactAtPresent := yamlValue(data, "compact_at")
+	if compactAtPresent {
+		if n, ok := yamlInt(compactAt); !ok || n < 0 || n > 100 {
+			return fail("compact_at must be a whole percent from 0 to 100")
+		}
+	}
 	retired := [][2]string{} // retired brief names in use, warned about once below
 	for i, raw := range roles {
 		entry, ok := raw.(yaml.MapSlice)
@@ -824,6 +830,19 @@ func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, erro
 			model = pyStr(m)
 		}
 		r := &crewRole{role: role, brief: brief, persona: persona, count: count, human: human, colour: colour, tool: tool, model: model}
+		threshold := compactAt
+		thresholdPresent := compactAtPresent
+		if v, exists := yamlValue(entry, "compact_at"); exists {
+			threshold = v
+			thresholdPresent = true
+		}
+		if thresholdPresent {
+			n, ok := yamlInt(threshold)
+			if !ok || n < 0 || n > 100 {
+				return fail("compact_at for %s must be a whole percent from 0 to 100", role)
+			}
+			r.opts = append(r.opts, pair{"compact_at", n})
+		}
 		if v := yamlScalar(entry, "reasoning"); v != nil {
 			reasoning := pyStr(v)
 			levels, ok := toolReasoningLevels[tool]

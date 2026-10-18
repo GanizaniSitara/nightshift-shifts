@@ -745,7 +745,7 @@ func statusRecord(dir string) (object, error) {
 		if role[5].val == true {
 			alive = true
 		}
-		roles = append(roles, pair{label, role})
+		roles = append(roles, pair{label, compactionStatus(dir, label, info, role)})
 	}
 	record[1].val = dir
 	record[2].val = roles

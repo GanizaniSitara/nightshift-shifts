@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mattn/go-isatty"
 )
@@ -113,6 +114,12 @@ func humanStatus(records []any) {
 				if pid := rowValue(role, "pid"); pid != nil {
 					line += fmt.Sprintf(", pid %v", pid)
 				}
+			}
+			if used := rowValue(role, "context_used"); used != nil {
+				line += fmt.Sprintf(", context %v%% used", used)
+			}
+			if at, ok := objectNumber(role, "last_compacted"); ok {
+				line += ", compacted " + time.Unix(int64(numberFloat(at)), 0).Format("2006-01-02 15:04")
 			}
 			out(fmt.Sprintf("    %-11s %s\n", p.key, line))
 		}

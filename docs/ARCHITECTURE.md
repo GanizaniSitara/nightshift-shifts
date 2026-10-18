@@ -937,6 +937,51 @@ references such as `Foreman`.
 
 ## Context exhaustion and compaction safety (NGH-030)
 
+NGH-069 adds proactive, supervisor-driven compaction without changing briefs or mailbox schemas.
+Crew YAML accepts `compact_at` (integer percent 0..100) at crew or role level; a role overrides
+the crew value. Omitted values default to 50 for Foreman and 70 for other roles; 0 disables triggers.
+Explicit values survive launch, spawn and respawn. The brief's ban on members initiating compaction
+still applies; the supervisor owns this new path.
+
+`patrolCompaction` is shared by the patrol (after budget enforcement) and warden (only without a live
+patrol, never in dry-run). A dedicated named mutex keyed by `compaction.lock` serializes both entry
+points without a stale file-lock takeover during slow console sends. It requires a live current
+incarnation, an empty idle composer, no live `wait` tool call, no unfinished incoming assignment or
+uplift for that incarnation, and no waiting/running `builds/*.json` anywhere in the shift (including
+gate builds). Busy, permission, draft, unreadable and unknown screens are skipped.
+
+Context is independent of cost sampling: Codex's last three nonempty footer rows supply remaining
+percentage even when dollars or credits win `parseFooter`. Claude and Copilot's status-line JSON
+provides `context_window.used_percentage`; callbacks must match the discovered `session_id`.
+Child panes receive `NIGHTSHIFT_STATE_DIR` so the existing Copilot status-line command can save it.
+`<Role>-context.json` stores `pid`, `started`, `context_used`, `context_at` (epoch seconds), accepted
+only for that incarnation and at most 90 seconds old. Missing/future/invalid samples never trigger.
+
+`<Role>-compaction.json` persists the incarnation, `phase`, `before`, `requested_at`, `after`,
+`last_compacted` and `anchor_at`. Intent (`pending`) is saved before console input; a failed or
+uncertain send is never retried automatically. Completion requires a later fresh sample with a
+strictly lower used percentage and an idle safe pane; a receipt alone is insufficient. It saves
+`confirmed` then appends one `compacted` bus event with `role`, `before`, `after`. Repeated patrols
+do not repeat the event. A completed cycle must observe usage below threshold before rearming.
+
+After confirmation, Codex/Copilot receive one brief-path reanchor note. `anchor_pending` is saved
+before sending, then `waiting` only for a confirmed send. Both phases require a new live
+`waiting/<Role>.json` whose `since` is at least `anchor_at`; an old waiter is insufficient.
+After 60 seconds without it, phase becomes `stuck` and raises `member-stuck` once. Neither uncertain
+compaction nor uncertain reanchor is automatically injected again. Claude keeps its system brief.
+`status` adds fresh `context_used` and incarnation-fenced `last_compacted`, also in readable output.
+
+Verified commands: Claude/Codex/Copilot `/compact`, Gemini `/compress`. agy and Vibe are skipped:
+no equivalent was verified. Gemini's command is known but no reliable context signal is currently
+wired, so it also skips automatic triggering. Copilot uses the installed CLI's status-line payload
+(`@github/copilot/index.js`: `session_id`, `context_window.used_percentage`), not AIC as context.
+References: [Codex commands](https://learn.chatgpt.com/docs/developer-commands?surface=cli),
+[Copilot context](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/context-management),
+[Gemini commands](https://geminicli.com/docs/reference/commands/),
+[Claude status line](https://code.claude.com/docs/en/statusline).
+No Claude launch threshold override is set: the documented auto-compact token-window setting is
+not a percent threshold, and installed-version support was not established. Warden is primary.
+
 Every non-Foreman member brief forbids invoking `/compact` and relying on automatic compaction.
 At the actual child-process launch boundary, `crew_env` uses the member's base role, not its pane
 label. Claude members receive `DISABLE_AUTO_COMPACT=1`; Claude Foreman receives

@@ -122,6 +122,13 @@ func patrolTick(dir string) (object, bool, error) {
 	// 4. budget
 	budget, stopped, err := patrolBudget(dir)
 	report = append(report, pair{"budget", budget})
+	if err == nil && !stopped {
+		var compacted []any
+		compacted, err = patrolCompaction(dir)
+		if len(compacted) > 0 {
+			report = append(report, pair{"compacted", compacted})
+		}
+	}
 	return report, stopped, err
 }
 

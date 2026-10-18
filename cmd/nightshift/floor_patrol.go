@@ -547,6 +547,11 @@ func runWarden(argv []string) (object, int) {
 				patrol = append(patrol, pair{"renudged", renudged})
 			}
 			shiftsList = append(shiftsList, patrol)
+			if !dryRun && !patrolLive(dir) {
+				if _, err := patrolCompaction(dir); err != nil {
+					return err
+				}
+			}
 		}
 		report = setValue(report, "shifts", shiftsList)
 		if !dryRun {

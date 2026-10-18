@@ -501,6 +501,9 @@ func runSpawn(argv []string, quiet bool) error {
 				member = setValue(member, "brief", manifestRole.brief)
 				member = setValue(member, "persona", manifestRole.persona)
 				member = setValue(member, "colour", manifestRole.colour)
+				if val, ok := objectGet(manifestRole.opts, "compact_at"); ok {
+					member = setValue(member, "compact_at", val)
+				}
 				if manifestRole.tool == tool {
 					member = setValue(member, "model", manifestRole.model)
 					for _, opt := range []string{"reasoning", "context", "account", "permissions", "max_credits"} {
@@ -514,6 +517,9 @@ func runSpawn(argv []string, quiet bool) error {
 	}
 
 	if existing != nil {
+		if val, ok := objectGet(existing, "compact_at"); ok {
+			member = setValue(member, "compact_at", val)
+		}
 		member = setValue(member, "replacement", true)
 		roleVal := objectString(existing, "role")
 		if roleVal == "" {
@@ -557,8 +563,11 @@ func runSpawn(argv []string, quiet bool) error {
 		if existing == nil {
 			member = setValue(member, "label", specifiedCrewRole.role)
 		}
-		for _, opt := range []string{"reasoning", "context", "account", "permissions", "max_credits"} {
+		for _, opt := range []string{"reasoning", "context", "account", "permissions", "max_credits", "compact_at"} {
 			member = deleteKey(member, opt)
+		}
+		if val, ok := objectGet(specifiedCrewRole.opts, "compact_at"); ok {
+			member = setValue(member, "compact_at", val)
 		}
 		if specifiedCrewRole.tool == tool {
 			member = setValue(member, "model", specifiedCrewRole.model)
