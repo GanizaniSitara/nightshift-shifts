@@ -337,6 +337,12 @@ func runStart(argv []string, print bool) (string, error) {
 			return "", startExit(err.Error())
 		}
 	}
+	// Validate every member, including reserved roles, before profile installation or any WT call.
+	for _, m := range members {
+		if err := preflightMember(stateDir, cwd, repoRoot, crewJSON, m); err != nil {
+			return "", startExit(err.Error())
+		}
+	}
 	labelValues := stringsToAny(labels)
 	startEvent := object{{"shift", name}, {"ticket", nullable(ticket)}, {"cwd", cwd}, {"crew", crew.name}}
 	if crew.overrides != nil {

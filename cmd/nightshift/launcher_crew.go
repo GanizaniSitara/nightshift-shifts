@@ -1401,7 +1401,10 @@ func codexCommand(model, brief, firstMessage, reasoning, permissions string) []s
 	if reasoning != "" {
 		cmd = append(cmd, "-c", "model_reasoning_effort="+reasoning)
 	}
-	return append(cmd, brief+"\n\n"+firstMessage)
+	if brief != "" {
+		firstMessage = brief + "\n\n" + firstMessage
+	}
+	return append(cmd, firstMessage)
 }
 
 func copilotCommand(model, brief, firstMessage, permissions, reasoning, context string, sessionName *string, maxCredits int) []string {

@@ -12,6 +12,14 @@ are review designs, not descriptions of running behaviour.
 
 ## State roots and floor roles (NGH-035)
 
+Codex launches (NGH-071) keep the rendered brief and opening message in
+`<state_dir>/<Role>.brief.md`; argv contains only a short instruction to read that file.
+Start preflights every member's real command, including reserved members, before installing
+the Terminal profile or opening any window. Spawn/respawn use the same command builder,
+and each pane checks its final command again before starting the child. The Windows limit
+is 32767 UTF-16 code units for the quoted command line, including its terminating NUL;
+an over-limit error identifies the member and the measured length.
+
 New shifts use `C:\nightshift\` as the visible machine state root. The launcher derives these
 locations from `SOLID_DIR`:
 

@@ -693,6 +693,9 @@ func runSpawn(argv []string, quiet bool) error {
 	crewFile := filepath.Join(stateDir, "crew.json")
 	beforeData, _ := os.ReadFile(crewFile)
 	savedWithUpdated := setValue(saved, "members", updated)
+	if err := preflightMember(stateDir, crewCwd, repoRoot, savedWithUpdated, memberFromObject(member)); err != nil {
+		return spawnExit(err.Error())
+	}
 	if err := writeJSONFile(crewFile, savedWithUpdated); err != nil {
 		return spawnExit(err.Error())
 	}

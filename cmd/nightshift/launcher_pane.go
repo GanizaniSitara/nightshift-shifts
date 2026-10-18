@@ -17,8 +17,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf16"
 
 	"golang.org/x/sys/windows"
 )
@@ -314,30 +316,11 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		}
 		envRole = member.role
 	}
-	var command []string
-	// A Claude member (tool empty or "claude") always takes the Claude branch: toolExe finds claude on PATH too,
-	// and toolCommand would then build a Copilot command for it.
-	otherTool := tool != "" && tool != "claude" && toolExe(tool) != ""
-	if otherTool {
-		session := role + " (" + identity + ")"
-		command = toolCommand(tool, model, brief, firstMessage, permissionMode, reasoning, context, &session, maxCredits)
-	} else {
-		command = append([]string{claudeExe(), "--name", identity, "--model", model}, permissionFlags("claude", permissionMode)...)
-		command = append(command, siteWebFlags("claude")...)
-		var err error
-		if command, err = appendBrief(command, brief, stateDir, role); err != nil {
-			return startExit(err.Error())
-		}
-		if start {
-			settings, err := claudeSettingsFile(stateDir, role, identity, colour, cwd, strings.ToLower(member.role) == "foreman")
-			if err != nil {
-				return startExit(err.Error())
-			}
-			command = append(command, "--settings", settings)
-		}
-		if reasoning != "" {
-			command = append(command, "--effort", reasoning)
-		}
+	launchMember := &crewMember{role: envRole, label: role, identity: identity, colour: colour, tool: tool, model: model,
+		opts: object{{"reasoning", reasoning}, {"context", context}, {"max_credits", maxCredits}}}
+	command, err := memberLaunchCommand(launchMember, brief, firstMessage, permissionMode, stateDir, cwd, start, strings.EqualFold(envRole, "foreman"))
+	if err != nil {
+		return startExit(err.Error())
 	}
 	env := crewEnv(os.Environ(), tool, account, envRole)
 	if tool == "agy" || tool == "copilot" {
@@ -368,21 +351,12 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		if preRecord, firstMessage, err = consultFirstMessage(stateDir, role, identity, peerName, model, cwd, tool, pendingKey, consult, savedCrew); err != nil {
 			return startExit(err.Error())
 		}
-		if otherTool {
-			session := role + " (" + identity + ")"
-			command = toolCommand(tool, model, brief, firstMessage, permissionMode, reasoning, context, &session, maxCredits)
-		} else {
-			// as the oracle: this rebuild carries no --effort; --settings carries only the status line (NGH-066)
-			command = append([]string{claudeExe(), "--name", identity, "--model", model}, permissionFlags("claude", permissionMode)...)
-			command = append(command, siteWebFlags("claude")...)
-			if command, err = appendBrief(command, brief, stateDir, role); err != nil {
-				return startExit(err.Error())
-			}
-			settings, err := claudeSettingsFile(stateDir, role, identity, colour, cwd, false)
-			if err != nil {
-				return startExit(err.Error())
-			}
-			command = append(command, "--settings", settings)
+		// Deferred Claude launches historically omit --effort and Foreman edit restrictions.
+		if tool == "" || tool == "claude" || toolExe(tool) == "" {
+			launchMember.opts = setValue(launchMember.opts, "reasoning", "")
+		}
+		if command, err = memberLaunchCommand(launchMember, brief, firstMessage, permissionMode, stateDir, cwd, start, false); err != nil {
+			return startExit(err.Error())
 		}
 	}
 	code, err := runPaneChild(command, cwd, env, role, identity, peerName, model, tool, colour, firstMessage, stateDir, start, slot, preRecord)
@@ -416,6 +390,70 @@ func appendBrief(command []string, brief, stateDir, role string) ([]string, erro
 		return command, err
 	}
 	return append(command, "--append-system-prompt-file", path), nil
+}
+
+// memberLaunchCommand is shared by preflight and the pane, including deferred launches.
+// Codex reads both its instructions and opening message from the file; neither can overflow argv.
+func memberLaunchCommand(m *crewMember, brief, firstMessage, permissions, stateDir, cwd string, start, foreman bool) ([]string, error) {
+	var command []string
+	if m.tool != "" && m.tool != "claude" && toolExe(m.tool) != "" {
+		if m.tool == "codex" {
+			path := filepath.Join(stateDir, m.label+".brief.md")
+			if err := os.WriteFile(path, []byte(brief+"\n\n"+firstMessage), 0666); err != nil {
+				return nil, err
+			}
+			brief, firstMessage = "", "Read the file \""+filepath.ToSlash(path)+"\" and follow its instructions."
+		}
+		session := m.label + " (" + m.identity + ")"
+		command = toolCommand(m.tool, m.model, brief, firstMessage, permissions, m.optString("reasoning"), m.optString("context"), &session, intValue(m.opt("max_credits")))
+	} else {
+		command = append([]string{claudeExe(), "--name", m.identity, "--model", m.model}, permissionFlags("claude", permissions)...)
+		command = append(command, siteWebFlags("claude")...)
+		var err error
+		if command, err = appendBrief(command, brief, stateDir, m.label); err != nil {
+			return nil, err
+		}
+		if start {
+			settings, err := claudeSettingsFile(stateDir, m.label, m.identity, m.colour, cwd, foreman)
+			if err != nil {
+				return nil, err
+			}
+			command = append(command, "--settings", settings)
+		}
+		if reasoning := m.optString("reasoning"); reasoning != "" {
+			command = append(command, "--effort", reasoning)
+		}
+	}
+	return command, checkMemberCommand(m.label, command)
+}
+
+// CreateProcess limits the quoted UTF-16 command line to 32767 code units including NUL.
+func checkMemberCommand(label string, command []string) error {
+	quoted := make([]string, len(command))
+	for i, arg := range command {
+		quoted[i] = syscall.EscapeArg(arg)
+	}
+	units := len(utf16.Encode([]rune(strings.Join(quoted, " ")))) + 1
+	if units > 32767 {
+		return fmt.Errorf("member %s command line needs %d UTF-16 code units including NUL; Windows limit is 32767", label, units)
+	}
+	return nil
+}
+
+func preflightMember(stateDir, cwd, repoRoot string, crew object, m *crewMember) error {
+	rendered, err := renderRoleBrief(stateDir, m.label, cwd, repoRoot, crew, m.object())
+	if err != nil {
+		return fmt.Errorf("member %s: %w", m.label, err)
+	}
+	permissions := m.optString("permissions")
+	if permissions == "" {
+		permissions = objectString(crew, "permission_mode")
+	}
+	if permissions == "" {
+		permissions = startPermissionMode
+	}
+	_, err = memberLaunchCommand(m, rendered.Text, openingMessage(m, stateDir), permissions, stateDir, cwd, true, strings.EqualFold(m.role, "foreman"))
+	return err
 }
 
 // paneChild is a started CLI whose exit can be polled without blocking.

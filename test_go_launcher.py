@@ -1501,7 +1501,75 @@ def test_hidden_pane_start_runs_same_stub_argv_and_records(tmp_path, fake_bin, s
         assert observed[0][1]['history'][-1]['started'] == 1000.5
         assert observed[0][3][0]['env'].get('CODEX_HOME', '').endswith('.codex-second')
     assert 'CLAUDECODE' not in observed[0][3][0]['env'] and observed[0][3][0]['env']['CLAUDE_AFK_TIMEOUT_MS'] == '9'
-    assert_equal_bytes(normalise(observed[1][0].encode(), python_launcher, True), observed[0][0], f'--pane {label}')
+    expected = json.loads(observed[0][0])
+    if label == 'Coder':
+        # NGH-071: the previous inline Codex prompt is preserved in a file, byte for byte.
+        pointer = observed[1][3][0]['argv'][-1]
+        prefix, suffix = 'Read the file "', '" and follow its instructions.'
+        assert pointer.startswith(prefix) and pointer.endswith(suffix)
+        brief = Path(pointer[len(prefix):-len(suffix)]).read_bytes()
+        assert_equal_bytes(normalise(brief, python_launcher, True), expected[-1][0]['argv'][-1].encode(),
+                           'Codex file-backed brief')
+        expected[-1][0]['argv'][-1] = pointer
+    expected = json.dumps(expected, ensure_ascii=False, indent=1).encode()
+    assert_equal_bytes(normalise(observed[1][0].encode(), python_launcher, True), expected, f'--pane {label}')
+
+
+def test_codex_foreman_pane_reads_large_ticket_from_file(tmp_path, fake_bin, sleeper):
+    env, d, repo, record = pane_world(tmp_path / 'large codex pane', fake_bin, sleeper)
+    crew = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    crew['members'][0].update(tool='codex', model='gpt-6.1-sol')
+    write_json(d / 'crew.json', crew)
+    ticket = ('Verbatim café 😀 "quoted" \\ {cwd} {shift}\n' * 1500).encode('utf-8')
+    assert len(ticket) > 40 * 1024
+    (d / 'prompt.txt').write_bytes(ticket)
+    proc = run(['--pane', 'Foreman', '--state-dir', str(d), '--start', '--cwd', str(repo), '--slot', '1'],
+               env, True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    info, _, calls = pane_observation(env, d, record, 'Foreman', 1)
+    assert info['tool'] == 'codex' and calls[0]['exe'] == 'codex'
+    brief_file = d / 'Foreman.brief.md'
+    brief = brief_file.read_bytes()
+    assert brief.startswith(b'# Task\n\nThe human task for this shift follows, verbatim:\n\n' +
+                            ticket.rstrip(b'\n') + b'\n\n## Your shift')
+    assert b'Begin the assignment:' in brief
+    argv = calls[0]['argv']
+    assert argv[-1] == f'Read the file "{brief_file.as_posix()}" and follow its instructions.'
+    assert len(subprocess.list2cmdline(argv).encode('utf-16-le')) // 2 + 1 < 4096
+    assert 'Verbatim' not in ' '.join(argv)
+
+
+@pytest.mark.parametrize('label,slot', [('Foreman', 1), ('Coder', 3)])
+def test_codex_respawn_pane_keeps_large_assignment_in_file(tmp_path, fake_bin, sleeper, label, slot):
+    env, d, repo, record = pane_world(tmp_path / 'deferred codex pane', fake_bin, sleeper)
+    crew = json.loads((d / 'crew.json').read_text(encoding='utf-8'))
+    member = next(m for m in crew['members'] if m['label'] == label)
+    member.update(tool='codex', model='gpt-6.1-sol')
+    body = 'Deferred café 😀 "quoted" \\ {cwd}\r\n' * 1800
+    assert len(body.encode('utf-8')) > 40 * 1024
+    crew['respawn'] = {'role': label, 'kind': 'assignment', 'asg': 'large-retry',
+                       'body': body, 'sender': 'Foreman'}
+    write_json(d / 'crew.json', crew)
+    brief_file = d / f'{label}.brief.md'
+    brief_file.write_bytes(b'STALE FIRST INCARNATION')
+    proc = run(['--pane', label, '--state-dir', str(d), '--start', '--cwd', str(repo), '--slot', str(slot)],
+               env, True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    info, _, calls = pane_observation(env, d, record, label, slot)
+    assert info['tool'] == 'codex' and calls[0]['exe'] == 'codex'
+    with sqlite3.connect(d / 'mailbox.sqlite3') as db:
+        rows = db.execute('SELECT id, asg, body, state FROM messages').fetchall()
+    assert len(rows) == 1
+    msg_id, asg, stored_body, state = rows[0]
+    assert (asg, stored_body, state) == ('large-retry', body, 'sent')
+    brief = brief_file.read_bytes()
+    assert brief.endswith(f'\n\nmsg:{msg_id} kind:assignment asg:large-retry\n\n{body}'.encode('utf-8'))
+    assert brief.count(body.encode('utf-8')) == 1 and b'STALE FIRST INCARNATION' not in brief
+    argv = calls[0]['argv']
+    assert argv[-1] == f'Read the file "{brief_file.as_posix()}" and follow its instructions.'
+    assert len(subprocess.list2cmdline(argv).encode('utf-16-le')) // 2 + 1 < 4096
+    assert 'Deferred' not in ' '.join(argv)
+    assert json.loads((d / 'crew.json').read_text(encoding='utf-8'))['respawn'] is None
 
 
 def test_hidden_pane_start_rejects_label_outside_crew(tmp_path, fake_bin, sleeper):
