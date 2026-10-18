@@ -52,7 +52,7 @@ def test_legacy_sets_exist_and_new_set_has_no_tool_variants():
     names = {p.name for p in current_briefs()}
     assert 'common.md' not in names, 'common.md is retired from the new set'
     assert not [n for n in names if re.search(r'-cli\.md$|-agy\.md$|^foreman-agy-coder\.md$', n)], names
-    assert {'foreman.md', 'coder.md', 'apprentice.md', 'tester.md', 'advisor.md', 'decompiler.md', 'researcher.md',
+    assert {'foreman.md', 'coder.md', 'apprentice.md', 'tester.md', 'advisor.md', 'researcher.md',
             'uitester.md'} <= names, names
 
 
@@ -101,11 +101,6 @@ def test_foreman_page_has_event_rules_and_commands():
         'read the diff; between events scope, never touch the code'
 
 
-def test_decompiler_keeps_the_missing_tool_rule():
-    text = page('decompiler.md')
-    assert 'BLOCKED' in text and re.search(r'tool', text, re.I) and re.search(r'missing|not found|absent', text, re.I)
-
-
 def test_tester_page_has_the_verdict_template():
     text = page('tester.md')
     for needle in ('TESTED-PASS', 'TESTED-FAIL', 'builds/<n>.json'):
@@ -114,7 +109,7 @@ def test_tester_page_has_the_verdict_template():
 
 
 @pytest.mark.parametrize('name', ['coder.md', 'apprentice.md', 'tester.md', 'foreman.md', 'advisor.md',
-                                  'decompiler.md', 'researcher.md', 'uitester.md'])
+                                  'researcher.md', 'uitester.md'])
 def test_new_pages_use_placeholders_not_literal_paths(name):
     text = page(name)
     assert 'C:/Tools/nightshift.exe' not in text and 'C:\\Tools' not in text, name
@@ -177,10 +172,6 @@ def test_legacy_briefs_reproduce_ngh062(tmp_path, fake_bin, sleeper, python_laun
     if REBASE:
         return
     actual = observe()
-    # NGH-068 removes display-only agents-cli name registration.
-    expected = json.loads(expected)
-    expected[-1] = [c for c in expected[-1] if c['exe'] != 'agents-cli']
-    expected = json.dumps(expected, ensure_ascii=False, indent=1)
     assert actual == expected, f'briefs: legacy differs from NGH-062 for {label}'
 
 

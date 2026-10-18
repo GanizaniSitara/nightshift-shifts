@@ -1,15 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
-
-	"nightshift-readonly/internal/console"
 )
 
 var spawnCLIs = map[string]string{
@@ -704,9 +705,43 @@ func runSpawn(argv []string, quiet bool) error {
 	cmdPid := processNumber(record, "cmd_pid")
 	spawned := float64(time.Now().UnixNano()) / 1e9
 
-	if err := console.Inject(cmdPid, line, true); err != nil {
+	var failed string
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "agents-cli", "_attach", "inject", strconv.FormatUint(uint64(cmdPid), 10), "1")
+	cmd.Stdin = strings.NewReader(line)
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	runErr := cmd.Run()
+	if runErr != nil {
+		var parts []string
+		if outStr := strings.TrimSpace(stdoutBuf.String()); outStr != "" {
+			parts = append(parts, outStr)
+		}
+		if errStr := strings.TrimSpace(stderrBuf.String()); errStr != "" {
+			parts = append(parts, errStr)
+		}
+		if len(parts) > 0 {
+			failed = strings.Join(parts, "\n")
+		} else {
+			failed = fmt.Sprintf("exit %d", cmd.ProcessState.ExitCode())
+		}
+	}
+	if failed == "" {
+		if val, err := parseJSON(stdoutBuf.Bytes()); err == nil {
+			if reply, ok := val.(object); ok {
+				if errVal, hasErr := objectGet(reply, "error"); hasErr {
+					failed = renderJSON(errVal, false, false)
+				}
+			}
+		}
+	}
+	if failed != "" {
 		_ = os.WriteFile(crewFile, beforeData, 0666)
-		return spawnExit(fmt.Sprintf("could not type into slot %d (cmd pid %d): %s", slot, cmdPid, err))
+		return spawnExit(fmt.Sprintf("could not type into slot %d (cmd pid %d): %s", slot, cmdPid, failed))
 	}
 
 	kept := spawnReadSlot(stateDir, slot)

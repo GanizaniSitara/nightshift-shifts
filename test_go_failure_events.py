@@ -3,7 +3,7 @@
 Contract: C:/nightshift/shifts/<shift>/contract-ngh061.md (with its Addendum). Fixtures are private temp worlds:
 the NGH-060 bus world (lead Boss = Foreman, Junior = Apprentice, Senior = Coder, QA = Tester; members record no pid
 unless a test kills or revives one), throwaway git repositories, and for respawn the launcher's pane world with a
-stub console helper that types into nothing. NIGHTSHIFT_NUDGE=off throughout; no window or session is ever launched.
+stub agents-cli that types into nothing. NIGHTSHIFT_NUDGE=off throughout; no window or session is ever launched.
 """
 import contextlib
 import json
@@ -756,12 +756,12 @@ func main() {
 def inject_stub(tmp_path_factory):
     go = go_toolchain()
     if not go:
-        pytest.skip('no Go toolchain to build the stub console helper')
+        pytest.skip('no Go toolchain to build the stub agents-cli')
     base = tmp_path_factory.mktemp('inject stub')
     (base / 'stub.go').write_text(STUB_AGENTS_CLI, encoding='utf-8')
     out = base / 'bin'
     out.mkdir()
-    built = subprocess.run([go, 'build', '-o', str(out / 'console-helper.exe'), str(base / 'stub.go')], cwd=base,
+    built = subprocess.run([go, 'build', '-o', str(out / 'agents-cli.exe'), str(base / 'stub.go')], cwd=base,
                            capture_output=True, timeout=300,
                            env={**os.environ, 'GOTOOLCHAIN': 'local', 'GOPROXY': 'off', 'GOFLAGS': '',
                                 'GO111MODULE': 'off'})
@@ -782,7 +782,7 @@ def respawn_world(tmp_path, fake_bin, sleeper, inject_stub):
     inject_record = tmp_path / 'inject record'
     inject_record.mkdir()
     respawn_env = {**env, 'INJECT_RECORD_DIR': str(inject_record), 'NIGHTSHIFT_NUDGE': 'off',
-                   'NIGHTSHIFT_CONSOLE_HELPER': str(inject_stub / 'console-helper.exe')}
+                   'PATH': str(inject_stub) + os.pathsep + env['PATH']}
     return env, respawn_env, d, repo, inject_record
 
 

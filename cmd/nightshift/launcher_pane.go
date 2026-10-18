@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,8 +21,6 @@ import (
 	"unicode"
 
 	"golang.org/x/sys/windows"
-
-	"nightshift-readonly/internal/console"
 )
 
 const (
@@ -340,7 +339,7 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 			command = append(command, "--effort", reasoning)
 		}
 	}
-	env := crewEnv(withSavedEnv(os.Environ()), tool, account, envRole)
+	env := crewEnv(os.Environ(), tool, account, envRole)
 	if tool == "agy" || tool == "copilot" {
 		// agy and copilot status lines show the role from these
 		env = append(env, "NIGHTSHIFT_ROLE="+role, "NIGHTSHIFT_IDENTITY="+identity, "NIGHTSHIFT_ROLE_COLOUR="+colour, "NIGHTSHIFT_STATE_DIR="+stateDir)
@@ -528,14 +527,9 @@ func runPaneChild(command []string, cwd string, env []string, role, identity, pe
 	}
 	// Discovery is best-effort and fenced to this exact child incarnation. It
 	// never replaces the launch record or an incarnation written by a respawn.
-	var telemetryDone chan struct{}
 	if start {
 		recordStarted, _ := objectNumber(record, "started")
-		telemetryDone = make(chan struct{})
-		go func() {
-			defer close(telemetryDone)
-			watchRoleTelemetry(child, stateDir, role, uint32(child.pid), numberFloat(recordStarted))
-		}()
+		go watchRoleTelemetry(child, stateDir, role, uint32(child.pid), numberFloat(recordStarted))
 		if role == "Foreman" {
 			go watchLiveShiftIdle(child.done, stateDir)
 		}
@@ -556,6 +550,7 @@ func runPaneChild(command []string, cwd string, env []string, role, identity, pe
 		}
 	}
 	if tool != "claude" {
+		registerName(child.pid, identity)
 		acceptTrustPrompt(child, tool)
 	} else {
 		acceptTrustPrompt(child, "claude")
@@ -568,9 +563,6 @@ func runPaneChild(command []string, cwd string, env []string, role, identity, pe
 		}
 	}
 	<-child.done
-	if telemetryDone != nil {
-		<-telemetryDone
-	}
 	var exit *exec.ExitError
 	if waitErr != nil && !errors.As(waitErr, &exit) {
 		return 0, waitErr
@@ -601,17 +593,54 @@ func foremanClaudeSettings(cwd string) object {
 	return object{{"permissions", object{{"deny", []any{"Edit(/" + repo + "/**)"}}}}}
 }
 
-// peekLines is the pane's visible lines (console.Peek); nil when unreadable.
-func peekLines(pid int) []any {
-	screen, err := console.Peek(uint32(pid), 0)
+// agentsCLI runs agents-cli with a timeout; stdout, exit code (-1 when it could not run).
+func agentsCLI(timeout time.Duration, stdin []byte, args ...string) ([]byte, int) {
+	if timeout <= 0 {
+		return nil, -1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "agents-cli", args...)
+	if stdin != nil {
+		cmd.Stdin = strings.NewReader(string(stdin))
+	}
+	data, err := cmd.Output()
+	if ctx.Err() != nil {
+		return data, -1
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return data, exit.ExitCode()
+	}
 	if err != nil {
+		return data, -1
+	}
+	return data, 0
+}
+
+func registerName(pid int, identity string) {
+	agentsCLI(15*time.Second, nil, "name", strconv.Itoa(pid), identity)
+}
+
+// peekLines is the pane's visible lines via agents-cli; nil when unreadable.
+func peekLines(pid int, timeout time.Duration) []any {
+	data, code := agentsCLI(timeout, nil, "_attach", "peek", strconv.Itoa(pid), "0")
+	if code != 0 {
 		return nil
 	}
-	lines := make([]any, 0, len(screen.Lines))
-	for _, l := range screen.Lines {
-		lines = append(lines, l)
+	if len(data) == 0 {
+		data = []byte("{}")
 	}
-	return lines
+	value, err := parseJSON([]byte(strings.ToValidUTF8(string(data), "\ufffd")))
+	result, ok := value.(object)
+	if err != nil || !ok || truthy(rowValue(result, "error")) {
+		return nil
+	}
+	if v, ok := objectGet(result, "lines"); ok {
+		lines, _ := v.([]any)
+		return lines
+	}
+	return []any{}
 }
 
 func lineStrings(lines []any) ([]string, bool) {
@@ -628,13 +657,19 @@ func lineStrings(lines []any) ([]string, bool) {
 	return out, all
 }
 
-// trustScreen is the pane's visible text (console.Peek); "" when unreadable.
+// trustScreen is the pane's visible text: agents-cli peek lines, else its raw output.
 func trustScreen(pid int) string {
-	screen, err := console.Peek(uint32(pid), 0)
-	if err != nil {
-		return ""
+	data, _ := agentsCLI(10*time.Second, nil, "_attach", "peek", strconv.Itoa(pid), "0")
+	raw := strings.ToValidUTF8(string(data), "\ufffd")
+	if value, err := parseJSON([]byte(raw)); err == nil {
+		if o, ok := value.(object); ok {
+			if lines, ok := rowValue(o, "lines").([]any); ok {
+				text, _ := lineStrings(lines)
+				return strings.Join(text, "\n")
+			}
+		}
 	}
-	return strings.Join(screen.Lines, "\n")
+	return raw
 }
 
 // trustPromptState: accept, dialog, past, or "" (keep polling).
@@ -677,7 +712,7 @@ func acceptTrustPrompt(child *paneChild, tool string) {
 	if _, ok := trustPrompts[tool]; !ok {
 		return
 	}
-	pid := uint32(child.pid)
+	pid := strconv.Itoa(child.pid)
 	for i := 0; i < 40; i++ {
 		if child.exited() {
 			return
@@ -686,13 +721,13 @@ func acceptTrustPrompt(child *paneChild, tool string) {
 		if state == "accept" || state == "dialog" {
 			for attempt := 0; attempt < 6; attempt++ {
 				if state == "accept" {
-					_ = console.Key(pid, tool, "enter")
+					agentsCLI(10*time.Second, nil, "key", pid, "enter")
 					return
 				}
 				if state != "dialog" {
 					return
 				}
-				_ = console.Key(pid, tool, "down")
+				agentsCLI(10*time.Second, nil, "key", pid, "down")
 				time.Sleep(time.Second)
 				state = trustPromptState(tool, trustScreen(child.pid))
 			}
@@ -721,8 +756,17 @@ func promptIsEmpty(lines []any) bool {
 // injectCommand types a line into the pane only when its input box is empty.
 func injectCommand(pid int, command string, tries int) bool {
 	for i := 0; i < tries; i++ {
-		if promptIsEmpty(peekLines(pid)) {
-			return console.Inject(uint32(pid), command, true) == nil
+		if promptIsEmpty(peekLines(pid, 10*time.Second)) {
+			data, code := agentsCLI(10*time.Second, []byte(command), "_attach", "inject", strconv.Itoa(pid), "1")
+			if code != 0 {
+				return false
+			}
+			if len(data) == 0 {
+				data = []byte("{}")
+			}
+			value, err := parseJSON([]byte(strings.ToValidUTF8(string(data), "\ufffd")))
+			result, ok := value.(object)
+			return err != nil || !ok || !truthy(rowValue(result, "error"))
 		}
 		time.Sleep(time.Second)
 	}

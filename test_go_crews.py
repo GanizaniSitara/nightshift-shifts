@@ -719,7 +719,7 @@ def test_spawn_uses_recorded_crew_file_and_role_override(world, sleeper):
     assert (member['model'], member['reasoning']) == ('gemini-3.8-flash', 'high')
 
 def test_spawn_defaults_an_unknown_role_to_the_specialists_crew(world, sleeper):
-    """A role the shift's crew lacks (Decompiler) comes from crews/specialists.yaml: Claude Opus 5.5 with its
+    """A role the shift's crew lacks (Researcher) comes from crews/specialists.yaml: Claude Opus 5.5 with its
     own brief. --cli still overrides it, and the last slot (the Ops pane) is never picked without --slot."""
     hwnd = real_terminal_hwnd()
     if hwnd is None:
@@ -739,14 +739,14 @@ def test_spawn_defaults_an_unknown_role_to_the_specialists_crew(world, sleeper):
     for n in range(1, 5):
         write_json(d / 'slots' / f'{n}.json', {'slot': n, 'role': 'Foreman' if n == 1 else None, 'cmd_pid': pid,
                                                'started': 900.0, **({'spawned': 500.0} if n == 1 else {})})
-    proc = native(['spawn', 'specfix', '--role', 'Decompiler', '--dry-run'], w['env'])
+    proc = native(['spawn', 'specfix', '--role', 'Researcher', '--dry-run'], w['env'])
     assert proc.returncode == 0, proc.stderr.decode('utf-8', 'replace')
     plan = json.loads(proc.stdout)
     member = plan['member']
     assert (member['tool'], member['model'], member['brief'], member['colour']) == \
-        ('claude', 'claude-opus-5-5', 'decompiler.md', 'purple')
+        ('claude', 'claude-opus-5-5', 'researcher.md', 'yellow')
     assert plan['slot'] == 2, 'first free slot; slot 4 is the Ops pane'
-    proc = native(['spawn', 'specfix', '--role', 'Decompiler', '--cli', 'codex', '--dry-run'], w['env'])
+    proc = native(['spawn', 'specfix', '--role', 'Researcher', '--cli', 'codex', '--dry-run'], w['env'])
     assert json.loads(proc.stdout)['member']['tool'] == 'codex', '--cli overrides the specialists default'
 
 def test_start_refuses_a_task_that_is_only_a_crew_name(world):

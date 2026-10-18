@@ -6,6 +6,7 @@ package main
 // re-nudges, cost samples per live member, and the budget (warning at 80%, a deterministic stop at 100%).
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,8 +15,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"nightshift-readonly/internal/console"
 )
 
 func init() { extraCommands["patrol"] = patrolCommand }
@@ -191,7 +190,9 @@ func patrolBudget(dir string) (object, bool, error) {
 // `start --continue-from`.
 func budgetStop(dir, unit string, total, budget float64) error {
 	for _, m := range liveMembers(dir) {
-		_ = console.Key(m.pid, objectString(m.obj, "tool"), "escape")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_ = exec.CommandContext(ctx, "agents-cli", "key", strconv.FormatUint(uint64(m.pid), 10), "escape").Run()
+		cancel()
 	}
 	if err := writeHandover(dir); err != nil {
 		errLine("patrol: handover not written during budget stop: " + err.Error())

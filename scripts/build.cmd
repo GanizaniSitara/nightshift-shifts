@@ -14,7 +14,13 @@ rem No GOEXE given: prefer a Go toolchain from the standard module cache (go.mod
 if "%GOEXE%"=="" for /d %%D in ("%USERPROFILE%\go\pkg\mod\golang.org\toolchain@v0.0.1-go1.2*.windows-amd64") do if exist "%%D\bin\go.exe" set "GOEXE=%%D\bin\go.exe"
 if "%GOEXE%"=="" set "GOEXE=go"
 
-"%GOEXE%" build -mod=readonly -trimpath -o "%OUTDIR%\nightshift.exe" ./cmd/nightshift
+set "LDFLAGS="
+if exist ".gitpull.version" (
+  set /p GITPULL_SHA=<".gitpull.version"
+  if defined GITPULL_SHA set "LDFLAGS=-ldflags=-X main.buildCommit=%GITPULL_SHA%"
+)
+
+"%GOEXE%" build -mod=readonly -trimpath %LDFLAGS% -o "%OUTDIR%\nightshift.exe" ./cmd/nightshift
 set "STATUS=%ERRORLEVEL%"
 if not "%STATUS%"=="0" goto done
 

@@ -6,8 +6,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"nightshift-readonly/internal/console"
 )
 
 const contextFreshSeconds = 90.0
@@ -107,15 +105,15 @@ func compactionBlocked(dir, label string, info object) (bool, error) {
 	return false, nil
 }
 
-func compactionIdle(tool string, screen console.Screen) bool {
-	if screen.State != "idle" {
+func compactionIdle(tool, state string, lines []string) bool {
+	if state != "idle" {
 		return false
 	}
 	if tool == "copilot" {
 		return true
-	} // console's classifier requires an empty framed composer.
-	for i := len(screen.Lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(screen.Lines[i])
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
 		if strings.HasPrefix(line, "›") || strings.HasPrefix(line, "❯") || strings.HasPrefix(line, ">") {
 			return line == "›" || line == "❯" || line == ">" || (tool == "codex" && (line == "› Ask Codex" || line == "› Ask Codex to do anything"))
 		}
@@ -151,10 +149,17 @@ func compactionPass(dir string) ([]any, error) {
 		if tool == "" {
 			tool = "claude"
 		}
-		screen, err := console.Tail(member.pid, tool, 40)
-		screenErr := err
+		tail := agentTail(member.pid)
+		screenOK := len(tail) > 0
+		var screenLines []string
+		if rawLines, ok := rowValue(tail, "lines").([]any); ok {
+			for _, item := range rawLines {
+				screenLines = append(screenLines, valueText(item))
+			}
+		}
+		screenState := objectString(tail, "state")
 		now := epochNow()
-		usedOnScreen, screenContext := parseContextUsed(tool, strings.Join(screen.Lines, "\n"))
+		usedOnScreen, screenContext := parseContextUsed(tool, strings.Join(screenLines, "\n"))
 		if screenContext {
 			if err := writeJSONFile(contextPath(dir, member.label), contextRecord(info, usedOnScreen, now)); err != nil {
 				return result, err
@@ -193,14 +198,14 @@ func compactionPass(dir string) ([]any, error) {
 		if phase == "stuck" {
 			continue
 		}
-		if screenErr != nil {
+		if !screenOK {
 			continue
 		}
 		blocked, err := compactionBlocked(dir, member.label, info)
 		if err != nil {
 			return result, err
 		}
-		if blocked || !compactionIdle(tool, screen) || !fresh {
+		if blocked || !compactionIdle(tool, screenState, screenLines) || !fresh {
 			continue
 		}
 		if phase == "pending" {
@@ -228,7 +233,7 @@ func compactionPass(dir string) ([]any, error) {
 				note := fmt.Sprintf("You are %s in %s. Your brief is %s; reread it, then run nightshift wait.", member.label, filepath.Base(dir), filepath.Join(dir, member.label+".brief.md"))
 				current, _ := readObject(filepath.Join(dir, member.label+".json"))
 				if samePane(current, info) && !liveWaiter(dir, member.label) {
-					if submitted, err := console.Send(member.pid, tool, note, true); err == nil && submitted {
+					if sendHeader(member.pid, note, tool) {
 						state = setValue(state, "phase", "waiting")
 					}
 				}
@@ -268,7 +273,7 @@ func compactionPass(dir string) ([]any, error) {
 			return result, err
 		}
 		if samePane(current, info) && !blocked && !liveWaiter(dir, member.label) {
-			_, _ = console.Send(member.pid, tool, command, true)
+			_ = sendHeader(member.pid, command, tool)
 		}
 	}
 	return result, nil

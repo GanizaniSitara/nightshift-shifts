@@ -943,9 +943,9 @@ def test_go_down_own_ancestor_receipt_bus_recovery_and_release_precede_kill(tmp_
 # private helpers without adding test switches or dependency hooks to product code.
 HELPER_MAIN = r'''
 package main
-import ("fmt"; "os"; "strconv")
+import ("fmt"; "os"; "path/filepath"; "strconv"; "strings")
 func main() {
-    if len(os.Args)>1 && os.Args[1]=="_attach" {
+    if strings.EqualFold(strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe"), "agents-cli") {
         fmt.Print(os.Getenv("NIGHTSHIFT_FIXTURE_PEEK")); return
     }
     if len(os.Args)>1 && os.Args[1]=="fixture-denials" {
@@ -975,7 +975,7 @@ def lifecycle_helper(tmp_path_factory):
     # The root package embeds crews/, briefs/ and personas/ (NGH-052); without it the build fails.
     for name in ('go.mod', 'go.sum', 'assets.go'):
         shutil.copyfile(REPO / name, root / name)
-    for name in ('crews', 'briefs', 'personas', 'scripts', 'internal'):
+    for name in ('crews', 'briefs', 'personas', 'scripts'):
         shutil.copytree(REPO / name, root / name)
     main = source / 'main.go'
     original = main.read_text(encoding='utf-8')
@@ -1038,9 +1038,9 @@ def test_go_record_denials_deduplicates_trimmed_role_line_and_preserves_first_ti
 @pytest.mark.parametrize('lines', [0, 1, 2, 40])
 @pytest.mark.parametrize('payload', ['valid', 'invalid'])
 def test_go_pane_tail_filters_blank_lines_and_limits_visible_tail(tmp_path, lifecycle_helper, monkeypatch, lines, payload):
-    fake = tmp_path / 'console-helper.exe'
+    fake = tmp_path / 'agents-cli.exe'
     shutil.copyfile(lifecycle_helper, fake)
-    monkeypatch.setenv('NIGHTSHIFT_CONSOLE_HELPER', str(fake))
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('NIGHTSHIFT_FIXTURE_PEEK', json.dumps({'lines': ['first', ' ', '', ' café ', 'last']})
                        if payload == 'valid' else 'not-json')
     expected = frozen(lambda: (require_recording(), oracle.pane_tail(DEAD_PID, lines))[1], tmp_path)
@@ -1058,8 +1058,8 @@ def test_go_down_captures_live_tail_denials_and_retains_handover_after_hold(tmp_
     env, d, repo, work, info = world(tmp_path, False)
     fakebin = tmp_path / 'fake tools'
     fakebin.mkdir()
-    shutil.copyfile(lifecycle_helper, fakebin / 'console-helper.exe')
-    monkeypatch.setenv('NIGHTSHIFT_CONSOLE_HELPER', str(fakebin / 'console-helper.exe'))
+    shutil.copyfile(lifecycle_helper, fakebin / 'agents-cli.exe')
+    monkeypatch.setenv('PATH', str(fakebin) + os.pathsep + os.environ['PATH'])
     visible = [f'visible {i}' for i in range(45)] + ['  Bash denied  ', 'Permission DENIED: café',
                                                      ' ', '  Bash denied  ']
     monkeypatch.setenv('NIGHTSHIFT_FIXTURE_PEEK', json.dumps({'lines': visible}))

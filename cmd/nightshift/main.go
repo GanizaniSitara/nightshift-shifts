@@ -23,8 +23,6 @@ import (
 
 	"golang.org/x/sys/windows"
 	_ "modernc.org/sqlite"
-
-	"nightshift-readonly/internal/console"
 )
 
 const (
@@ -1884,8 +1882,6 @@ func main() {
 		code = inboxCommand(os.Args[2:])
 	case "log":
 		code = logCommand(os.Args[2:])
-	case "_attach": // hidden: the console helper child (internal/console)
-		code = console.HelperMain(os.Args[2:])
 	default:
 		if fn, ok := extraCommands[os.Args[1]]; ok {
 			code = fn(os.Args[2:])

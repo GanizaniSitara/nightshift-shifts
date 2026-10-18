@@ -22,7 +22,7 @@ nightshift down instead. Foreman only.
 
 positional arguments:
   shift       shift name, unique suffix, or "latest"
-  role        the member's label, e.g. Coder2 or Decompiler
+  role        the member's label, e.g. Coder2 or Researcher
 
 options:
   -h, --help  show this help message and exit

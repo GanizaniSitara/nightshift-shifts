@@ -129,8 +129,11 @@ func setupCommand(argv []string, fix bool) int {
 
 	tools := object{}
 	say("Tools")
-	for _, tool := range []string{"claude", "copilot", "codex", "agy"} {
+	for _, tool := range []string{"claude", "copilot", "codex", "agy", "agents-cli"} {
 		p := toolExe(tool)
+		if tool == "agents-cli" {
+			p, _ = exec.LookPath(tool)
+		}
 		tools = append(tools, pair{tool, p})
 		if p == "" {
 			p = "not found"

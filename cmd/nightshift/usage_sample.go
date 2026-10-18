@@ -21,10 +21,14 @@ type usageSample struct {
 // usageKeep is how many samples a <Role>-usage.json keeps.
 const usageKeep = 200
 
-// paneScreen is the visible text of a pane (the last 40 lines, console.Tail); tests stub it. Only the lines are
-// used, so the tool is left to agentTail's default.
+// paneScreen is the visible text of a pane (agents-cli tail); tests stub it.
 var paneScreen = func(pid uint32) string {
-	return strings.Join(agentTail(pid, "").Lines, "\n")
+	lines, _ := rowValue(agentTail(pid), "lines").([]any)
+	text := make([]string, 0, len(lines))
+	for _, l := range lines {
+		text = append(text, valueText(l))
+	}
+	return strings.Join(text, "\n")
 }
 
 type footerPattern struct {

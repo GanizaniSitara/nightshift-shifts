@@ -66,7 +66,6 @@ func TestNewRolePagesWithinBudget(t *testing.T) {
 		tbCrewMember("Tester", "Tester", "claude", "claude-opus-5-5"),
 		tbCrewMember("Advisor", "Advisor", "claude", "claude-fable-5-1"),
 		// no persona file of their own: the default persona applies, as in crews/specialists.yaml
-		setValue(tbCrewMember("Decompiler", "Decompiler", "claude", "claude-opus-5-5"), "persona", ""),
 		setValue(tbCrewMember("Researcher", "Researcher", "claude", "claude-opus-5-5"), "persona", ""),
 		tbCrewMember("UITester", "UITester", "claude", "claude-opus-5-5"))
 	crew = tbWithKey(tbWithKey(crew, "advisor_slot", 5), "coder_slot", 3)
@@ -137,7 +136,6 @@ func TestReadOnlyRolesGetTheirOwnEditRule(t *testing.T) {
 	f := tbNewRenderFixture(t)
 	crew := tbCrewOf(tbCrewMember("Foreman", "Foreman", "claude", "claude-opus-5-5"),
 		tbCrewMember("Advisor", "Advisor", "claude", "claude-fable-5-1"),
-		setValue(tbCrewMember("Decompiler", "Decompiler", "claude", "claude-opus-5-5"), "persona", ""),
 		setValue(tbCrewMember("Researcher", "Researcher", "claude", "claude-opus-5-5"), "persona", ""),
 		tbCrewMember("Coder", "Coder", "claude", "claude-opus-5-5"),
 		tbCrewMember("Tester", "Tester", "claude", "claude-opus-5-5"),
@@ -145,7 +143,6 @@ func TestReadOnlyRolesGetTheirOwnEditRule(t *testing.T) {
 	crew = tbWithKey(crew, "advisor_slot", 2)
 	want := map[string]string{
 		"Advisor":    "1. Never edit files; never commit or push.",
-		"Decompiler": "1. Never edit repository files; never commit or push.",
 		"Researcher": "1. Never edit repository files; never commit or push.",
 	}
 	for label, rule := range want {

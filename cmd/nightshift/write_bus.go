@@ -339,7 +339,7 @@ func deliverBusMessage(dir string, row object) {
 	if pid == 0 || !pidAlive(pid, started, startedOK) {
 		reason = recipient + " has no live pane"
 	} else if !sendHeader(pid, fmt.Sprintf("%s  run: nightshift wait %s %s", msgHeader(row), filepath.Base(dir), recipient), tool) {
-		reason = "console send did not submit the nudge"
+		reason = "agents-cli send did not submit the nudge"
 	} else {
 		markSent("nudge")
 		return

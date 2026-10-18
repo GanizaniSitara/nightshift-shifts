@@ -8,8 +8,17 @@ import (
 	"strings"
 )
 
+// buildCommit is stamped by scripts/build.cmd from .gitpull.version when building outside a git checkout.
+var buildCommit = ""
+
 func versionText() string {
 	revision, when, dirty := "unknown", "", false
+	if buildCommit != "" {
+		revision = buildCommit
+		if len(revision) > 7 {
+			revision = revision[:7]
+		}
+	}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, s := range info.Settings {
 			switch s.Key {
