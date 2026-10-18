@@ -88,11 +88,23 @@ start --dry-run --prompt-file task.txt
 var (
 	ticketPattern    = `[A-Z][A-Z0-9]+-\d+`
 	ticketFull       = regexp.MustCompile(`^` + ticketPattern + `$`)
-	ticketHeader     = regexp.MustCompile(`^Ticket (` + ticketPattern + `):`)
+	ticketHeader     = regexp.MustCompile(`^(?:Ticket\s+)?(` + ticketPattern + `)(?:\s*[:—–-]|$)`)
+	ticketTasksCLI   = regexp.MustCompile(`\btasks-cli\s+(?:get|show|update|note|move)\s+(` + ticketPattern + `)\b`)
 	requiresLine     = regexp.MustCompile(`(?mi)^requires:\s*(\w+)\s*$`)
 	codebaseLine     = regexp.MustCompile(`(?m)^codebase:\s*(.+?)\s*$`)
 	branchSlugUnsafe = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 )
+
+func promptTicket(task string) string {
+	trimmed := strings.TrimSpace(task)
+	if m := ticketHeader.FindStringSubmatch(firstSplitLine(trimmed)); m != nil {
+		return m[1]
+	}
+	if m := ticketTasksCLI.FindStringSubmatch(trimmed); m != nil {
+		return m[1]
+	}
+	return ""
+}
 
 func init() {
 	extraCommands["start"] = startCommand
@@ -168,9 +180,7 @@ func runStart(argv []string, print bool) (string, error) {
 	}
 	task := *prompt
 	if ticket == "" {
-		if m := ticketHeader.FindStringSubmatch(firstSplitLine(task)); m != nil {
-			ticket = m[1]
-		}
+		ticket = promptTicket(task)
 	}
 	required := parseRequires(task)
 	if from := args.values["--continue-from"]; from != "" {
@@ -793,11 +803,10 @@ func shortShiftName(name string) string {
 }
 
 func shiftTitle(name, ticket string) string {
-	title := shortShiftName(name)
 	if ticket != "" {
-		title += " | " + ticket
+		return "shift | " + ticket
 	}
-	return title
+	return shortShiftName(name)
 }
 
 func loopTitle(tickets []string) string {

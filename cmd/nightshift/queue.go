@@ -195,6 +195,8 @@ func queueAdd(dir, text, from string) (bool, queueItem, error) {
 		added = queueItem{ID: next, TS: time.Now().Format("2006-01-02T15:04:05"), From: from, Task: text, State: "queued"}
 		if ticketFull.MatchString(text) {
 			added.Ticket = text
+		} else if t := promptTicket(text); t != "" {
+			added.Ticket = t
 		}
 		return append(items, added), nil
 	})
@@ -364,6 +366,9 @@ func queueNext(dir string) (*queueItem, error) {
 		return items, nil
 	})
 	if err == nil && started != nil {
+		if started.Ticket != "" {
+			_ = os.WriteFile(filepath.Join(dir, "ticket.txt"), []byte(started.Ticket+"\n"), 0666)
+		}
 		busAppend(dir, "queue_next", object{{"id", started.ID}, {"task", started.Task}})
 	}
 	return started, err

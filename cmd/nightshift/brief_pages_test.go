@@ -34,6 +34,9 @@ func TestGeneratedRulesCarryCommonMdHardRules(t *testing.T) {
 		if !strings.Contains(rules, filepath.ToSlash(f.stateDir)) && !strings.Contains(rules, "bus.jsonl") {
 			t.Fatalf("%s rules lack where state lives (<state_dir>, the bus):\n%s", label, rules)
 		}
+		if !strings.Contains(rules, "outside this shift's crew") || !strings.Contains(rules, filepath.ToSlash(f.repo)) {
+			t.Fatalf("%s rules lack shift/session/checkout isolation rule:\n%s", label, rules)
+		}
 	}
 	foreman := tbRulesSection(t, tbRenderAll(f, tbDefaultCrew())["Foreman"])
 	if !regexp.MustCompile(`(?i)spawn`).MatchString(foreman) {

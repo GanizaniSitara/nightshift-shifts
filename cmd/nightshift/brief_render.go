@@ -356,7 +356,9 @@ func hardRules(m *crewMember, current bool, features map[string]bool, page strin
 		} else {
 			rules = append(rules, "Never launch sessions, windows, tabs or crews; ask Foreman. Only Foreman runs "+joinAnd(starts)+".")
 		}
-		rules = append(rules, "Shift state lives in `{state_dir}` (mailbox, claims, builds, handover.md); `{state_dir}/bus.jsonl` records every event and `{nightshift} log {shift}` prints it.")
+		rules = append(rules,
+			"Never contact, nudge, tail or inspect any session outside this shift's crew (`{peer_name}`), and never read or modify another shift's folder or any checkout outside `{cwd}`.",
+			"Shift state lives in `{state_dir}` (mailbox, claims, builds, handover.md); `{state_dir}/bus.jsonl` records every event and `{nightshift} log {shift}` prints it.")
 	}
 	text := "# Rules\n\n"
 	for i, r := range rules {

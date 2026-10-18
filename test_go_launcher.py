@@ -501,7 +501,7 @@ def ngh070_start_expected(data):
     if not isinstance(plan, dict) or plan.get('shift') != 'Nightshift-shift-<id>':
         return data
     old_title = next(iter(plan['roles'].values()))['pane_title']
-    title = 'shift-<id>' + (' | ' + plan['ticket'] if plan.get('ticket') else '')
+    title = ('shift | ' + plan['ticket']) if plan.get('ticket') else 'shift-<id>'
     # Preserve every other byte, including legacy source paths and brief content.
     data = data.replace(b'Nightshift-shift-<id>', b'shift-<id>')
     old_title = old_title.replace('Nightshift-shift-<id>', 'shift-<id>')
@@ -1490,6 +1490,13 @@ def test_hidden_pane_start_runs_same_stub_argv_and_records(tmp_path, fake_bin, s
     def native_side():
         # NGH-062 re-record: the rendered brief in the stub argv is the renderer's, no longer the oracle's.
         text, info, slot_record, calls = observe(True)
+        if label == 'Coder':
+            parsed = json.loads(text)
+            ptr = parsed[-1][0]['argv'][-1]
+            prefix, suffix = 'Read the file "', '" and follow its instructions.'
+            if ptr.startswith(prefix) and ptr.endswith(suffix):
+                parsed[-1][0]['argv'][-1] = Path(ptr[len(prefix):-len(suffix)]).read_text(encoding='utf-8')
+                text = json.dumps(parsed, ensure_ascii=False, indent=1)
         return normalise(text.encode(), python_launcher, True), info, slot_record, calls
     observed = [frozen(native_side if REBASE else oracle_side, tmp_path, {'SLEEPER_PID': sleeper[0]}, record=REBASE)]
     if not observed[0][3]:

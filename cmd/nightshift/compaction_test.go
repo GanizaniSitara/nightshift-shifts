@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -123,5 +124,47 @@ func TestCompactionCallbackRequiresMatchingSession(t *testing.T) {
 				t.Fatal(saved)
 			}
 		})
+	}
+}
+
+func TestSituationalCompactThreshold(t *testing.T) {
+	dir := t.TempDir()
+	foreman := object{{"label", "Foreman"}, {"role", "Foreman"}, {"human_contact", true}}
+	coder := object{{"label", "Coder"}, {"role", "Coder"}}
+	info := object{{"pid", 42}, {"started", 100.0}}
+	_ = writeJSONFile(filepath.Join(dir, "Foreman.json"), info)
+	_ = writeJSONFile(filepath.Join(dir, "Coder.json"), info)
+
+	// Initial state: no dispatches yet -> Foreman 50%, Coder 70%
+	if got, reason := situationalCompactThreshold(dir, "Foreman", foreman, info); got != 50 || reason != "foreman-default" {
+		t.Fatalf("initial Foreman: %v %q", got, reason)
+	}
+	if got, reason := situationalCompactThreshold(dir, "Coder", coder, info); got != 70 || reason != "worker-default" {
+		t.Fatalf("initial Coder: %v %q", got, reason)
+	}
+
+	// Open dispatch in flight to Coder -> Foreman defers to 80% ("awaiting-dispatch")
+	if err := withWriteMailbox(dir, func(db *sql.DB) error {
+		_, err := insertMessage(db, dir, "assignment", "Foreman", "Coder", "implement feature", "asg-1", nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, reason := situationalCompactThreshold(dir, "Foreman", foreman, info); got != 80 || reason != "awaiting-dispatch" {
+		t.Fatalf("in-flight Foreman: %v %q", got, reason)
+	}
+
+	// Coder completes the assignment -> Foreman is at phase boundary (40%), Coder is between assignments (35%)
+	if err := withWriteMailbox(dir, func(db *sql.DB) error {
+		_, err := insertMessage(db, dir, "result", "Coder", "Foreman", "DONE: implemented", "asg-1", nil)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, reason := situationalCompactThreshold(dir, "Foreman", foreman, info); got != 40 || reason != "phase-boundary" {
+		t.Fatalf("phase-boundary Foreman: %v %q", got, reason)
+	}
+	if got, reason := situationalCompactThreshold(dir, "Coder", coder, info); got != 35 || reason != "between-assignments" {
+		t.Fatalf("between-assignments Coder: %v %q", got, reason)
 	}
 }

@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 const contextFreshSeconds = 90.0
@@ -20,6 +25,106 @@ func compactThreshold(member object) float64 {
 		return 50
 	}
 	return 70
+}
+
+func dispatchCounts(dir, label string, info object) (openShift, completedShift, completedRole int) {
+	rows, err := readMessages(dir)
+	if err != nil {
+		return 0, 0, 0
+	}
+	inc, ok := objectNumber(info, "started")
+	for _, row := range dispatches(dir, rows) {
+		if writeDispatchDone(row, rows) {
+			completedShift++
+			if rowString(row, "recipient") == label && sameNumber(inc, ok, rowValue(row, "recipient_incarnation")) {
+				completedRole++
+			}
+		} else {
+			openShift++
+		}
+	}
+	return openShift, completedShift, completedRole
+}
+
+// situationalCompactThreshold returns the Bridge Warden's situational compaction threshold and reason.
+// Explicit compact_at overrides always win. Otherwise:
+//   - Foreman with open crew dispatches in flight defers compaction up to 80% ("awaiting-dispatch") so it never loses
+//     in-flight context mid-assignment; at a phase boundary (0 open dispatches after completed work) it compacts early at 40% ("phase-boundary").
+//   - Workers (Coder/Apprentice/Tester) at an assignment boundary (after completing an assignment and before the next)
+//     compact early at 35% ("between-assignments") instead of starting the next coding task at 60-69% context.
+func situationalCompactThreshold(dir, label string, member, info object) (float64, string) {
+	if n, ok := objectNumber(member, "compact_at"); ok {
+		v := numberFloat(n)
+		if v <= 0 {
+			return 0, "disabled"
+		}
+		return v, "explicit"
+	}
+	openShift, completedShift, completedRole := dispatchCounts(dir, label, info)
+	isForeman := strings.EqualFold(objectString(member, "role"), "Foreman") || truthy(rowValue(member, "human_contact"))
+	if isForeman {
+		if openShift > 0 {
+			return 80, "awaiting-dispatch"
+		}
+		if completedShift > 0 {
+			return 40, "phase-boundary"
+		}
+		return 50, "foreman-default"
+	}
+	if completedRole > 0 {
+		return 35, "between-assignments"
+	}
+	return 70, "worker-default"
+}
+
+func wardenJudgePath(dir string) string { return filepath.Join(dir, "warden-judge.json") }
+
+func wardenJudgeCompaction(dir, label string, member, info object, used, threshold float64, reason string, now float64) (bool, string) {
+	judges, _ := readObject(wardenJudgePath(dir))
+	decision := "compact"
+	crew, _ := readObject(filepath.Join(dir, "crew.json"))
+	llmEnabled := os.Getenv("NIGHTSHIFT_WARDEN_LLM") == "1" || truthy(rowValue(crew, "warden_llm"))
+	if llmEnabled && reason != "explicit" && used < 80 {
+		prev, _ := rowValue(judges, label).(object)
+		lastAt, ok := objectNumber(prev, "llm_at")
+		if ok && now-numberFloat(lastAt) < 300 && samePane(prev, info) {
+			if objectString(prev, "decision") == "defer" {
+				return false, objectString(prev, "reason")
+			}
+		} else if compact, llmReason, ok := runWardenLLMJudge(dir, label, used, threshold, reason); ok {
+			reason = llmReason
+			if !compact {
+				decision = "defer"
+			}
+			entry := object{{"pid", rowValue(info, "pid")}, {"started", rowValue(info, "started")}, {"decision", decision}, {"reason", reason}, {"used", used}, {"threshold", threshold}, {"at", now}, {"llm_at", now}}
+			_ = writeJSONFile(wardenJudgePath(dir), setValue(judges, label, entry))
+			return compact, reason
+		}
+	}
+	entry := object{{"pid", rowValue(info, "pid")}, {"started", rowValue(info, "started")}, {"decision", decision}, {"reason", reason}, {"used", used}, {"threshold", threshold}, {"at", now}}
+	_ = writeJSONFile(wardenJudgePath(dir), setValue(judges, label, entry))
+	return true, reason
+}
+
+func runWardenLLMJudge(dir, label string, used, threshold float64, reason string) (bool, string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	prompt := fmt.Sprintf("You are Nightshift Bridge Warden for %s. Role %s is idle at %.0f%% context used (situational threshold %.0f%%, trigger %s). Reply with one line starting COMPACT or DEFER followed by a short 3-word reason.", filepath.Base(dir), label, used, threshold, reason)
+	cmd := exec.CommandContext(ctx, toolExe("codex"), "exec", "--skip-git-repo-check", "-m", "gpt-6.1-sol", "-c", `model_reasoning_effort="low"`, prompt)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	out, err := cmd.Output()
+	if err != nil {
+		return true, reason, false
+	}
+	line := strings.TrimSpace(firstSplitLine(string(out)))
+	upper := strings.ToUpper(line)
+	if strings.HasPrefix(upper, "DEFER") {
+		return false, "llm-defer", true
+	}
+	if strings.HasPrefix(upper, "COMPACT") {
+		return true, "llm-compact", true
+	}
+	return true, reason, false
 }
 
 func compactionCommand(tool string) string {
@@ -245,7 +350,7 @@ func compactionPass(dir string) ([]any, error) {
 			}
 			continue
 		}
-		threshold := compactThreshold(member.obj)
+		threshold, reason := situationalCompactThreshold(dir, member.label, member.obj, info)
 		if phase == "done" {
 			if used < threshold {
 				state = setValue(state, "phase", "")
@@ -263,7 +368,11 @@ func compactionPass(dir string) ([]any, error) {
 		if liveWaiter(dir, member.label) {
 			continue
 		}
-		state = setValue(setValue(setValue(state, "phase", "pending"), "before", used), "requested_at", now)
+		if allow, judgeReason := wardenJudgeCompaction(dir, member.label, member.obj, info, used, threshold, reason, now); !allow {
+			_ = judgeReason
+			continue
+		}
+		state = setValue(setValue(setValue(setValue(state, "phase", "pending"), "before", used), "requested_at", now), "reason", reason)
 		if err := writeJSONFile(path, state); err != nil {
 			return result, err
 		}

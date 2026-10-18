@@ -19,11 +19,25 @@ func TestShortShiftNamesAndTitles(t *testing.T) {
 			t.Errorf("shortShiftName(%q)=%q want %q", tc.input, got, tc.want)
 		}
 	}
-	if got := shiftTitle("Nightshift-shift-1234abcd", "NGH-070"); got != "shift-1234abcd | NGH-070" {
+	if got := shiftTitle("Nightshift-shift-1234abcd", "NGH-070"); got != "shift | NGH-070" {
+		t.Fatal(got)
+	}
+	if got := shiftTitle("shift-1234abcd", "LAP-044"); got != "shift | LAP-044" {
 		t.Fatal(got)
 	}
 	if got := shiftTitle("shift-1234abcd", ""); got != "shift-1234abcd" {
 		t.Fatal(got)
+	}
+	for _, tc := range []struct{ prompt, want string }{
+		{"Ticket NGH-070: Shorten footer", "NGH-070"},
+		{"LAP-044: Fix face crop clustering\nBody text", "LAP-044"},
+		{"LAP-044 — Fix face crop clustering", "LAP-044"},
+		{"Read ticket with tasks-cli get LAP-044 and implement", "LAP-044"},
+		{"Plain task with no ticket", ""},
+	} {
+		if got := promptTicket(tc.prompt); got != tc.want {
+			t.Errorf("promptTicket(%q)=%q want %q", tc.prompt, got, tc.want)
+		}
 	}
 }
 

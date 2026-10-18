@@ -98,7 +98,7 @@ func wardenBanner(dir string) string {
 	}
 	const bold, dim, reset = "\x1b[1;37;45m", "\x1b[90m", "\x1b[0m"
 	return "\n" + bold + " NIGHTSHIFT WARDEN  " + label + " " + reset + "\n" +
-		dim + "  Every 30s: liveness, nudges, compaction (Foreman 50%, others 70%), cost & budget guard" + reset + "\n\n"
+		dim + "  Every 30s: liveness, nudges, situational Bridge Warden compaction, cost & budget guard" + reset + "\n\n"
 }
 
 func wardenTickLine(dir string, report object) string {
@@ -115,7 +115,8 @@ func wardenTickLine(dir string, report object) string {
 		if pid == 0 || !incarnationRunning(pid, started, ok) {
 			continue
 		}
-		thresh := int(compactThreshold(m))
+		threshFloat, reason := situationalCompactThreshold(dir, label, m, info)
+		thresh := int(threshFloat)
 		ctxStr := "?%"
 		if ctxObj, ok := readObject(contextPath(dir, label)); ok {
 			if used, fresh := freshContext(ctxObj, info, now); fresh {
@@ -138,7 +139,7 @@ func wardenTickLine(dir string, report object) string {
 				}
 			}
 		}
-		parts = append(parts, fmt.Sprintf("%s(%s/%d%%%s)", label, ctxStr, thresh, costStr))
+		parts = append(parts, fmt.Sprintf("%s(%s/%d%% %s%s)", label, ctxStr, thresh, reason, costStr))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "no live panes")

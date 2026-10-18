@@ -290,10 +290,14 @@ func closeTarget(dir string) uintptr {
 	if hwnd == 0 {
 		label := strings.TrimSpace(readText(filepath.Join(dir, "ticket.txt")))
 		currentTitle := shiftTitle(filepath.Base(dir), label)
+		legacyTitle := shortShiftName(filepath.Base(dir))
+		if label != "" {
+			legacyTitle += " | " + label
+		}
 		if label == "" {
 			label = filepath.Base(dir)
 		}
-		titles := map[string]bool{currentTitle: true, label + " shift": true, "Foreman": true, "Coder": true}
+		titles := map[string]bool{currentTitle: true, legacyTitle: true, label + " shift": true, "Foreman": true, "Coder": true}
 		_, members := crewMembers(dir)
 		for _, m := range members {
 			titles[label+" "+objectString(m, "label")] = true

@@ -450,3 +450,25 @@ def test_spawn_and_respawn_preserve_compaction_setting(compact_world, tmp_path, 
         member = json.loads(result.stdout)['member']
         assert member['tool'] == 'codex'
     assert member['compact_at'] == threshold, member
+
+
+def test_situational_bridge_warden_compaction(compact_world):
+    """When compact_at is not explicitly set, Coder between assignments compacts early (>=35%) and records warden-judge.json."""
+    w = compact_world
+    crew = json.loads((w.d / 'crew.json').read_text(encoding='utf-8'))
+    for member in crew['members']:
+        if member['label'] == 'Coder':
+            member.pop('compact_at', None)
+    write_json(w.d / 'crew.json', crew)
+    # Before any assignment completes, 38% used (62% left) is below the 70% worker default -> no compaction
+    tick(w, left=62)
+    assert compact_writes(w) == []
+    # Complete one assignment for Coder -> now at assignment boundary (threshold 35%), so 38% used triggers compaction
+    w.insert(recipient='Coder', asg='asg-1', state='acknowledged', age=20)
+    w.insert(kind='result', sender='Coder', recipient='Foreman', asg='asg-1', state='delivered', age=5)
+    tick(w, left=62)
+    assert len(compact_writes(w)) == 1
+    judge = json.loads((w.d / 'warden-judge.json').read_text(encoding='utf-8'))
+    assert judge['Coder']['decision'] == 'compact' and judge['Coder']['reason'] == 'between-assignments'
+    assert judge['Coder']['threshold'] == 35
+

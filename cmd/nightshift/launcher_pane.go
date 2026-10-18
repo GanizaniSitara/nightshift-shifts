@@ -130,6 +130,8 @@ func opsBanner(stateDir string) string {
 	label := strings.TrimSpace(readText(filepath.Join(stateDir, "ticket.txt")))
 	if label == "" {
 		label = shift
+	} else {
+		label = shift + " | " + label
 	}
 	const bold, dim, reset = "\x1b[1;30;47m", "\x1b[90m", "\x1b[0m"
 	return "\n" + bold + " NIGHTSHIFT OPS  " + label + " " + reset + "\n\n" +
