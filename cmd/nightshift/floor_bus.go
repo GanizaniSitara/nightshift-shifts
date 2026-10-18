@@ -432,12 +432,20 @@ func floorCommand(argv []string) int {
 }
 
 func statuslineCommand(argv []string) int {
-	_, _ = io.ReadAll(os.Stdin)
+	input, _ := io.ReadAll(os.Stdin)
 	role := os.Getenv("NIGHTSHIFT_ROLE")
 	identity := os.Getenv("NIGHTSHIFT_IDENTITY")
+	colourName := os.Getenv("NIGHTSHIFT_ROLE_COLOUR")
+	// A Claude pane names itself in its settings file (NGH-066): the line also shows, and records, its cost.
+	args, _ := parseWriteArgs(argv, []writeOption{{name: "--state-dir"}, {name: "--role"}, {name: "--identity"}, {name: "--colour"}}, nil, nil)
+	suffix := ""
+	if args.present["--role"] {
+		role, identity, colourName = args.values["--role"], args.values["--identity"], args.values["--colour"]
+		suffix = claudeStatusCost(args.values["--state-dir"], role, input)
+	}
 	if role != "" && identity != "" {
 		colour := "37"
-		switch os.Getenv("NIGHTSHIFT_ROLE_COLOUR") {
+		switch colourName {
 		case "red":
 			colour = "31"
 		case "purple":
@@ -449,7 +457,34 @@ func statuslineCommand(argv []string) int {
 		case "yellow":
 			colour = "33"
 		}
-		outLine(fmt.Sprintf("\033[%sm%s · %s\033[0m", colour, role, identity))
+		outLine(fmt.Sprintf("\033[%sm%s · %s%s\033[0m", colour, role, identity, suffix))
 	}
 	return 0
+}
+
+// claudeStatusCost reads Claude's status-line JSON: cost.total_cost_usd, recorded as a usd sample in the role's
+// usage file when it changed, else the transcript's token total. It returns " · $1.23", " · N tokens" or "".
+func claudeStatusCost(stateDir, role string, input []byte) string {
+	status, _ := parseJSON(input)
+	o, _ := status.(object)
+	cost, _ := rowValue(o, "cost").(object)
+	if n, ok := objectNumber(cost, "total_cost_usd"); ok {
+		value := numberFloat(n)
+		if stateDir != "" {
+			file, _ := readObject(usagePath(stateDir, role))
+			prior, seen := latestUsage(file)["usd"]
+			if last, _ := objectNumber(prior, "value"); !seen || numberFloat(last) != value {
+				_ = recordUsage(stateDir, usageSample{Role: role, Unit: "usd", Source: "statusline", Value: value, At: epochNow()})
+			}
+		}
+		return " · " + usageText("usd", value)
+	}
+	if transcript := objectString(o, "transcript_path"); transcript != "" {
+		if usage := harvestTranscript(transcript, "claude"); usage != nil {
+			if n, ok := objectNumber(usage, "total_tokens"); ok {
+				return " · " + usageText("tokens", numberFloat(n))
+			}
+		}
+	}
+	return ""
 }

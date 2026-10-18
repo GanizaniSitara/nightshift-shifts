@@ -1022,9 +1022,12 @@ There is no bus process: each command appends its own line and `nightshift log` 
 | `ack` | `ack`; `wait` (NGH-060) | `id`, `by`, `outcome` (`acknowledged`, `already acknowledged`, `protocol violation` + `reason`); `wait` adds `via: "wait"` |
 | `nudge-failed` | `ready`/`assign`/`note`/`report` when the nudge could not be delivered (NGH-060) | `id`, `to`, `reason`; the row stays `stored` for the warden |
 | `nudge-retry` | `warden`, re-nudging a row unacked for 10 minutes (NGH-065) | `id`, `to`, `attempt` (1-3) |
-| `member-stalled` | `warden`, on the third retry (NGH-065) | `role`, `id`, `attempts` |
-| `member-died` | the lead's `wait` poll (NGH-061) | `role`, `pid`, `incarnation`, `asg` (the member's active assignment or null) |
-| `asg-timeout` | the lead's `wait` poll (NGH-061) | `asg`, `recipient`, `delivered_epoch` |
+| `member-stalled` | the patrol (or the floor `warden` for a shift without one), on the third retry (NGH-065) | `role`, `id`, `attempts` |
+| `budget-warning` | the patrol, when a unit's shift total reaches 80% of its budget, once per unit (NGH-066) | `unit`, `total`, `budget` |
+| `budget-stop` | the patrol, when a unit's total reaches its budget, once per unit (NGH-066) | `unit`, `total`, `budget` |
+| `paused` | the patrol's budget stop, after the handover is written (NGH-066) | `reason` (`budget-stop`), `unit`, `total`, `budget` |
+| `member-died` | the shift's `patrol` (NGH-066; the lead's `wait` poll in NGH-061) | `role`, `pid`, `incarnation`, `asg` (the member's active assignment or null) |
+| `asg-timeout` | the shift's `patrol` (NGH-066; the lead's `wait` poll in NGH-061) | `asg`, `recipient`, `delivered_epoch` |
 | `loop-detected` | `build --asg` when it refuses a fourth failing build (NGH-061) | `asg`, `builds` (the three n), `signature` |
 | `commit` | `commit` (NGH-061) | `asg`, `sha`, `build` (n of the build Tester passed) |
 | `respawn` | `respawn`, after the slot was typed into (NGH-061) | `role`, `slot`, `asg` (null when none), `msg` (the original active row id, null when none) |
@@ -1074,6 +1077,84 @@ Exit codes: 0 ok; 2 usage error (argparse-style, including empty text); 3 timed 
 5 reserved; 1 an unexpected failure (unknown shift or role, mailbox error). Every non-zero exit except
 the `wait` timeout prints one stderr line saying what to do next.
 
+### The in-shift patrol and the budget (NGH-066)
+
+`nightshift patrol SHIFT [--once]` (`patrol.go`) is the shift's own warden (docs/instructions-review.md §11). `start`
+launches it after the crew as a hidden, detached child (`CREATE_NO_WINDOW | DETACHED_PROCESS`, no inherited handles;
+skipped when `NIGHTSHIFT_PATROL=off`, which test harnesses running a real `start` set) and records
+`<shift>/patrol.json` {pid, started}; a failed launch is a one-line warning and the floor warden keeps the shift.
+`down` kills it after the panes; it also exits by itself on the next tick once the bus has `down` or `paused` or
+the shift folder (crew.json) is gone. It ticks every 30 seconds (`NIGHTSHIFT_PATROL_INTERVAL` seconds overrides;
+`--once` runs one tick and prints its report as JSON). Each tick:
+
+1. Liveness and stalls: `member-died` and `asg-timeout` (the NGH-061 rules, moved out of the lead's `wait`, which
+   now only returns rows), the first-delivery pass for stored rows, the idle-lead nudge, and the NGH-065 re-nudges
+   with `member-stalled`.
+2. Costs: for each member whose pid runs in its current incarnation, Coder2's `sampleMember` (file source first,
+   else the pane footer read through `paneScreen`) and `recordUsage` into `<Role>-usage.json`.
+3. Budget: crew.json `budget_usd` (Claude, Bedrock and API panes), `max_credits` (Copilot panes, the existing shift
+   budget) and `budget_tokens` (subscription panes with no price), each compared with `shiftUsageTotals` in its own
+   unit (`usd`, `credits`, `tokens`). A crew manifest sets `budget_usd` and `budget_tokens` as top-level
+   non-negative numbers; the loader validates them and `start` copies them into crew.json. Reaching 80% of a budget
+   raises `budget-warning <unit> <total>/<budget>` once; reaching 100% raises `budget-stop <unit> <total>/<budget>`
+   once and then, with no model judgement: `agents-cli key <pid> escape` for every live member, handover.md written
+   from live state (as `nightshift handover` writes it), bus `paused` {reason, unit, total, budget}, and result.json
+   `{"status": "paused", "stage": <the existing result's stage, else implemented>, "summary": "budget stop: <unit>
+   <total>/<budget>"}`; the patrol then exits. The shift stays resumable with `nightshift start --continue-from
+   <shift_dir>`, which carries the handover into the new task as before.
+
+The floor-level `warden` keeps lock clean-up, claim normalisation and pane recovery for every shift, but skips
+delivery, the idle-lead nudge and re-nudges for a shift whose patrol (patrol.json) is running; a shift without one
+(started before NGH-066, or whose patrol failed to start) keeps the old warden path. `cleaner` is unchanged.
+
+#### Cost sampling (`cmd/nightshift/usage_sample.go`)
+
+The patrol takes one figure per live member per tick with `sampleMember(dir, member)` and appends it with
+`recordUsage`; `shiftUsageTotals(dir)` gives the budget totals.
+
+- Sources, file first. Claude and Codex: the token total of the transcript recorded in `<Role>.json` (`transcript`,
+  NGH-048), unit `tokens`, source `transcript`. Otherwise the pane's screen (`paneScreen(pid)`, a package var over
+  `agents-cli tail <pid> --lines 40`, stubbed in tests) through `parseFooter(tool, screen)`, source `screen`.
+  Copilot and agy write no usage file Nightshift can read (the bundled Copilot rejects `--usage-output-file`), so they
+  are always read from the screen. A Claude pane's dollars come from its status line, which records them itself.
+- `parseFooter` (pure; the last match on screen wins; an empty tool is claude):
+
+| Tool | Footer | Unit |
+|---|---|---|
+| copilot | `Session: N AIC used` (any `N AIC`) | `credits` |
+| claude | `$1.23` (the status line below) | `usd` |
+| agy, codex | `N% context left` | `context_left` (recorded, never budgeted) |
+
+- `<state_dir>/<Role>-usage.json`: `{"role", "samples": [{"at", "unit", "value", "source"}], "latest": {the last
+  sample}}`, at most 200 samples, written under `<Role>-usage.json.lock`. A file in another shape starts again.
+- `shiftUsageTotals`: for every `*-usage.json`, the latest sample of each unit, summed per unit
+  (`map[unit]value`). An old-format file (top-level `credits_used`, no samples) contributes nothing to the totals.
+- `result.json` `usage` (`write_result.go`): per member `credits_used` = the latest `credits` sample (an old file's
+  top-level `credits_used` still counts), `cap` = the member's `max_credits`, plus `usd` when the member has a `usd`
+  sample; `total_used` sums credits; `total_usd` is added when any member has dollars. `budget` stays crew.json
+  `max_credits`.
+
+#### Claude status line (`launcher_pane.go`, `floor_bus.go`)
+
+Every Claude pane started by a shift gets `--settings <state_dir>/<Role>.claude-settings.json` (one file per pane,
+like `<Role>.brief.md`; `~/.claude/settings.json` is never touched):
+`{"statusLine": {"type": "command", "command": "\"<nightshift.exe>\" statusline --state-dir \"<state_dir>\" --role <Role> --identity <identity> --colour <colour>", "padding": 0}}`.
+The Foreman's file also carries its existing `permissions.deny` `Edit(/<repo>/**)` (formerly passed inline), as
+Claude takes one `--settings`. Consult/summon/respawn panes (the rebuilt Claude command) get the same file without the
+deny.
+
+`nightshift statusline` with `--role` reads Claude's status-line JSON from stdin: with `cost.total_cost_usd` it
+prints `<Role> · <identity> · $1.23` in the role colour and, when the value changed, records a `usd` sample (source
+`statusline`) in `<Role>-usage.json`; without it, `· N tokens` from `transcript_path`'s token total (not recorded:
+the patrol samples tokens from the transcript). Without `--role` it is unchanged: `NIGHTSHIFT_ROLE`,
+`NIGHTSHIFT_IDENTITY`, `NIGHTSHIFT_ROLE_COLOUR` (agy and Copilot panes). It always exits 0.
+
+#### Foreman page (`briefs/foreman.md`)
+
+Two event lines: `budget-warning UNIT`: tell the human; finish in-flight work. `budget-stop UNIT`: shift paused; tell
+the human and stop. Foreman role layer (standard): default, claude-copilot, apprentice-codex, claude-work 246;
+codex, gemini, copilot-premium 237; work 232; copilot compact 135.
+
 ### Failure events and lifecycle commands (NGH-061)
 
 Failures the tool can count or time become events, so the lead learns of them by blocking in `wait` instead
@@ -1086,8 +1167,8 @@ most once per (event, subject).
 
 | Event | Body | Raised when | Subject |
 |---|---|---|---|
-| `member-died` | `member-died <Role>`, plus ` active asg <asg>` when it had one | the lead's `wait` poll finds a member whose `<Role>.json` records a pid that is not running for its `started` incarnation. A member with no `<Role>.json` (not_started) or no `pid` yet (starting) never counts, and nothing is raised once the bus has a `down` event. | role, incarnation |
-| `asg-timeout` | `asg-timeout <asg>` | the lead's `wait` poll finds the latest assignment/uplift for an asg, from the lead to an Apprentice or Coder, delivered 900s or more ago with no later `result` from that recipient incarnation for that asg | asg, recipient incarnation |
+| `member-died` | `member-died <Role>`, plus ` active asg <asg>` when it had one | the shift's patrol (NGH-066) finds a member whose `<Role>.json` records a pid that is not running for its `started` incarnation. A member with no `<Role>.json` (not_started) or no `pid` yet (starting) never counts, and nothing is raised once the bus has a `down` event. | role, incarnation |
+| `asg-timeout` | `asg-timeout <asg>` | the shift's patrol finds the latest assignment/uplift for an asg, from the lead to an Apprentice or Coder, delivered 900s or more ago with no later `result` from that recipient incarnation for that asg | asg, recipient incarnation |
 | `loop-detected` | `loop-detected <asg>` | `build --asg ASG` finds that the last three finished builds recorded for that asg all failed with the same error signature: it refuses with exit 4 and the stderr line `loop detected: escalate or report BLOCKED`, runs nothing and reserves no build number. A build for the asg that passes (or is cancelled or times out) breaks the streak. Builds without `--asg` never trip it. | asg, the three build numbers |
 
 `build` (NGH-061) takes an optional `--asg ASG` and records three more fields in `builds/<n>.json`; its printed

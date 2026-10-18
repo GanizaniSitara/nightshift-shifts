@@ -345,6 +345,10 @@ func runStart(argv []string, print bool) (string, error) {
 	if err := launchCrew(command, name, stateDir, object{{"mode", "start"}, {"prompt_file", promptFile}}, labels, slots, print); err != nil {
 		return "", err
 	}
+	// NGH-066: the shift's patrol, a hidden child; a shift without one still has the floor warden
+	if err := startPatrol(stateDir); err != nil {
+		errLine("warning: patrol not started (" + err.Error() + "); run nightshift patrol " + name)
+	}
 	note := "started shift " + name
 	if ticket != "" {
 		note += " ticket " + ticket
@@ -404,6 +408,11 @@ func crewObject(crew *crewManifest, members []*crewMember, slots, advisorSlot, c
 	}
 	if crew.briefs != "" {
 		o = append(o, pair{"briefs", crew.briefs})
+	}
+	for _, b := range []pair{{"budget_usd", crew.budgetUSD}, {"budget_tokens", crew.budgetTokens}} {
+		if b.val != nil {
+			o = append(o, b)
+		}
 	}
 	return o
 }

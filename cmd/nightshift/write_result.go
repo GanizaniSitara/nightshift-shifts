@@ -117,13 +117,14 @@ func resultCommand(argv []string) int {
 	return 0
 }
 
-// resultUsageRecord is {"budget", "total_used", "panes": {label: {"credits_used", "cap"}}} from the members'
-// <label>-usage.json files (credits_used read from the file's credits_used), or nil when there are none.
+// resultUsageRecord is {"budget", "total_used", "panes": {label: {"credits_used", "cap", "usd"?}}, "total_usd"?} from
+// the members' <label>-usage.json files (the latest credits and usd samples, or an older file's credits_used), or
+// nil when there are none.
 func resultUsageRecord(dir string) object {
 	saved, _ := readObject(filepath.Join(dir, "crew.json"))
 	members, _ := rowValue(saved, "members").([]any)
 	panes := object{}
-	total := 0.0
+	total, usd, hasUSD := 0.0, 0.0, false
 	for _, item := range members {
 		m, _ := item.(object)
 		label := objectString(m, "label")
@@ -131,14 +132,31 @@ func resultUsageRecord(dir string) object {
 		if label == "" || !ok {
 			continue
 		}
+		// NGH-066 files hold samples; an older file has a top-level credits_used
+		latest := latestUsage(file)
 		used := rowValue(file, "credits_used")
-		if n, ok := objectNumber(file, "credits_used"); ok {
+		if sample, ok := latest["credits"]; ok {
+			used = rowValue(sample, "value")
+		}
+		if n, ok := numericValue(used); ok {
 			total += numberFloat(n)
 		}
-		panes = append(panes, pair{label, object{{"credits_used", used}, {"cap", rowValue(m, "max_credits")}}})
+		pane := object{{"credits_used", used}, {"cap", rowValue(m, "max_credits")}}
+		if sample, ok := latest["usd"]; ok {
+			pane = append(pane, pair{"usd", rowValue(sample, "value")})
+			if n, ok := objectNumber(sample, "value"); ok {
+				usd += numberFloat(n)
+				hasUSD = true
+			}
+		}
+		panes = append(panes, pair{label, pane})
 	}
 	if len(panes) == 0 {
 		return nil
 	}
-	return object{{"budget", rowValue(saved, "max_credits")}, {"total_used", total}, {"panes", panes}}
+	record := object{{"budget", rowValue(saved, "max_credits")}, {"total_used", total}, {"panes", panes}}
+	if hasUSD {
+		record = append(record, pair{"total_usd", usd})
+	}
+	return record
 }

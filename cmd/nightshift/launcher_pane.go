@@ -329,8 +329,12 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 		if command, err = appendBrief(command, brief, stateDir, role); err != nil {
 			return startExit(err.Error())
 		}
-		if start && strings.ToLower(member.role) == "foreman" {
-			command = append(command, "--settings", renderJSON(foremanClaudeSettings(cwd), false, true))
+		if start {
+			settings, err := claudeSettingsFile(stateDir, role, identity, colour, cwd, strings.ToLower(member.role) == "foreman")
+			if err != nil {
+				return startExit(err.Error())
+			}
+			command = append(command, "--settings", settings)
 		}
 		if reasoning != "" {
 			command = append(command, "--effort", reasoning)
@@ -369,12 +373,17 @@ func pane(role, stateDir string, live bool, briefFile string, start bool, cwd, c
 			session := role + " (" + identity + ")"
 			command = toolCommand(tool, model, brief, firstMessage, permissionMode, reasoning, context, &session, maxCredits)
 		} else {
-			// as the oracle: this rebuild carries no --settings or --effort
+			// as the oracle: this rebuild carries no --effort; --settings carries only the status line (NGH-066)
 			command = append([]string{claudeExe(), "--name", identity, "--model", model}, permissionFlags("claude", permissionMode)...)
 			command = append(command, siteWebFlags("claude")...)
 			if command, err = appendBrief(command, brief, stateDir, role); err != nil {
 				return startExit(err.Error())
 			}
+			settings, err := claudeSettingsFile(stateDir, role, identity, colour, cwd, false)
+			if err != nil {
+				return startExit(err.Error())
+			}
+			command = append(command, "--settings", settings)
 		}
 	}
 	code, err := runPaneChild(command, cwd, env, role, identity, peerName, model, tool, colour, firstMessage, stateDir, start, slot, preRecord)
@@ -569,6 +578,19 @@ func runPaneChild(command []string, cwd string, env []string, role, identity, pe
 		return 0, waitErr
 	}
 	return int(uint32(cmd.ProcessState.ExitCode())), nil
+}
+
+// claudeSettingsFile writes the pane's shift-local Claude settings, <state_dir>/<Role>.claude-settings.json, and
+// returns its path: a status line that runs `nightshift statusline` for this role (it shows and records the pane's
+// cost, NGH-066) and, for the Foreman, the repository edit deny. ~/.claude/settings.json is never touched.
+func claudeSettingsFile(stateDir, role, identity, colour, cwd string, foreman bool) (string, error) {
+	line := fmt.Sprintf("\"%s\" statusline --state-dir \"%s\" --role %s --identity %s --colour %s", launcherExe(), stateDir, role, identity, colour)
+	settings := object{{"statusLine", object{{"type", "command"}, {"command", line}, {"padding", 0}}}}
+	if foreman {
+		settings = append(foremanClaudeSettings(cwd), settings...)
+	}
+	path := filepath.Join(stateDir, role+".claude-settings.json")
+	return path, writeJSONFile(path, settings)
 }
 
 // foremanClaudeSettings denies built-in edits inside the repository (not a sandbox).

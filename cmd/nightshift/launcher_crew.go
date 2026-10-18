@@ -423,6 +423,7 @@ type crewManifest struct {
 	foremanWidth                                  int // cells the Foreman pane (slot 1) spans: 1, or 2 on 2x4
 	roles                                         []*crewRole
 	maxCredits                                    any
+	budgetUSD, budgetTokens                       any    // NGH-066: the patrol's budgets in dollars and tokens; nil when absent
 	overrides                                     object // start's overrides as recorded; nil when none
 	briefs                                        string // "legacy" reads briefs/legacy and personas/legacy (NGH-063)
 }
@@ -969,6 +970,19 @@ func loadCrewWith(name, repoRoot string, ov *crewOverrides) (*crewManifest, erro
 			}
 		}
 		crew.maxCredits = budget
+	}
+	for _, b := range []struct {
+		key    string
+		target *any
+	}{{"budget_usd", &crew.budgetUSD}, {"budget_tokens", &crew.budgetTokens}} {
+		if v := yamlScalar(data, b.key); v != nil {
+			n, ok := numericValue(yamlJSON(v))
+			f, err := n.Float64()
+			if !ok || err != nil || f < 0 || math.IsInf(f, 0) {
+				return fail("%s must be a non-negative number, not %s", b.key, pyReprValue(v))
+			}
+			*b.target = n
+		}
 	}
 	return crew, nil
 }

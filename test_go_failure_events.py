@@ -55,7 +55,15 @@ def bus(env, name):
     return [e for e in events(env) if e.get('event') == name]
 
 
+def patrol_tick(env):
+    """NGH-066: member-died and asg-timeout are raised by the in-shift patrol, no longer by the lead's wait."""
+    proc = cli(env, 'patrol', 'alpha', '--once')
+    assert proc.returncode == 0, (proc.returncode, text(proc), err(proc))
+
+
 def lead_wait(env, timeout='5'):
+    """One patrol tick, then the lead's wait (which only returns rows)."""
+    patrol_tick(env)
     return cli(env, 'wait', 'alpha', 'Boss', '--timeout', timeout)
 
 
@@ -68,10 +76,11 @@ def wait_lines(proc):
 
 
 def drain_lead(env):
-    """Consume every event the lead's wait raises now; returns their (header groups, body)."""
+    """One patrol tick, then consume every row the lead's wait returns; their (header groups, body)."""
     out = []
+    patrol_tick(env)
     while True:
-        proc = lead_wait(env, '1')
+        proc = cli(env, 'wait', 'alpha', 'Boss', '--timeout', '1')
         if proc.returncode == 3:
             return out
         out.append(wait_lines(proc))

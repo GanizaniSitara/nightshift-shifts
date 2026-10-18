@@ -534,17 +534,18 @@ func runWarden(argv []string) (object, int) {
 				}
 			}
 
-			delivered, err := deliverPending(dir, dryRun)
-			if err != nil {
-				return err
-			}
-			nudged, err := nudgeIdleForemen(dir, dryRun)
-			if err != nil {
-				return err
-			}
-			renudged, err := retryNudges(dir, dryRun)
-			if err != nil {
-				return err
+			// NGH-066: a shift with a live patrol (patrol.json) does its own delivery and nudging
+			delivered, nudged, renudged := []any{}, []any{}, []any{}
+			if !patrolLive(dir) {
+				if delivered, err = deliverPending(dir, dryRun); err != nil {
+					return err
+				}
+				if nudged, err = nudgeIdleForemen(dir, dryRun); err != nil {
+					return err
+				}
+				if renudged, err = retryNudges(dir, dryRun); err != nil {
+					return err
+				}
 			}
 
 			if objectString(record, "result") == "none" {

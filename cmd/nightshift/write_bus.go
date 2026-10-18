@@ -385,7 +385,7 @@ func releaseWaiter(path string) {
 }
 
 func waitCommand(argv []string) int {
-	a, dir, label, lead, code, ok := busParse("wait", argv, []writeOption{{name: "--timeout", number: "float"}}, []string{"shift", "role"})
+	a, dir, label, _, code, ok := busParse("wait", argv, []writeOption{{name: "--timeout", number: "float"}}, []string{"shift", "role"})
 	if !ok {
 		return code
 	}
@@ -410,11 +410,6 @@ func waitCommand(argv []string) int {
 	for {
 		if err := claimWaiter(waiter, since); err != nil {
 			return busExit(err)
-		}
-		if label == lead {
-			if err := raiseLeadEvents(dir, lead); err != nil {
-				return busExit(err)
-			}
 		}
 		var row object
 		err := withWriteMailbox(dir, func(db *sql.DB) error {
@@ -489,7 +484,7 @@ func raiseEvent(dir, event, subject, body string, asg any, fields object) (bool,
 	return raised, err
 }
 
-// raiseLeadEvents runs in the lead's wait poll: member-died for a started member whose pane process is gone,
+// raiseLeadEvents runs in the shift's patrol (NGH-066; it was the lead's wait poll): member-died for a started member whose pane process is gone,
 // asg-timeout for a coding assignment with no result 900 seconds after delivery. Nothing is raised after down.
 func raiseLeadEvents(dir, lead string) error {
 	if strings.Contains(readText(filepath.Join(dir, "bus.jsonl")), `"event": "down"`) {

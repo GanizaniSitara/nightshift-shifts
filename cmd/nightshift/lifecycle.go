@@ -679,6 +679,7 @@ func stopShift(dir string, closeWindow bool, floor *object, printOutput bool) er
 			return err
 		}
 	}
+	stopPatrol(dir)
 	recovery, err := teardownWorktree(dir, !closeWindow, floor)
 	if err != nil {
 		return err
