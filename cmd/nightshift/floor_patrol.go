@@ -45,6 +45,7 @@ func agentTail(pid uint32) object {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "agents-cli", "tail", strconv.FormatUint(uint64(pid), 10), "--lines", "40")
+	hideConsoleWindow(cmd)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
@@ -148,6 +149,7 @@ func sendHeader(pid uint32, header, tool string) bool {
 	// --force: agents-cli refuses Claude-to-Claude sends without it, and a nudge typed by a nightshift process
 	// running under a Claude pane is one (NGH-065). A nudge is never a SendMessage.
 	cmd := exec.CommandContext(ctx, "agents-cli", "send", strconv.FormatUint(uint64(pid), 10), header, "--force")
+	hideConsoleWindow(cmd)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
@@ -170,7 +172,9 @@ func sendHeader(pid uint32, header, tool string) bool {
 				break
 			}
 			keyCtx, keyCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_ = exec.CommandContext(keyCtx, "agents-cli", "key", strconv.FormatUint(uint64(pid), 10), "enter").Run()
+			keyCmd := exec.CommandContext(keyCtx, "agents-cli", "key", strconv.FormatUint(uint64(pid), 10), "enter")
+			hideConsoleWindow(keyCmd)
+			_ = keyCmd.Run()
 			keyCancel()
 			time.Sleep(1 * time.Second)
 			if headerSubmitted(pid, header) {

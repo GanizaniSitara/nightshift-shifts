@@ -1141,9 +1141,11 @@ the `wait` timeout prints one stderr line saying what to do next.
 ### The in-shift patrol and the budget (NGH-066)
 
 `nightshift patrol SHIFT [--once]` (`patrol.go`) is the shift's own warden (docs/instructions-review.md §11). `start`
-launches it after the crew as a hidden, detached child (`CREATE_NO_WINDOW | DETACHED_PROCESS`, no inherited handles;
+launches it after the crew as a hidden, detached child (`CREATE_NO_WINDOW (without DETACHED_PROCESS)`, no inherited handles;
 skipped when `NIGHTSHIFT_PATROL=off`, which test harnesses running a real `start` set) and records
 `<shift>/patrol.json` {pid, started}; a failed launch is a one-line warning and the floor warden keeps the shift.
+All background `agents-cli` subprocess calls in the patrol and floor warden (`agentTail`, `sendHeader`, `budgetStop`,
+`startPatrol`) use `hideConsoleWindow` (`HideWindow: true`, `CreationFlags: 0x08000000`) so no console window flashes.
 `down` kills it after the panes; it also exits by itself on the next tick once the bus has `down` or `paused` or
 the shift folder (crew.json) is gone. It ticks every 30 seconds (`NIGHTSHIFT_PATROL_INTERVAL` seconds overrides;
 `--once` runs one tick and prints its report as JSON). Each tick:

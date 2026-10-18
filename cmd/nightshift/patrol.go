@@ -300,7 +300,9 @@ func patrolBudget(dir string) (object, bool, error) {
 func budgetStop(dir, unit string, total, budget float64) error {
 	for _, m := range liveMembers(dir) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		_ = exec.CommandContext(ctx, "agents-cli", "key", strconv.FormatUint(uint64(m.pid), 10), "escape").Run()
+		cmd := exec.CommandContext(ctx, "agents-cli", "key", strconv.FormatUint(uint64(m.pid), 10), "escape")
+		hideConsoleWindow(cmd)
+		_ = cmd.Run()
 		cancel()
 	}
 	if err := writeHandover(dir); err != nil {
@@ -378,6 +380,7 @@ func startPatrol(dir string) error {
 		line := fmt.Sprintf("\"%s\" patrol %s --slot %d", launcherExe(), filepath.Base(dir), slot)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		cmd := exec.CommandContext(ctx, "agents-cli", "_attach", "inject", strconv.FormatUint(uint64(cmdPid), 10), "1")
+		hideConsoleWindow(cmd)
 		cmd.Stdin = strings.NewReader(line)
 		err := cmd.Run()
 		cancel()
@@ -393,6 +396,13 @@ func startPatrol(dir string) error {
 	return startPatrolDetached(dir)
 }
 
+func hideConsoleWindow(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+}
+
 func startPatrolDetached(dir string) error {
 	if os.Getenv("NIGHTSHIFT_PATROL") == "off" {
 		return nil
@@ -402,7 +412,7 @@ func startPatrolDetached(dir string) error {
 		return err
 	}
 	cmd := exec.Command(exe, "patrol", filepath.Base(dir))
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000 | 0x00000008} // CREATE_NO_WINDOW | DETACHED_PROCESS
+	hideConsoleWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
