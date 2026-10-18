@@ -45,10 +45,9 @@ var trustPrompts = map[string][3]string{
 }
 
 var (
-	trustElsewhere   = []string{"Trusting will apply to the repository root"}
-	trustBoxChars    = regexp.MustCompile(`[│┃║]`)
-	codexDialogHints = regexp.MustCompile(`(?im)(?:\(y/n\)|\[y/n\]|press enter to confirm|do you trust|would you like to|allow once|approve|select an option|^\s*[›❯]?\s*\d+\. )`)
-	permissionGlob   = regexp.MustCompile(`([*?\[\]])`)
+	trustElsewhere = []string{"Trusting will apply to the repository root"}
+	trustBoxChars  = regexp.MustCompile(`[│┃║]`)
+	permissionGlob = regexp.MustCompile(`([*?\[\]])`)
 )
 
 // topLevel is the oracle's main() parser: no command, or arguments that start with "-".
@@ -553,15 +552,6 @@ func runPaneChild(command []string, cwd string, env []string, role, identity, pe
 	if tool != "claude" {
 		registerName(child.pid, identity)
 		acceptTrustPrompt(child, tool)
-		if tool == "codex" {
-			go func() {
-				for i := 0; i < 6 && !child.exited(); i++ {
-					if setCodexRoleName(child, role, identity) {
-						return
-					}
-				}
-			}()
-		}
 	} else {
 		acceptTrustPrompt(child, "claude")
 		if setRoleColour(child, colour, cwd) {
@@ -779,93 +769,6 @@ func injectCommand(pid int, command string, tries int) bool {
 			return err != nil || !ok || !truthy(rowValue(result, "error"))
 		}
 		time.Sleep(time.Second)
-	}
-	return false
-}
-
-// codexPromptIsEmpty recognises Codex's bottom composer, empty and ready; unknown hints fail closed.
-func codexPromptIsEmpty(raw []any) bool {
-	lines, all := lineStrings(raw)
-	if raw == nil || !all {
-		return false
-	}
-	for i := range lines {
-		lines[i] = strings.TrimRightFunc(lines[i], unicode.IsSpace)
-	}
-	for len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	if len(lines) < 3 || !strings.HasPrefix(lines[len(lines)-1], "  ") {
-		return false
-	}
-	prompt := -1
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimLeftFunc(line, unicode.IsSpace), "›") {
-			prompt = i
-		}
-	}
-	if prompt < 0 || prompt < len(lines)-6 || prompt >= len(lines)-2 {
-		return false
-	}
-	if s := strings.TrimSpace(lines[prompt]); s != "›" && s != "› Ask Codex to do anything" {
-		return false
-	}
-	for _, line := range lines[prompt+1 : len(lines)-1] {
-		if strings.TrimSpace(line) != "" {
-			return false
-		}
-	}
-	if prompt > 4 {
-		worked, busy := false, false
-		for _, line := range lines[:prompt] {
-			worked = worked || strings.Contains(line, "Worked for ")
-			busy = busy || strings.Contains(line, "esc to interrupt")
-		}
-		if !worked || busy {
-			return false
-		}
-	}
-	from := prompt - 4
-	if from < 0 {
-		from = 0
-	}
-	return !codexDialogHints.MatchString(strings.Join(lines[from:], "\n"))
-}
-
-// setCodexRoleName sends /rename once after two empty-composer reads, within 30 seconds.
-func setCodexRoleName(child *paneChild, role, identity string) bool {
-	deadline := time.Now().Add(30 * time.Second)
-	left := func() time.Duration {
-		d := time.Until(deadline)
-		if d > 10*time.Second {
-			d = 10 * time.Second
-		}
-		return d
-	}
-	for i := 0; i < 30; i++ {
-		if child.exited() || !time.Now().Before(deadline) {
-			return false
-		}
-		if codexPromptIsEmpty(peekLines(child.pid, left())) {
-			if child.exited() || !time.Now().Before(deadline) {
-				return false
-			}
-			if codexPromptIsEmpty(peekLines(child.pid, left())) {
-				if child.exited() || !time.Now().Before(deadline) {
-					return false
-				}
-				_, code := agentsCLI(left(), []byte("/rename "+role+" ("+identity+")"), "_attach", "inject", strconv.Itoa(child.pid), "1")
-				return code == 0
-			}
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return false
-		}
-		if remaining > 500*time.Millisecond {
-			remaining = 500 * time.Millisecond
-		}
-		time.Sleep(remaining)
 	}
 	return false
 }

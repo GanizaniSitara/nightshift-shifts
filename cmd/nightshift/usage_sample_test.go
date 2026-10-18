@@ -183,3 +183,38 @@ func TestSampleMemberNoFigureIsNoSample(t *testing.T) {
 		t.Fatalf("unexpected sample %+v", s)
 	}
 }
+
+// NGH-067 Codex footers (Coder2, from the 0.163 binary): estimated-thread-cost "~$1.82" -> usd, thread-credits
+// "5.2 credits" -> credits, "Context 83% left" (or the old "83% context left") -> context_left. Order usd, credits,
+// context_left; usd needs "~$"; usd and credits count only in the last 3 non-empty lines.
+func TestParseFooterCodexCostCreditsContext(t *testing.T) {
+	cases := []struct {
+		name, screen, unit string
+		value              float64
+	}{
+		{"all three: usd wins", "› working\n gpt-6.1-sol high · Context 83% left · ~$1.82 · 5.2 credits\n", "usd", 1.82},
+		{"credits without cost", "gpt-6.1-sol high · Context 83% left · 5.2 credits", "credits", 5.2},
+		{"context only (new)", "gpt-6.1-sol high · Context 83% left", "context_left", 83},
+		{"context only (old)", "gpt-6.1-sol high · 83% context left", "context_left", 83},
+		{"thousands separator", "Context 10% left · ~$1,234.50", "usd", 1234.50},
+		{"bare dollar is not a cost", "the fix saves $3 a month\nContext 50% left", "context_left", 50},
+		{"cost in conversation above the tail", "it would cost ~$5 to rerun\nline a\nline b\nline c\nline d\ngpt-6.1-sol · Context 40% left",
+			"context_left", 40},
+		{"credits in conversation above the tail", "we spent 9 credits yesterday\nx\ny\nz\nw\nContext 70% left", "context_left", 70},
+	}
+	for _, c := range cases {
+		s, ok := parseFooter("codex", c.screen)
+		if !ok || s.Unit != c.unit || !near(s.Value, c.value) {
+			t.Errorf("%s: got %+v ok=%v, want %s %v", c.name, s, ok, c.unit, c.value)
+		}
+	}
+}
+
+func TestParseFooterCodexNothing(t *testing.T) {
+	// (a "N credits" phrase inside the last 3 non-empty lines does count, by design; only "~$" marks a cost)
+	for _, screen := range []string{"", "gpt-6.1-sol high", "costs about $3, honestly\nmore text\n\n"} {
+		if s, ok := parseFooter("codex", screen); ok && s.Unit != "context_left" {
+			t.Errorf("%q: unexpected %+v", screen, s)
+		}
+	}
+}

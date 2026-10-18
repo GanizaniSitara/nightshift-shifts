@@ -828,17 +828,25 @@ This ticket changes architecture only; saved fixtures and runtime verification b
 
 ## Codex identity, colour and ticket extraction (NGH-033)
 
-Codex panes add an ordered footer containing the thread title, model (including reasoning) and
-context remaining. It deliberately omits the current directory. The startup `/rename <Role> (<identity>)`
-helper names the pane once: it requires a live child and an empty current composer, including while
-the pane is busy. It rejects drafts, multiline or dialog ambiguity, unknown hints and errors, and
-uses a double-read, deadline and at-most-one injection.
+Codex panes add an ordered footer (`tui.status_line`) of model (including reasoning), context remaining,
+estimated thread cost and thread credits (NGH-067; the cost items are what the patrol's footer parser reads). It
+deliberately omits the current directory and, since NGH-067, the thread title: Codex 0.163 has no start-time
+name or title option (`codex --help`; `resume`, `archive` and `queue` only accept an existing "session name"),
+`set_thread_title` exists only on the app-server, which crew panes run without (`--no-daemon`), and an injected
+`/rename` reached the model as an ordinary message (owner, 18 Oct), so the footer showed Codex's own auto-title
+instead of the role. Codex panes are therefore not renamed: the launcher no longer types `/rename` into them
+(`setCodexRoleName` was removed), and a Codex pane's identity comes from its per-role colour scheme and its
+pane title.
 
 The five named Windows Terminal schemes are Nightshift red, purple, green, blue and yellow, with
 one Campbell base profile. `install_profile` registers the schemes; initial `--colorScheme` selects
 the scheme for each Codex pane. The matching pane background is applied with OSC 11 and VT enabled
 before Codex launch, including
-spawned and reused Codex slots. Campbell `#0C0C0C` is restored on exit and before non-Codex reuse.
+spawned and reused Codex slots. Codex itself emits OSC 111 (reset the default background), which undoes that
+tint and leaves the slot's Windows Terminal scheme, so the scheme is the colour that shows (NGH-067): `start`
+gives every non-Claude member's pane its `Nightshift <colour>` scheme, and since NGH-067 also the reserved
+Advisor and Coder slots (opened as plain shells and started later by `consult`/`summon`), from the colour of the
+member reserved there. A member spawned into an ordinary free slot keeps that slot's base scheme. Campbell `#0C0C0C` is restored on exit and before non-Codex reuse.
 No per-role Codex syntax-theme override is required.
 
 The launcher extracts a literal `Ticket <ID>:` header from the first line of the prompt or UTF-8
@@ -860,7 +868,7 @@ owner's global Claude theme, the common ticket/shift title and the existing Camp
 ## Copilot identity, colour and terminal setup (NGH-039)
 
 - `copilot_command` passes `--name '<pane label> (<identity>)'` so the role is the Copilot session
-  name, the same idea as Codex `/rename`. No `/rename` injection for Copilot.
+  name. Nothing is typed into a Copilot pane to name it (nor, since NGH-067, into a Codex pane).
 - `crew_env` sets `COPILOT_DISABLE_TERMINAL_TITLE=1` for Copilot only. Copilot's
   `updateTerminalTitle` retitles the pane to `"<task> - GitHub Copilot"`, which beats
   `--suppressApplicationTitle`. The env var is the documented opt-out and keeps the
@@ -937,9 +945,9 @@ mailbox/bus note; after compaction, first reread `ticket.txt`, `prompt.txt`, `re
 result ladder, claims, inbox, and `handover.md`, then continue.
 
 `spawn` sends the wrapper command to `agents-cli _attach inject PID 1` through stdin, matching the
-installed helper protocol; command text is not placed in argv. `inject_command` (Claude `/color`) and the
-Codex `/rename` do the same (NGH-041); passing the text as argv made the helper fail, which is how Claude
-panes lost their role colours.
+installed helper protocol; command text is not placed in argv. `inject_command` (Claude `/color`) does the
+same (NGH-041; the Codex `/rename` injection did too until NGH-067 removed it); passing the text as argv made the
+helper fail, which is how Claude panes lost their role colours.
 
 Trust dialogs (NGH-041): `accept_trust_prompt(child, tool)` runs in every claude, agy, codex and copilot
 pane. `TRUST_PROMPTS` holds each CLI's literal dialog text, the highlighted option that accepts it and,
@@ -1123,7 +1131,21 @@ The patrol takes one figure per live member per tick with `sampleMember(dir, mem
 |---|---|---|
 | copilot | `Session: N AIC used` (any `N AIC`) | `credits` |
 | claude | `$1.23` (the status line below) | `usd` |
-| agy, codex | `N% context left` | `context_left` (recorded, never budgeted) |
+| codex | `~$1.82` (status-line item `estimated-thread-cost`) | `usd` |
+| codex | `5.2 credits` (status-line item `thread-credits`) | `credits` |
+| codex | `Context 83% left` (status-line item `context-remaining`) or the default footer's `83% context left` | `context_left` |
+| agy | `83% context left` | `context_left` |
+
+Patterns are tried in that order per tool, so a Codex pane showing all three yields its cost, else its credits, else
+context left (recorded, never budgeted); the last match on screen wins. Codex cost and credits are matched only in the
+last three non-empty lines (the status line), and cost needs the `~$` prefix, so `$1` or `5 credits` in the
+conversation never counts. Both items are Enterprise-only in Codex and omitted when unavailable; the parser then falls
+back to context left. `sampleMember` reads a Codex pane's screen first: a cost or credits figure there wins over the
+transcript's token total; otherwise tokens from the transcript, otherwise the screen's context left. Evidence for the
+shapes (codex-cli 0.163.0 binary, read as bytes, no pane launched): the item descriptions "Estimated current-thread
+credits (Enterprise workspaces only; omitted when unavailable)" and "Estimated current-thread cost in USD (Enterprise
+workspaces only; ...)", the status-line preview fixture `Context 0% left ... 5.2 credits~$1.82`, and the
+`tui\src\chatwidget\status_surfaces.rs` fragments `Context `, `% left`, ` credits`.
 
 - `<state_dir>/<Role>-usage.json`: `{"role", "samples": [{"at", "unit", "value", "source"}], "latest": {the last
   sample}}`, at most 200 samples, written under `<Role>-usage.json.lock`. A file in another shape starts again.
@@ -1699,7 +1721,7 @@ Every Python subcommand and option from `nightshift_shifts.py` has been ported t
 | `statusline` | `(env-driven)` | not golden-tested yet | parsed in `floor_bus.go`; prints ANSI statusline from `NIGHTSHIFT_ROLE` / `IDENTITY` / `ROLE_COLOUR` |
 | `statusline` | `-h`, `--help` | native, golden-tested | `test_go_launcher.py:test_help_matches_oracle` |
 | `(top-level)` | `--pane` (Claude branch) | native, live-only | `launcher_pane.go`: trust dialog, /color, opening message |
-| `(top-level)` | `--pane` (Codex /rename) | native, live-only | `launcher_pane.go`: codex /rename session naming |
+| `(top-level)` | `--pane` (Codex naming) | retired (NGH-067) | Codex panes are not renamed; identity is the per-role colour scheme |
 | `(top-level)` | `--pane` (OSC 11 background) | native, live-only | `launcher_pane.go`: OSC 11 pane background color escape sequence |
 | `(top-level)` | `--pane` (stub argv) | native, golden-tested | `test_go_launcher.py:test_hidden_pane_start_runs_same_stub_argv_and_records` |
 | `(top-level)` | `--state-dir` | native, golden-tested | `test_go_launcher.py:test_hidden_pane_start_runs_same_stub_argv_and_records` |

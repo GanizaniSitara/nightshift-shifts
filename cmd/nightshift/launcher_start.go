@@ -281,8 +281,15 @@ func runStart(argv []string, print bool) (string, error) {
 	if ticket != "" {
 		title = paneTitle(ticket)
 	}
+	reserved := map[int]string{}
+	for _, slot := range []int{advisorSlot, coderSlot} {
+		if slot > 0 && slot <= len(members) {
+			reserved[slot-1] = members[slot-1].label
+		}
+	}
 	command := wtCommand(wtSpec{name: name, stateDir: stateDir, agents: true, modeFlag: "--start", cwd: cwd, members: cells,
-		crew: crew.name, ticket: ticket, slots: slots, opsWidth: crew.opsWidth, foremanWidth: crew.foremanWidth, colours: colours, opsDir: repoRoot})
+		crew: crew.name, ticket: ticket, slots: slots, opsWidth: crew.opsWidth, foremanWidth: crew.foremanWidth, colours: colours, opsDir: repoRoot,
+		reserved: reserved})
 	crewJSON := crewObject(crew, members, slots, advisorSlot, coderSlot, cwd)
 	briefs, warnings := renderBriefs(stateDir, cwd, repoRoot, crewJSON, members)
 	if print {
@@ -796,6 +803,7 @@ type wtSpec struct {
 	opsWidth                                               int // cells the last slot spans (0 or 1: one)
 	foremanWidth                                           int // cells the first slot spans (0 or 1: one)
 	colours                                                map[string]string
+	reserved                                               map[int]string // cell index -> the role reserved there (consult/summon start it later)
 }
 
 // wtCommand is the wt.exe argv: members fill cells 1..k; with slots the rest
@@ -860,6 +868,10 @@ func wtCommand(w wtSpec) []string {
 		separate(parts)
 		if w.agents {
 			command = append(command, "--profile", launcherProfile)
+			// a reserved slot opens now as a plain shell; its later occupant keeps the scheme the slot gets here
+			if colour := w.colours[w.reserved[i]]; start && w.reserved[i] != "" && backgroundFor(colour) != "" {
+				command = append(command, "--colorScheme", "Nightshift "+colour)
+			}
 		}
 		cellDir := dir
 		if w.opsDir != "" && w.slots != 0 && i == w.slots-1 {

@@ -1378,7 +1378,7 @@ func agyCommand(model, brief, firstMessage, permissions string) []string {
 func codexCommand(model, brief, firstMessage, reasoning, permissions string) []string {
 	cmd := append([]string{toolExe("codex")}, permissionFlags("codex", permissions)...)
 	cmd = append(cmd, "--no-daemon", "-c", "tui.terminal_title=[]",
-		"-c", `tui.status_line=["thread-title","model-with-reasoning","context-remaining"]`, "--model", model)
+		"-c", `tui.status_line=["model-with-reasoning","context-remaining","estimated-thread-cost","thread-credits"]`, "--model", model)
 	if reasoning != "" {
 		cmd = append(cmd, "-c", "model_reasoning_effort="+reasoning)
 	}

@@ -31,42 +31,79 @@ var paneScreen = func(pid uint32) string {
 	return strings.Join(text, "\n")
 }
 
-var footerPatterns = map[string]struct {
+type footerPattern struct {
 	unit string
 	re   *regexp.Regexp
-}{
-	"copilot": {"credits", regexp.MustCompile(`(?i)(\d[\d,]*(?:\.\d+)?)\s*AIC\b`)},
-	"claude":  {"usd", regexp.MustCompile(`\$\s?(\d[\d,]*(?:\.\d+)?)`)},
-	"agy":     {"context_left", regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s*%\s*context left`)},
-	"codex":   {"context_left", regexp.MustCompile(`(?i)(\d+(?:\.\d+)?)\s*%\s*context left`)},
+	tail int // match only in the last tail non-empty lines (the status line); 0 = anywhere on screen
+}
+
+// contextLeft is the agy and Codex default footer "83% context left"; Codex's configured status line renders
+// context-remaining as "Context 83% left".
+var contextLeft = regexp.MustCompile(`(?i)(?:(\d+(?:\.\d+)?)\s*%\s*context left|context\s+(\d+(?:\.\d+)?)\s*%\s*left)`)
+
+// footerPatterns are tried in order, so a budgeted unit wins over context_left. Codex 0.163 renders the
+// tui.status_line items estimated-thread-cost as "~$1.82" and thread-credits as "5.2 credits" (Enterprise
+// workspaces only; omitted when unavailable).
+var footerPatterns = map[string][]footerPattern{
+	"copilot": {{"credits", regexp.MustCompile(`(?i)(\d[\d,]*(?:\.\d+)?)\s*AIC\b`), 0}},
+	"claude":  {{"usd", regexp.MustCompile(`\$\s?(\d[\d,]*(?:\.\d+)?)`), 0}},
+	"agy":     {{"context_left", contextLeft, 0}},
+	"codex": {
+		// cost and credits only on the status line, so "$1" or "5 credits" in the conversation never counts
+		{"usd", regexp.MustCompile(`~\$\s?(\d[\d,]*(?:\.\d+)?)`), 3},
+		{"credits", regexp.MustCompile(`(?i)(\d[\d,]*(?:\.\d+)?)\s*credits\b`), 3},
+		{"context_left", contextLeft, 0},
+	},
 }
 
 // parseFooter reads one figure from a pane's visible text: Copilot "Session: N AIC used" (credits), the Claude
-// status line's "$1.23" (usd), agy and Codex "N% context left" (context_left). The last match on screen wins, as
-// footers sit at the bottom. An empty tool is claude.
+// status line's "$1.23" (usd), Codex "~$1.82" (usd), else "5.2 credits" (credits), else its context left, and agy
+// "N% context left" (context_left). The last match on screen wins, as footers sit at the bottom. An empty tool is
+// claude.
 func parseFooter(tool, screen string) (usageSample, bool) {
 	if tool == "" {
 		tool = "claude"
 	}
-	p, ok := footerPatterns[tool]
-	if !ok {
-		return usageSample{}, false
+	for _, p := range footerPatterns[tool] {
+		text := screen
+		if p.tail > 0 {
+			text = lastLines(screen, p.tail)
+		}
+		matches := p.re.FindAllStringSubmatch(text, -1)
+		if len(matches) == 0 {
+			continue
+		}
+		last := matches[len(matches)-1]
+		figure := last[1]
+		if figure == "" && len(last) > 2 {
+			figure = last[2]
+		}
+		if value, err := strconv.ParseFloat(strings.ReplaceAll(figure, ",", ""), 64); err == nil {
+			return usageSample{Unit: p.unit, Value: value, Source: "screen"}, true
+		}
 	}
-	matches := p.re.FindAllStringSubmatch(screen, -1)
-	if len(matches) == 0 {
-		return usageSample{}, false
-	}
-	value, err := strconv.ParseFloat(strings.ReplaceAll(matches[len(matches)-1][1], ",", ""), 64)
-	if err != nil {
-		return usageSample{}, false
-	}
-	return usageSample{Unit: p.unit, Value: value, Source: "screen"}, true
+	return usageSample{}, false
 }
 
-// sampleMember takes one figure for a crew member: Claude and Codex token totals from the transcript recorded in
-// <Role>.json (NGH-048), else the footer on its screen. Copilot and agy write no usage file Nightshift can read
-// (the bundled Copilot rejects --usage-output-file), so they are read from the screen. A Claude pane's dollars come
-// from its status line, which records them itself (statusline --state-dir).
+// lastLines is the last n non-empty lines of a screen.
+func lastLines(screen string, n int) string {
+	lines := []string{}
+	for _, l := range strings.Split(screen, "\n") {
+		if strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// sampleMember takes one figure for a crew member: a Codex footer's cost or credits first (NGH-067), then Claude and
+// Codex token totals from the transcript recorded in <Role>.json (NGH-048), else the footer on its screen. Copilot
+// and agy write no usage file Nightshift can read (the bundled Copilot rejects --usage-output-file), so they are read
+// from the screen. A Claude pane's dollars come from its status line, which records them itself (statusline
+// --state-dir).
 func sampleMember(dir string, member object) (usageSample, bool) {
 	label := objectString(member, "label")
 	info, _ := readObject(filepath.Join(dir, label+".json"))
@@ -78,6 +115,16 @@ func sampleMember(dir string, member object) (usageSample, bool) {
 		tool = "claude"
 	}
 	now := epochNow()
+	pid := processNumber(info, "pid")
+	screen := ""
+	if pid != 0 && tool == "codex" {
+		// a Codex footer with a budgeted figure (cost or credits) wins over the transcript's tokens
+		screen = paneScreen(pid)
+		if s, ok := parseFooter(tool, screen); ok && s.Unit != "context_left" {
+			s.Role, s.At = label, now
+			return s, true
+		}
+	}
 	if transcript := objectString(info, "transcript"); transcript != "" && (tool == "claude" || tool == "codex") {
 		if usage := harvestTranscript(transcript, tool); usage != nil {
 			if total, ok := objectNumber(usage, "total_tokens"); ok {
@@ -85,11 +132,13 @@ func sampleMember(dir string, member object) (usageSample, bool) {
 			}
 		}
 	}
-	pid := processNumber(info, "pid")
 	if pid == 0 {
 		return usageSample{}, false
 	}
-	s, ok := parseFooter(tool, paneScreen(pid))
+	if screen == "" {
+		screen = paneScreen(pid)
+	}
+	s, ok := parseFooter(tool, screen)
 	if !ok {
 		return usageSample{}, false
 	}
