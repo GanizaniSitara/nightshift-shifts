@@ -7,36 +7,99 @@ import time
 
 import pytest
 
-from test_go_console import STUB_HELPER, console_calls, console_env
 from test_go_launcher import base_env, exe_path, fake_bin, go_toolchain, real_terminal_hwnd, run, sleeper, write_json
 from test_go_nudge_retry import SHIFT, World
+
+STUB_AGENTS_CLI = r'''package main
+
+import (
+	"encoding/json"
+	"io"
+	"os"
+	"strings"
+	"time"
+)
+
+func record(rec map[string]any) {
+	path := os.Getenv("CONSOLE_RECORD")
+	if path == "" {
+		return
+	}
+	snapshot, _ := os.ReadFile(os.Getenv("COMPACTION_STATE"))
+	rec["durable_state"] = string(snapshot)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	b, _ := json.Marshal(rec)
+	_, _ = f.Write(append(b, '\n'))
+}
+
+func main() {
+	args := os.Args[1:]
+	if len(args) >= 2 && args[0] == "tail" {
+		screen := os.Getenv("STUB_SCREEN")
+		lines := []string{}
+		if screen != "" {
+			lines = strings.Split(screen, "\n")
+		}
+		state := "idle"
+		if strings.Contains(screen, "Working (") {
+			state = "busy"
+		} else if strings.Contains(screen, "Do you trust") {
+			state = "prompt"
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"lines": lines, "state": state})
+		return
+	}
+	if len(args) >= 3 && args[0] == "send" {
+		pid, text := args[1], args[2]
+		record(map[string]any{"op": "send", "pid": pid, "text": text})
+		if os.Getenv("COMPACTION_BLOCK_READY") != "" {
+			_ = os.WriteFile(os.Getenv("COMPACTION_BLOCK_READY"), []byte("ready"), 0600)
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, err := os.Stat(os.Getenv("COMPACTION_BLOCK_RELEASE")); err == nil {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		if os.Getenv("COMPACTION_ERROR") != "" {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"submitted": false})
+			return
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"submitted": true, "enter": true, "ok": true})
+		return
+	}
+	if len(args) >= 3 && args[0] == "_attach" {
+		op, pid := args[1], args[2]
+		in, _ := io.ReadAll(os.Stdin)
+		record(map[string]any{"op": op, "pid": pid, "text": string(in)})
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{})
+		return
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+}
+'''
+
+
+def console_calls(record_path: Path):
+    if not record_path.exists():
+        return []
+    return [json.loads(line) for line in record_path.read_text(encoding='utf-8').splitlines() if line.strip()]
 
 
 @pytest.fixture(scope='session')
 def compaction_helper(tmp_path_factory):
-    """Record the durable state seen by the helper before it accepts a write."""
+    """Build a stub agents-cli.exe that records durable state before accepting a write."""
     go = go_toolchain()
     if not go:
         pytest.skip('no provisioned Go toolchain')
     root = tmp_path_factory.mktemp('compaction helper')
-    marker = 'rec := map[string]any{"op": op, "pid": pid, "args": rest}'
-    assert STUB_HELPER.count(marker) == 1
-    source = STUB_HELPER.replace(marker, marker + '''
-    snapshot, _ := os.ReadFile(os.Getenv("COMPACTION_STATE"))
-    rec["durable_state"] = string(snapshot)
-''', 1).replace('var out any = map[string]string{}', '''
-    if op == "inject" && os.Getenv("COMPACTION_BLOCK_READY") != "" {
-        _ = os.WriteFile(os.Getenv("COMPACTION_BLOCK_READY"), []byte("ready"), 0600)
-        deadline := time.Now().Add(10*time.Second)
-        for time.Now().Before(deadline) {
-            if _, err := os.Stat(os.Getenv("COMPACTION_BLOCK_RELEASE")); err == nil { break }
-            time.Sleep(10*time.Millisecond)
-        }
-    }
-    var out any = map[string]string{"error": os.Getenv("COMPACTION_ERROR")}
-''').replace('"strings"\n', '"strings"\n"time"\n', 1)
-    (root / 'helper.go').write_text(source, encoding='utf-8')
-    exe = root / 'helper.exe'
+    (root / 'helper.go').write_text(STUB_AGENTS_CLI, encoding='utf-8')
+    exe = root / 'agents-cli.exe'
     built = subprocess.run([go, 'build', '-o', str(exe), str(root / 'helper.go')], cwd=root,
                            capture_output=True, timeout=90,
                            env={**os.environ, 'GOTOOLCHAIN': 'local', 'GOPROXY': 'off',
@@ -50,7 +113,7 @@ def compaction_helper(tmp_path_factory):
 def compact_world(tmp_path, fake_bin, sleeper, compaction_helper):
     w = World(tmp_path / 'compaction world', fake_bin, sleeper, compaction_helper.parent)
     w.record = tmp_path / 'helper record'
-    w.env = console_env(w.env, compaction_helper, w.record)
+    w.env['CONSOLE_RECORD'] = str(w.record)
     w.env['NIGHTSHIFT_NUDGE'] = 'off'
     w.compaction = w.d / 'Coder-compaction.json'
     w.env['COMPACTION_STATE'] = str(w.compaction)
