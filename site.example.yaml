@@ -1,0 +1,21 @@
+# Example machine-level site policy for Nightshift (<stateRoot>/site.yaml, default C:\nightshift\site.yaml).
+# Copy this file to C:\nightshift\site.yaml on restricted or work machines.
+# When site.yaml is absent, Nightshift imposes no tool/model restrictions and leaves web_search enabled.
+
+allowed_tools:
+  - claude
+  - copilot
+
+allowed_models:
+  - "claude-opus-*"
+  - "claude-sonnet-*"
+  - gemini-3.8-flash
+
+web_search: false
+
+# Optional environment overrides applied to every crew pane on top of the machine environment:
+# env:
+#   GOPROXY: "off"
+#   PIP_NO_INDEX: "1"
+#   CARGO_NET_OFFLINE: "true"
+#   HTTPS_PROXY: "http://proxy.example:8080"
