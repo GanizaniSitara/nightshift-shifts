@@ -14,6 +14,17 @@ rem No GOEXE given: prefer a Go toolchain from the standard module cache (go.mod
 if "%GOEXE%"=="" for /d %%D in ("%USERPROFILE%\go\pkg\mod\golang.org\toolchain@v0.0.1-go1.2*.windows-amd64") do if exist "%%D\bin\go.exe" set "GOEXE=%%D\bin\go.exe"
 if "%GOEXE%"=="" set "GOEXE=go"
 
+rem Clean up files removed on this branch when updating via gitpull (which does not delete removed files).
+for %%F in (
+  "cmd\nightshift\saved_env.go"
+  "cmd\nightshift\saved_env_test.go"
+  "briefs\decompiler.md"
+  "briefs\legacy\decompiler.md"
+  "briefs\legacy\decompiler-cli.md"
+  "test_go_console.py"
+) do if exist %%F del /f /q %%F
+if exist "internal\console" rmdir /s /q "internal\console"
+
 set "GITPULL_SHA="
 if exist ".gitpull.version" for /f "usebackq tokens=1" %%S in (".gitpull.version") do if not defined GITPULL_SHA set "GITPULL_SHA=%%S"
 
