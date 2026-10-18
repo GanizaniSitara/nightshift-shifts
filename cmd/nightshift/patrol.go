@@ -40,7 +40,8 @@ options:
 var patrolBudgets = [][2]string{{"budget_usd", "usd"}, {"max_credits", "credits"}, {"budget_tokens", "tokens"}}
 
 func patrolCommand(argv []string) int {
-	args, message := parseWriteArgs(argv, []writeOption{{name: "--once", flag: true}}, []string{"shift"}, nil)
+	opts := []writeOption{{name: "--once", flag: true}, {name: "--slot", number: "int"}}
+	args, message := parseWriteArgs(argv, opts, []string{"shift"}, nil)
 	if args.help {
 		out(patrolHelp)
 		return 0
@@ -58,6 +59,18 @@ func patrolCommand(argv []string) int {
 			interval = time.Duration(secs * float64(time.Second))
 		}
 	}
+	if !args.present["--once"] {
+		pid := os.Getpid()
+		_, created, _ := processInfo(uint32(pid))
+		rec := object{{"pid", pid}, {"started", created}}
+		if args.present["--slot"] {
+			if n, err := parseInteger(args.values["--slot"]); err == nil {
+				rec = append(rec, pair{"slot", int(n)})
+			}
+		}
+		_ = writeJSONFile(filepath.Join(dir, "patrol.json"), rec)
+		out(wardenBanner(dir))
+	}
 	for {
 		report, stop, err := patrolTick(dir)
 		if err != nil {
@@ -67,11 +80,106 @@ func patrolCommand(argv []string) int {
 			printResult(report, false, true)
 			return busExit(err)
 		}
+		out(wardenTickLine(dir, report))
 		if stop {
 			return 0
 		}
 		time.Sleep(interval)
 	}
+}
+
+func wardenBanner(dir string) string {
+	shift := filepath.Base(dir)
+	label := strings.TrimSpace(readText(filepath.Join(dir, "ticket.txt")))
+	if label == "" {
+		label = shift
+	} else {
+		label = shift + " | " + label
+	}
+	const bold, dim, reset = "\x1b[1;37;45m", "\x1b[90m", "\x1b[0m"
+	return "\n" + bold + " NIGHTSHIFT WARDEN  " + label + " " + reset + "\n" +
+		dim + "  Every 30s: liveness, nudges, compaction (Foreman 50%, others 70%), cost & budget guard" + reset + "\n\n"
+}
+
+func wardenTickLine(dir string, report object) string {
+	const dim, yellow, green, red, reset = "\x1b[90m", "\x1b[33m", "\x1b[32m", "\x1b[31m", "\x1b[0m"
+	ts := time.Now().Format("15:04:05")
+	_, members := crewMembers(dir)
+	parts := []string{}
+	now := epochNow()
+	for _, m := range members {
+		label := objectString(m, "label")
+		info, _ := readObject(filepath.Join(dir, label+".json"))
+		pid := processNumber(info, "pid")
+		started, ok := objectNumber(info, "started")
+		if pid == 0 || !incarnationRunning(pid, started, ok) {
+			continue
+		}
+		thresh := int(compactThreshold(m))
+		ctxStr := "?%"
+		if ctxObj, ok := readObject(contextPath(dir, label)); ok {
+			if used, fresh := freshContext(ctxObj, info, now); fresh {
+				ctxStr = fmt.Sprintf("%.0f%%", used)
+			}
+		}
+		costStr := ""
+		if uObj, ok := readObject(usagePath(dir, label)); ok {
+			if latest, ok := rowValue(uObj, "latest").(object); ok {
+				unit := objectString(latest, "unit")
+				val, _ := objectNumber(latest, "value")
+				v := numberFloat(val)
+				switch unit {
+				case "usd":
+					costStr = fmt.Sprintf(" $%.2f", v)
+				case "credits":
+					costStr = fmt.Sprintf(" %.0fAIC", v)
+				case "tokens":
+					costStr = fmt.Sprintf(" %.0fk", v/1000.0)
+				}
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s(%s/%d%%%s)", label, ctxStr, thresh, costStr))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "no live panes")
+	}
+	budgetParts := []string{}
+	if bObj, ok := rowValue(report, "budget").(object); ok {
+		for _, p := range bObj {
+			if u, ok := p.val.(object); ok {
+				tot, _ := objectNumber(u, "total")
+				lim, _ := objectNumber(u, "budget")
+				budgetParts = append(budgetParts, fmt.Sprintf("%s %s/%s", p.key, secondsText(numberFloat(tot)), secondsText(numberFloat(lim))))
+			}
+		}
+	}
+	budgetStr := ""
+	if len(budgetParts) > 0 {
+		budgetStr = " | budget: " + strings.Join(budgetParts, ", ")
+	}
+	actions := []string{}
+	for _, k := range []string{"delivered", "nudged", "renudged"} {
+		if list := anyList(rowValue(report, k)); len(list) > 0 {
+			actions = append(actions, fmt.Sprintf("%s:%d", k, len(list)))
+		}
+	}
+	if list := anyList(rowValue(report, "compacted")); len(list) > 0 {
+		for _, item := range list {
+			if c, ok := item.(object); ok {
+				b, _ := objectNumber(c, "before")
+				a, _ := objectNumber(c, "after")
+				actions = append(actions, green+fmt.Sprintf("compacted:%s(%.0f%%->%.0f%%)", objectString(c, "role"), numberFloat(b), numberFloat(a))+reset)
+			}
+		}
+	}
+	actStr := ""
+	if len(actions) > 0 {
+		actStr = " | " + yellow + strings.Join(actions, " ") + reset
+	}
+	if truthy(rowValue(report, "ended")) {
+		actStr += " | " + red + "shift ended" + reset
+	}
+	return fmt.Sprintf("%s[%s]%s %s%s%s\n", dim, ts, reset, strings.Join(parts, "  "), budgetStr, actStr)
 }
 
 // patrolEnded: the shift is down, paused by a budget stop, or its folder is gone.
@@ -225,9 +333,66 @@ func writeHandover(dir string) error {
 	return os.WriteFile(filepath.Join(dir, "handover.md"), []byte(strings.ReplaceAll(strings.Join(lines, "\n"), "\n", "\r\n")), 0666)
 }
 
-// startPatrol launches the shift's patrol as a hidden, detached child (no window, no inherited handles) and
-// records <shift>/patrol.json. NIGHTSHIFT_PATROL=off skips it.
+// wardenPaneSlot returns (slot, cmdPid) for Cell 2 of the bottom row (Slot 5 when slots <= 7, Slot 6 when slots == 8)
+// if that slot has a live cmd.exe shell and no started agent role.
+func wardenPaneSlot(dir string) (int, uint32) {
+	crew, ok := readObject(filepath.Join(dir, "crew.json"))
+	if !ok {
+		return 0, 0
+	}
+	slots := intValue(rowValue(crew, "slots"))
+	if slots < 5 {
+		return 0, 0
+	}
+	preferred := 5
+	if slots == 8 {
+		preferred = 6
+	}
+	candidates := []int{preferred}
+	for n := 4; n < slots; n++ {
+		if n != preferred {
+			candidates = append(candidates, n)
+		}
+	}
+	for _, slot := range candidates {
+		rec := spawnReadSlot(dir, slot)
+		if rec == nil || truthy(rowValue(rec, "role")) {
+			continue
+		}
+		cmdPid := processNumber(rec, "cmd_pid")
+		if cmdPid != 0 && processRunning(cmdPid) {
+			return slot, cmdPid
+		}
+	}
+	return 0, 0
+}
+
+// startPatrol launches the shift's patrol in Cell 2 of the bottom row when a live container slot is available,
+// or as a hidden detached child otherwise, and records <shift>/patrol.json. NIGHTSHIFT_PATROL=off skips it.
 func startPatrol(dir string) error {
+	if os.Getenv("NIGHTSHIFT_PATROL") == "off" {
+		return nil
+	}
+	if slot, cmdPid := wardenPaneSlot(dir); slot != 0 && cmdPid != 0 {
+		line := fmt.Sprintf("\"%s\" patrol %s --slot %d", launcherExe(), filepath.Base(dir), slot)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, "agents-cli", "_attach", "inject", strconv.FormatUint(uint64(cmdPid), 10), "1")
+		cmd.Stdin = strings.NewReader(line)
+		err := cmd.Run()
+		cancel()
+		if err == nil {
+			for i := 0; i < 30; i++ {
+				if patrolLive(dir) {
+					return nil
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
+	return startPatrolDetached(dir)
+}
+
+func startPatrolDetached(dir string) error {
 	if os.Getenv("NIGHTSHIFT_PATROL") == "off" {
 		return nil
 	}
@@ -244,6 +409,29 @@ func startPatrol(dir string) error {
 	_ = cmd.Process.Release()
 	_, created, _ := processInfo(uint32(pid))
 	return writeJSONFile(filepath.Join(dir, "patrol.json"), object{{"pid", pid}, {"started", created}})
+}
+
+// patrolSlot returns the slot number where the live patrol is running visibly, or 0 if detached/not running.
+func patrolSlot(dir string) int {
+	if !patrolLive(dir) {
+		return 0
+	}
+	info, ok := readObject(filepath.Join(dir, "patrol.json"))
+	if !ok {
+		return 0
+	}
+	return intValue(rowValue(info, "slot"))
+}
+
+// evacuatePatrolSlot moves a visible pane patrol out of `slot` to a detached background patrol so `consult` or
+// `spawn` can use the slot's cmd.exe shell.
+func evacuatePatrolSlot(dir string, slot int) {
+	if slot == 0 || patrolSlot(dir) != slot {
+		return
+	}
+	stopPatrol(dir)
+	time.Sleep(250 * time.Millisecond)
+	_ = startPatrolDetached(dir)
 }
 
 // patrolLive: the shift's recorded patrol process is still running.

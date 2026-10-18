@@ -384,7 +384,14 @@ func runSpawn(argv []string, quiet bool) error {
 		if len(own) > 0 {
 			slot = own[0]
 		} else if len(free) > 0 {
+			pSlot := patrolSlot(stateDir)
 			slot = free[0]
+			for _, n := range free {
+				if n != pSlot {
+					slot = n
+					break
+				}
+			}
 		}
 	}
 	if slot == 0 {
@@ -701,6 +708,7 @@ func runSpawn(argv []string, quiet bool) error {
 		line += " --crew " + crewName
 	}
 
+	evacuatePatrolSlot(stateDir, slot)
 	record := spawnReadSlot(stateDir, slot)
 	cmdPid := processNumber(record, "cmd_pid")
 	spawned := float64(time.Now().UnixNano()) / 1e9

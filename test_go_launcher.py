@@ -200,7 +200,8 @@ def base_env(base, fake_bin):
     tasks = base / 'tasks'
     tasks.mkdir(exist_ok=True)
     env = {k: v for k, v in os.environ.items()
-           if k not in ('COLUMNS', 'LINES', 'NIGHTSHIFT_ROLE', 'NIGHTSHIFT_IDENTITY', 'NIGHTSHIFT_ROLE_COLOUR')}
+           if k not in ('COLUMNS', 'LINES', 'NIGHTSHIFT_ROLE', 'NIGHTSHIFT_IDENTITY', 'NIGHTSHIFT_ROLE_COLOUR',
+                        'COLORTERM', 'FORCE_COLOR', 'NO_COLOR', 'TERM')}
     env.update({'NIGHTSHIFT_STATE_ROOT': str(root), 'NIGHTSHIFT_LEGACY_ROOT': str(legacy),
                 'NIGHTSHIFT_HOME': str(home), 'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1',
                 'FAKE_TASKS_DIR': str(tasks), 'NIGHTSHIFT_ORACLE_ARGV0': exe_path().name, **git_env(),

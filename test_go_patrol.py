@@ -281,3 +281,17 @@ def test_foreman_within_budget_in_every_crew(tmp_path, fake_bin, crew):
     foreman = json.loads(proc.stdout)['roles'].get('Foreman')
     assert foreman is not None, crew
     assert not [w for w in foreman['brief_warnings'] if ' role layer ' in w], (crew, foreman['brief_warnings'])
+
+
+def test_patrol_loop_prints_warden_banner_and_records_slot_in_patrol_json(world):
+    set_crew(world, budget_tokens=1000)
+    write_usage(world, 'Coder', 'tokens', 2000)
+    env = {**world.env, 'NIGHTSHIFT_PATROL_INTERVAL': '1'}
+    proc = run(['patrol', SHIFT, '--slot', '5'], env, True, timeout=60)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    out_text = proc.stdout.decode('utf-8', errors='replace')
+    assert 'NIGHTSHIFT WARDEN' in out_text, out_text
+    assert 'Foreman(' in out_text and 'budget:' in out_text, out_text
+    patrol_rec = json.loads((world.d / 'patrol.json').read_text(encoding='utf-8'))
+    assert patrol_rec.get('slot') == 5 and patrol_rec.get('pid'), patrol_rec
+
