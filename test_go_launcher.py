@@ -414,7 +414,25 @@ NGH062_PLAN_KEYS = ('brief_mode', 'brief_layers', 'brief_warnings')
 NGH062_WARNING_LINE = re.compile(rb'(?m)^brief \S+: (role|repository|site) layer \d+ words, budget \d+\r?\n')
 
 
+def without_ngh065(args, stdout):
+    """NGH-065: warden (and gaffer's patrol) reports gain a per-shift `renudged` list (native only). test_go_nudge_retry.py
+    checks it; parity compares the rest."""
+    if args[:1] not in (['warden'], ['gaffer']) or not stdout.lstrip().startswith(b'{') or b'"renudged"' not in stdout:
+        return stdout
+
+    def strip(value):
+        if isinstance(value, dict):
+            return {k: strip(v) for k, v in value.items() if k != 'renudged'}
+        if isinstance(value, list):
+            return [strip(v) for v in value]
+        return value
+    ascii_only = all(b < 0x80 for b in stdout)   # gaffer escapes non-ASCII as \uXXXX; keep the native style
+    rendered = (json.dumps(strip(json.loads(stdout)), indent=2, ensure_ascii=ascii_only) + '\n').encode('utf-8')
+    return rendered.replace(b'\n', b'\r\n') if b'\r\n' in stdout else rendered
+
+
 def without_ngh062(args, stdout, stderr):
+    stdout = without_ngh065(args, stdout)
     stderr = NGH062_WARNING_LINE.sub(b'', stderr)
     if args[:1] != ['start'] or '--dry-run' not in args or not stdout.lstrip().startswith(b'{'):
         return stdout, stderr

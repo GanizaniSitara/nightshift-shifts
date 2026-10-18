@@ -301,6 +301,12 @@ func secondsText(s float64) string { return strconv.FormatFloat(s, 'f', -1, 64) 
 
 func waiterPath(dir, label string) string { return filepath.Join(dir, "waiting", label+".json") }
 
+// liveWaiter: label is blocked in nightshift wait now (its waiter file names a running process).
+func liveWaiter(dir, label string) bool {
+	waiter, ok := readObject(waiterPath(dir, label))
+	return ok && processRunning(processNumber(waiter, "pid"))
+}
+
 // deliverBusMessage marks the row sent when the recipient is blocked in wait, otherwise nudges its pane with one
 // line. A failed nudge leaves the row stored for the warden and only warns.
 func deliverBusMessage(dir string, row object) {
@@ -315,7 +321,7 @@ func deliverBusMessage(dir string, row object) {
 		}
 		busAppend(dir, "sent", object{{"id", n}, {"via", via}})
 	}
-	if waiter, ok := readObject(waiterPath(dir, recipient)); ok && processRunning(processNumber(waiter, "pid")) {
+	if liveWaiter(dir, recipient) {
 		markSent("wait")
 		return
 	}

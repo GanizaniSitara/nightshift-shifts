@@ -145,7 +145,9 @@ func headerInComposer(pid uint32, header string) bool {
 func sendHeader(pid uint32, header, tool string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "agents-cli", "send", strconv.FormatUint(uint64(pid), 10), header)
+	// --force: agents-cli refuses Claude-to-Claude sends without it, and a nudge typed by a nightshift process
+	// running under a Claude pane is one (NGH-065). A nudge is never a SendMessage.
+	cmd := exec.CommandContext(ctx, "agents-cli", "send", strconv.FormatUint(uint64(pid), 10), header, "--force")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
@@ -190,6 +192,43 @@ func msgHeader(row object) string {
 	return fmt.Sprintf("msg:%v kind:%s asg:%s", rowValue(row, "id"), rowString(row, "kind"), asg)
 }
 
+// deliveryKey is a row's key in warden-delivery.json: "<id>:<recipient incarnation>".
+func deliveryKey(row object) string {
+	incVal := rowValue(row, "recipient_incarnation")
+	var incStr string
+	if incVal == nil {
+		incStr = "None"
+	} else {
+		switch v := incVal.(type) {
+		case float64:
+			incStr = floatText(v)
+		case float32:
+			incStr = floatText(float64(v))
+		case json.Number:
+			if f, err := v.Float64(); err == nil {
+				incStr = floatText(f)
+			} else {
+				incStr = v.String()
+			}
+		case int:
+			incStr = floatText(float64(v))
+		case int64:
+			incStr = floatText(float64(v))
+		case uint32:
+			incStr = floatText(float64(v))
+		case uint64:
+			incStr = floatText(float64(v))
+		default:
+			if f, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
+				incStr = floatText(f)
+			} else {
+				incStr = fmt.Sprint(v)
+			}
+		}
+	}
+	return fmt.Sprintf("%v:%s", rowValue(row, "id"), incStr)
+}
+
 func deliverPending(dir string, dryRun bool) ([]any, error) {
 	delivered := []any{}
 	attemptsPath := filepath.Join(dir, "warden-delivery.json")
@@ -218,39 +257,7 @@ func deliverPending(dir string, dryRun bool) ([]any, error) {
 		if pid == 0 || !pidAlive(pid, started, startedOK) {
 			continue
 		}
-		incVal := rowValue(row, "recipient_incarnation")
-		var incStr string
-		if incVal == nil {
-			incStr = "None"
-		} else {
-			switch v := incVal.(type) {
-			case float64:
-				incStr = floatText(v)
-			case float32:
-				incStr = floatText(float64(v))
-			case json.Number:
-				if f, err := v.Float64(); err == nil {
-					incStr = floatText(f)
-				} else {
-					incStr = v.String()
-				}
-			case int:
-				incStr = floatText(float64(v))
-			case int64:
-				incStr = floatText(float64(v))
-			case uint32:
-				incStr = floatText(float64(v))
-			case uint64:
-				incStr = floatText(float64(v))
-			default:
-				if f, err := strconv.ParseFloat(fmt.Sprint(v), 64); err == nil {
-					incStr = floatText(f)
-				} else {
-					incStr = fmt.Sprint(v)
-				}
-			}
-		}
-		key := fmt.Sprintf("%v:%s", rowValue(row, "id"), incStr)
+		key := deliveryKey(row)
 
 		confirmed := false
 		if dryRun {
@@ -271,7 +278,8 @@ func deliverPending(dir string, dryRun bool) ([]any, error) {
 			delivered = append(delivered, idInt)
 			if !dryRun {
 				_ = withWriteMailbox(dir, func(db *sql.DB) error {
-					_, err := db.Exec("UPDATE messages SET state = 'sent' WHERE id = ? AND state = 'stored'", idInt)
+					// delivered_epoch starts the 10-minute re-nudge clock (NGH-065), as markMessage does
+					_, err := db.Exec("UPDATE messages SET state = 'sent', delivered_epoch = COALESCE(delivered_epoch, ?) WHERE id = ? AND state = 'stored'", float64(time.Now().UnixNano())/1e9, idInt)
 					return err
 				})
 				busAppend(dir, "sent", object{{"id", idInt}})
@@ -534,6 +542,10 @@ func runWarden(argv []string) (object, int) {
 			if err != nil {
 				return err
 			}
+			renudged, err := retryNudges(dir, dryRun)
+			if err != nil {
+				return err
+			}
 
 			if objectString(record, "result") == "none" {
 				core := map[string]bool{}
@@ -570,6 +582,9 @@ func runWarden(argv []string) (object, int) {
 				{"recovered", recovered},
 				{"delivered", delivered},
 				{"nudged", nudged},
+			}
+			if len(renudged) > 0 {
+				patrol = append(patrol, pair{"renudged", renudged})
 			}
 			shiftsList = append(shiftsList, patrol)
 		}
@@ -802,4 +817,99 @@ func gafferCommand(argv []string) int {
 	}
 	printResult(report, true, true)
 	return 0
+}
+
+// Re-nudging (NGH-065): an inbound row still unacknowledged nudgeRetrySeconds after it was delivered (or created,
+// or last re-nudged), whose recipient is alive in that incarnation and not blocked in wait, gets a fresh one-line
+// nudge and a bus nudge-retry line; the third retry raises member-stalled to the lead and tells the owner on the
+// floor bus. Retries are kept in <shift>/warden-retry.json as {"<msg id>:<incarnation>": {"attempts": N, "at": epoch}}.
+const (
+	nudgeRetrySeconds = 600.0
+	nudgeRetriesMax   = 3
+)
+
+func retryNudges(dir string, dryRun bool) ([]any, error) {
+	retried := []any{}
+	rows, err := readMessages(dir)
+	if err != nil {
+		return retried, err
+	}
+	path := filepath.Join(dir, "warden-retry.json")
+	retries, _ := readObject(path)
+	deliveries, _ := readObject(filepath.Join(dir, "warden-delivery.json"))
+	now := float64(time.Now().UnixNano()) / 1e9
+	for _, row := range rows {
+		state := rowString(row, "state")
+		if state != "stored" && state != "sent" {
+			continue
+		}
+		id := valueText(rowValue(row, "id"))
+		key := id + ":" + valueText(rowValue(row, "recipient_incarnation"))
+		previous, _ := rowValue(retries, key).(object)
+		attempts := intValue(rowValue(previous, "attempts"))
+		since, ok := objectNumber(previous, "at")
+		if !ok {
+			since, ok = rowNumber(row, "delivered_epoch")
+		}
+		base := numberFloat(since)
+		if !ok {
+			created, err := time.ParseInLocation("2006-01-02 15:04:05", rowString(row, "created"), time.Local)
+			if err != nil {
+				continue
+			}
+			base = float64(created.Unix())
+		}
+		// any delivery attempt this or an earlier patrol made restarts the clock, even one that left the row stored
+		if attempt, _ := rowValue(deliveries, deliveryKey(row)).(object); attempt != nil {
+			if tried, ok := objectNumber(attempt, "at"); ok && numberFloat(tried) > base {
+				base = numberFloat(tried)
+			}
+		}
+		if !nudgeRetryDue(now, base, attempts) {
+			continue
+		}
+		recipient := rowString(row, "recipient")
+		info, _ := readObject(filepath.Join(dir, recipient+".json"))
+		pid := processNumber(info, "pid")
+		started, startedOK := objectNumber(info, "started")
+		if pid == 0 || !sameNumber(started, startedOK, rowValue(row, "recipient_incarnation")) || !pidAlive(pid, started, startedOK) || liveWaiter(dir, recipient) {
+			continue
+		}
+		attempts++
+		retried = append(retried, object{{"id", rowValue(row, "id")}, {"to", recipient}, {"attempt", attempts}})
+		if dryRun {
+			continue
+		}
+		retries = setValue(retries, key, object{{"attempts", attempts}, {"at", now}})
+		if err := writeJSONFile(path, retries); err != nil {
+			return retried, err
+		}
+		tool := objectString(info, "tool")
+		if tool == "" {
+			tool = "claude"
+		}
+		sendHeader(pid, fmt.Sprintf("%s  run: nightshift wait %s %s", msgHeader(row), filepath.Base(dir), recipient), tool)
+		busAppend(dir, "nudge-retry", object{{"id", rowValue(row, "id")}, {"to", recipient}, {"attempt", attempts}})
+		if attempts == nudgeRetriesMax {
+			body := fmt.Sprintf("member-stalled %s msg:%s unacked after %d nudges", recipient, id, attempts)
+			fields := object{{"role", recipient}, {"id", rowValue(row, "id")}, {"attempts", attempts}}
+			raised, err := raiseEvent(dir, "member-stalled", recipient+"@"+id, body, rowValue(row, "asg"), fields)
+			if err != nil {
+				return retried, err
+			}
+			if raised && floorAppendHook != nil {
+				line := fmt.Sprintf("member-stalled %s in %s (msg:%s)", recipient, filepath.Base(dir), id)
+				if _, err := floorAppendHook("warden", line, "owner"); err != nil {
+					errLine("warning: floor bus not written (member-stalled): " + err.Error())
+				}
+			}
+		}
+	}
+	return retried, nil
+}
+
+// nudgeRetryDue: another nudge is due when fewer than nudgeRetriesMax were sent and nudgeRetrySeconds have passed
+// since lastAttempt (the last retry, else delivered_epoch, else created).
+func nudgeRetryDue(now, lastAttempt float64, attempts int) bool {
+	return attempts < nudgeRetriesMax && now-lastAttempt >= nudgeRetrySeconds
 }

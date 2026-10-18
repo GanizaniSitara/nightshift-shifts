@@ -84,6 +84,23 @@ Claude idle time comes from its session record. Other CLIs require `agents-cli t
 `idle`, plus at least 300 seconds since the latest Foreman bus activity or process start. Busy or
 unknown state is never nudged. `warden-nudge.json` throttles attempts, including uncertain sends.
 
+Every nudge, from the warden or from `ready`/`assign`/`note`/`report`, runs `agents-cli send <pid> <line> --force`
+for every tool, Claude included (NGH-065): agents-cli refuses a Claude-to-Claude send without `--force`, and a nudge
+typed by a nightshift process under a Claude pane is one. A nudge is never a SendMessage.
+
+Re-nudge (NGH-065). Each patrol, a row in state `stored` or `sent` (not acknowledged) whose recipient pid is alive
+for the row's recipient incarnation and who has no live waiter file (`waiting/<ROLE>.json`) is due a retry when
+10 minutes (600 s) have passed since the latest of its last retry, the warden's last delivery attempt
+(`warden-delivery.json`, even one that left the row stored) and `delivered_epoch` (else `created`)
+(`nudgeRetryDue(now, lastAttempt, attempts)`, false once three retries were sent). A warden delivery that marks a
+row sent also sets `delivered_epoch`, so one patrol never both delivers and re-nudges the same row. A retry types `msg:N kind:K asg:A  run: nightshift wait SHIFT ROLE`
+again and appends bus `nudge-retry` {id, to, attempt}; at most three per row and incarnation, kept in
+`<shift>/warden-retry.json` as `{"<msg id>:<incarnation>": {"attempts": n, "at": epoch}}`. The third retry raises
+`member-stalled <Role> msg:<id> unacked after 3 nudges` (a mailbox event to the lead, deduped per role and message
+id like the NGH-061 events) and writes the floor-bus line `member-stalled <Role> in <shift> (msg:<id>)` from
+`warden` to `owner`. The patrol report lists the retries under `renudged` when there are any; `--dry-run` lists
+them without sending or writing.
+
 Mailbox reads use a disposable database/WAL copy outside shift state, so a dry-run cannot create
 SQLite WAL/SHM sidecars beside the real mailbox. A named Windows mutex keyed by the canonical
 mailbox path guards the copy and every central `mailbox(create=True)` connection through close
@@ -1004,6 +1021,8 @@ There is no bus process: each command appends its own line and `nightshift log` 
 | `sent` | `msg sent`; `ready`/`assign`/`note`/`report` after delivery (NGH-060) | `id`; NGH-060 rows add `via` (`wait` = recipient was blocked in `wait`, `nudge` = one-line nudge typed) |
 | `ack` | `ack`; `wait` (NGH-060) | `id`, `by`, `outcome` (`acknowledged`, `already acknowledged`, `protocol violation` + `reason`); `wait` adds `via: "wait"` |
 | `nudge-failed` | `ready`/`assign`/`note`/`report` when the nudge could not be delivered (NGH-060) | `id`, `to`, `reason`; the row stays `stored` for the warden |
+| `nudge-retry` | `warden`, re-nudging a row unacked for 10 minutes (NGH-065) | `id`, `to`, `attempt` (1-3) |
+| `member-stalled` | `warden`, on the third retry (NGH-065) | `role`, `id`, `attempts` |
 | `member-died` | the lead's `wait` poll (NGH-061) | `role`, `pid`, `incarnation`, `asg` (the member's active assignment or null) |
 | `asg-timeout` | the lead's `wait` poll (NGH-061) | `asg`, `recipient`, `delivered_epoch` |
 | `loop-detected` | `build --asg` when it refuses a fourth failing build (NGH-061) | `asg`, `builds` (the three n), `signature` |
@@ -1045,7 +1064,7 @@ contact (Foreman).
 The four storing commands print the header line `msg:N kind:K asg:A`, then deliver: if the recipient
 has a waiter file whose pid is running, the row is marked sent (`sent` with `via: "wait"`). Otherwise,
 unless `NIGHTSHIFT_NUDGE=off`, one line `msg:N kind:K asg:A  run: nightshift wait SHIFT ROLE` is typed
-into the recipient's live pane (pid and tool from `<ROLE>.json`) with the warden's `agents-cli send`
+into the recipient's live pane (pid and tool from `<ROLE>.json`) with the warden's `agents-cli send ... --force`
 path, and the row is marked sent with `via: "nudge"`. A nudge that cannot be delivered leaves the row
 `stored` for the warden, appends `nudge-failed` and warns on stderr; the command still exits 0.
 
