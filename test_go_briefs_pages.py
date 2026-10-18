@@ -172,6 +172,16 @@ def test_legacy_briefs_reproduce_ngh062(tmp_path, fake_bin, sleeper, python_laun
     if REBASE:
         return
     actual = observe()
+    if label == 'Coder':
+        # NGH-071 changes transport only: the complete legacy prompt must survive byte for byte.
+        expected = json.loads(expected)
+        brief_file = d / 'Coder.brief.md'
+        assert_equal_bytes(normalise(brief_file.read_bytes(), python_launcher, True),
+                           expected[-1][0]['argv'][-1].encode(), 'legacy Codex file-backed brief')
+        pointer = f'Read the file "{brief_file.as_posix()}" and follow its instructions.'
+        assert json.loads(actual)[-1][0]['argv'][-1] == pointer
+        expected[-1][0]['argv'][-1] = pointer
+        expected = json.dumps(expected, ensure_ascii=False, indent=1)
     assert actual == expected, f'briefs: legacy differs from NGH-062 for {label}'
 
 
