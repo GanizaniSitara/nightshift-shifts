@@ -18,8 +18,7 @@ func versionText() string {
 		if len(revision) > 7 {
 			revision = revision[:7]
 		}
-	}
-	if info, ok := debug.ReadBuildInfo(); ok {
+	} else if info, ok := debug.ReadBuildInfo(); ok {
 		for _, s := range info.Settings {
 			switch s.Key {
 			case "vcs.revision":
